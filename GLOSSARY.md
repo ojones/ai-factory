@@ -31,3 +31,11 @@ _Avoid_: job, session
 **Starter Template**:
 The fixed repo scaffold — directory structure, CI config, boilerplate — that the Orchestrator seeds every new Built Application from at the start of a Build Run.
 _Avoid_: scaffold, boilerplate
+
+**Build Run Summary**:
+The human-readable record (status, what changed, test results, cost spent, deploy outcome) a Build Run leaves on its GitHub Actions run page.
+_Avoid_: the log, the report
+
+**Build Run Report**:
+The machine-readable counterpart to the Build Run Summary — a structured artifact carrying the same fields, for future tooling to consume.
+_Avoid_: the summary
