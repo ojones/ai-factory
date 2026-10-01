@@ -20,6 +20,9 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 - [Deploy target: default + swappable](issues/04-deploy-target-default-swappable.md): deployment Standards pin one default hosting target for Built Applications, but the mechanism must stay swappable per project.
 - [Cost guardrails: mechanism, not numbers](issues/05-cost-guardrails-mechanism-not-numbers.md): the spec requires a budget cap + hard stop exist and are enforced; concrete dollar figures are a build-time config, not part of this spec.
 - [Visibility: in-scope requirement](issues/06-visibility-in-scope.md): a minimum observability/reporting requirement for unattended Build Runs is part of the architecture, though its implementation is deferred.
+- [Which ephemeral compute platform for the Orchestrator](issues/09-which-compute-platform.md): GitHub Actions — native scheduling, secrets, and logging with no extra infrastructure; runner-up Fly Machines.
+- [Which open-source agent harness](issues/07-which-agent-harness.md): OpenHands — MIT, SWE-bench-leading, pluggable to open-weight models, headless CLI with JSON output; runner-up mini-swe-agent.
+- [Which default deploy target for Built Applications](issues/10-which-deploy-target.md): Fly.io — cheapest at low-traffic scale, lowest-friction GitHub Actions deploy flow; runner-up Railway.
 
 ## Not yet specified
 

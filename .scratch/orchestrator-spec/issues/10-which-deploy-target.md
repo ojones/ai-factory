@@ -1,5 +1,5 @@
 Type: research
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -12,3 +12,13 @@ Compare candidates (e.g. Fly.io, Railway, Render, a bare VPS running Docker Comp
 - Support for both a backend service and a frontend (static or served) under one Built Application
 
 Recommend one, with the runner-up and why it lost.
+
+## Answer
+
+**Fly.io**: cheapest at true low-traffic scale (auto-stop/auto-start machines bill near-zero when idle, vs. competitors' flat monthly floors) and the lowest-friction GitHub Actions deploy flow (one secret + one `flyctl deploy` command, no registry hand-off gap, no AWS-style scaffolding).
+
+Runner-up: **Railway** — lost mainly because its Hobby plan's $5 usage credit is shared account-wide (depletes faster as the Factory produces more Built Applications) and its GitHub-Actions deploy path is less standardized than Fly's `flyctl deploy`.
+
+Also ruled out: Render (image-backed-service auto-redeploy gap, pricier always-on floor), a bare VPS (pushes ops burden onto the Factory), AWS ECS Fargate (worse on both cost predictability and setup friction).
+
+Full findings with citations: see branch `research/deploy-target`, file `.scratch/orchestrator-spec/research/deploy-target.md` (commit bbbe2b2).
