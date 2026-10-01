@@ -30,12 +30,12 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 - [Coding Standards content](issues/11-coding-standards-content.md): one pinned stack seeded from a fixed Starter Template, `AGENTS.md` for rule discovery, hard CI test gate (unit + smoke, no coverage threshold), mechanical-only style, direct push to main with same-run CI-failure iteration, env-var-only secrets, OSS-default dependencies.
 - [Visibility standard design](issues/13-visibility-standard-design.md): Build Run Summary in the GitHub Actions job summary (status/changes/tests/cost/deploy link), raw OpenHands JSONL as an artifact, a machine-readable Build Run Report, a GitHub Issue on failure (crash vs. budget-exhausted), and Built Application runtime JSON logging + a required global error handler.
 - [Cost guardrail design](issues/14-cost-guardrail-design.md): cap scoped to LLM token spend only, tracked by summing DeepInfra's per-response `usage.estimated_cost`, breach refuses the next turn after the current one finishes, backed by a per-Build-Run scoped API credential with an embedded max-USD limit as a provider-side second line of defense.
+- [Feature-flag Standards content](issues/18-feature-flag-standards-content.md): one shared GrowthBook instance (MongoDB Atlas-backed) provisioning a project + SDK connection key per Built Application, mandatory per-feature flagging by default plus a Starter-Template-baked global kill switch, pinned flag-key/client-wiring convention, resilience via OpenFeature's spec-guaranteed default-value fallback.
 
 ## Open tickets
 
 Blocked-by research now resolved, so these Standards-content/design tickets are unblocked and ready to work:
 
-- [Feature-flag Standards content](issues/18-feature-flag-standards-content.md) — blocked by 16 (feature-flag tool), now resolved.
 - [Which application stack](issues/20-which-application-stack.md) — spun off from ticket 11; blocked by 11, now resolved.
 
 ## Not yet specified
