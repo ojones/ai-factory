@@ -23,6 +23,7 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 - [Which ephemeral compute platform for the Orchestrator](issues/09-which-compute-platform.md): GitHub Actions — native scheduling, secrets, and logging with no extra infrastructure; runner-up Fly Machines.
 - [Which open-source agent harness](issues/07-which-agent-harness.md): OpenHands — MIT, SWE-bench-leading, pluggable to open-weight models, headless CLI with JSON output; runner-up mini-swe-agent.
 - [Which default deploy target for Built Applications](issues/10-which-deploy-target.md): Fly.io — cheapest at low-traffic scale, lowest-friction GitHub Actions deploy flow; runner-up Railway.
+- [Which API provider + open-weight model](issues/08-which-model-provider.md): DeepInfra serving Qwen3-Coder-480B-A35B-Instruct-Turbo — cheapest agent-RL-trained open-weight coder; runner-up Together AI (same model).
 
 ## Not yet specified
 
