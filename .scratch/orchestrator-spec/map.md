@@ -27,11 +27,21 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 - [Which IaC approach for Built Application deploys](issues/15-which-iac-approach.md): `fly.toml` + a thin provisioning script, not Terraform/Pulumi — Fly's own official Terraform provider is archived and un-recommended by Fly.io itself.
 - [Which feature-flag tool for Built Applications](issues/16-which-feature-flag-tool.md): GrowthBook, with app code written against OpenFeature; runner-up Unleash.
 - [Deployment Standards content](issues/12-deployment-standards-content.md): one container per Built App (backend serves frontend), GHCR images tagged by git SHA, build/deploy split into two chained GitHub Actions workflow files for swappability, a GitHub App + one shared Fly org token for unattended secret provisioning.
+- [Coding Standards content](issues/11-coding-standards-content.md): one pinned stack seeded from a fixed Starter Template, `AGENTS.md` for rule discovery, hard CI test gate (unit + smoke, no coverage threshold), mechanical-only style, direct push to main with same-run CI-failure iteration, env-var-only secrets, OSS-default dependencies.
+
+## Open tickets
+
+Blocked-by research now resolved, so these Standards-content/design tickets are unblocked and ready to work:
+
+- [Visibility standard design](issues/13-visibility-standard-design.md) — blocked by 09 (compute platform), now resolved.
+- [Cost guardrail design](issues/14-cost-guardrail-design.md) — blocked by 08 (model provider), now resolved.
+- [Feature-flag Standards content](issues/18-feature-flag-standards-content.md) — blocked by 16 (feature-flag tool), now resolved.
+- [Which application stack](issues/20-which-application-stack.md) — spun off from ticket 11; blocked by 11, now resolved.
 
 ## Not yet specified
 
 - How Standards updates propagate to, or affect, Built Applications already produced under older Standards.
-- Whether/how the Orchestrator handles multiple concurrent Build Runs (queuing, resource contention) — not addressed yet.
+- Whether/how the Orchestrator handles multiple concurrent Build Runs (queuing, resource contention) — a future concern, not in scope for this spec pass; tracked in [Concurrent Build Runs](issues/19-concurrent-build-runs.md).
 - How the spec itself is packaged/published as a deliverable (single doc vs. multiple Standards files) — likely resolves naturally once the Standards-content tickets land; revisit then.
 
 ## Out of scope

@@ -27,3 +27,7 @@ _Avoid_: product, project
 **Build Run**:
 A single unattended execution of the Orchestrator, from kickoff to completion, working toward producing or updating one Built Application.
 _Avoid_: job, session
+
+**Starter Template**:
+The fixed repo scaffold — directory structure, CI config, boilerplate — that the Orchestrator seeds every new Built Application from at the start of a Build Run.
+_Avoid_: scaffold, boilerplate
