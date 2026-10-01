@@ -26,10 +26,10 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 - [Which API provider + open-weight model](issues/08-which-model-provider.md): DeepInfra serving Qwen3-Coder-480B-A35B-Instruct-Turbo — cheapest agent-RL-trained open-weight coder; runner-up Together AI (same model).
 - [Which IaC approach for Built Application deploys](issues/15-which-iac-approach.md): `fly.toml` + a thin provisioning script, not Terraform/Pulumi — Fly's own official Terraform provider is archived and un-recommended by Fly.io itself.
 - [Which feature-flag tool for Built Applications](issues/16-which-feature-flag-tool.md): GrowthBook, with app code written against OpenFeature; runner-up Unleash.
+- [Deployment Standards content](issues/12-deployment-standards-content.md): one container per Built App (backend serves frontend), GHCR images tagged by git SHA, build/deploy split into two chained GitHub Actions workflow files for swappability, a GitHub App + one shared Fly org token for unattended secret provisioning.
 
 ## Not yet specified
 
-- How Agents obtain secrets/credentials to deploy Built Applications to the chosen target — depends on the deploy-target ([10](issues/10-which-deploy-target.md)) and harness ([07](issues/07-which-agent-harness.md)) picks; both are now resolved, so this is unblocked but still undecided.
 - How Standards updates propagate to, or affect, Built Applications already produced under older Standards.
 - Whether/how the Orchestrator handles multiple concurrent Build Runs (queuing, resource contention) — not addressed yet.
 - How the spec itself is packaged/published as a deliverable (single doc vs. multiple Standards files) — likely resolves naturally once the Standards-content tickets land; revisit then.
