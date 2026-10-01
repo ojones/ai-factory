@@ -24,10 +24,12 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 - [Which open-source agent harness](issues/07-which-agent-harness.md): OpenHands — MIT, SWE-bench-leading, pluggable to open-weight models, headless CLI with JSON output; runner-up mini-swe-agent.
 - [Which default deploy target for Built Applications](issues/10-which-deploy-target.md): Fly.io — cheapest at low-traffic scale, lowest-friction GitHub Actions deploy flow; runner-up Railway.
 - [Which API provider + open-weight model](issues/08-which-model-provider.md): DeepInfra serving Qwen3-Coder-480B-A35B-Instruct-Turbo — cheapest agent-RL-trained open-weight coder; runner-up Together AI (same model).
+- [Which IaC approach for Built Application deploys](issues/15-which-iac-approach.md): `fly.toml` + a thin provisioning script, not Terraform/Pulumi — Fly's own official Terraform provider is archived and un-recommended by Fly.io itself.
+- [Which feature-flag tool for Built Applications](issues/16-which-feature-flag-tool.md): GrowthBook, with app code written against OpenFeature; runner-up Unleash.
 
 ## Not yet specified
 
-- How Agents obtain secrets/credentials to deploy Built Applications to the chosen target — depends on the deploy-target ([10](issues/10-which-deploy-target.md)) and harness ([07](issues/07-which-agent-harness.md)) picks.
+- How Agents obtain secrets/credentials to deploy Built Applications to the chosen target — depends on the deploy-target ([10](issues/10-which-deploy-target.md)) and harness ([07](issues/07-which-agent-harness.md)) picks; both are now resolved, so this is unblocked but still undecided.
 - How Standards updates propagate to, or affect, Built Applications already produced under older Standards.
 - Whether/how the Orchestrator handles multiple concurrent Build Runs (queuing, resource contention) — not addressed yet.
 - How the spec itself is packaged/published as a deliverable (single doc vs. multiple Standards files) — likely resolves naturally once the Standards-content tickets land; revisit then.
@@ -35,3 +37,7 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 ## Out of scope
 
 - Meta-orchestration — the Orchestrator building or extending its own components or new Agent types. Ruled out of this map's destination from the start, not a closed ticket.
+
+## Related tooling, outside this map's destination
+
+- [Which wiki tool for Factory context](issues/17-which-wiki-tool.md): Wiki.js in git-sync mode; runner-up MkDocs Material on GitHub Pages. Researched alongside the above at the owner's request, but this is tooling for how the Factory's own docs are authored/viewed, not part of the Orchestrator spec deliverable — doesn't feed the handoff.
