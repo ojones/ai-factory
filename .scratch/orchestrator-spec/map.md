@@ -32,12 +32,12 @@ A handoff-ready architecture + standards spec defining: the Orchestrator's model
 - [Cost guardrail design](issues/14-cost-guardrail-design.md): cap scoped to LLM token spend only, tracked by summing DeepInfra's per-response `usage.estimated_cost`, breach refuses the next turn after the current one finishes, backed by a per-Build-Run scoped API credential with an embedded max-USD limit as a provider-side second line of defense.
 - [Feature-flag Standards content](issues/18-feature-flag-standards-content.md): one shared GrowthBook instance (MongoDB Atlas-backed) provisioning a project + SDK connection key per Built Application, mandatory per-feature flagging by default plus a Starter-Template-baked global kill switch, pinned flag-key/client-wiring convention, resilience via OpenFeature's spec-guaranteed default-value fallback.
 - [Which application stack](issues/20-which-application-stack.md): Express + React, both in TypeScript, one Node.js codebase per Built App, frontend built to static assets and served via `express.static()`; runner-up FastAPI + React (loses on forcing a second language).
+- [Spec packaging](issues/21-spec-packaging.md): the spec is packaged as [ARCHITECTURE.md](../../ARCHITECTURE.md) (Orchestrator-build decisions) plus [STANDARDS.md](../../STANDARDS.md) (an index over four Agent-facing `STANDARDS-*.md` files), both at repo root; `.scratch/orchestrator-spec/` stays permanently as the audit trail.
 
 ## Not yet specified
 
 - How Standards updates propagate to, or affect, Built Applications already produced under older Standards.
 - Whether/how the Orchestrator handles multiple concurrent Build Runs (queuing, resource contention) — a future concern, not in scope for this spec pass; tracked in [Concurrent Build Runs](issues/19-concurrent-build-runs.md).
-- How the spec itself is packaged/published as a deliverable (single doc vs. multiple Standards files) — likely resolves naturally once the Standards-content tickets land; revisit then.
 
 ## Out of scope
 
