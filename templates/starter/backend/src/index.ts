@@ -1,5 +1,6 @@
 import { createApp } from "./app";
 import { logger } from "./logger";
+import { initFeatureFlags } from "./feature-flags";
 
 /**
  * Required global error handler (STANDARDS-VISIBILITY.md): log the full
@@ -28,8 +29,16 @@ process.on("unhandledRejection", (reason: unknown) => {
 
 const PORT = Number(process.env.PORT ?? 3000);
 
-const app = createApp();
+async function main() {
+  // The single OpenFeature client is initialized once here, before the
+  // server starts accepting requests — not re-derived per route/request.
+  await initFeatureFlags();
 
-app.listen(PORT, () => {
-  logger.info("server_started", { port: PORT });
-});
+  const app = createApp();
+
+  app.listen(PORT, () => {
+    logger.info("server_started", { port: PORT });
+  });
+}
+
+main();

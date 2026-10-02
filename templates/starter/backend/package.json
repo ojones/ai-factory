@@ -12,7 +12,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "@openfeature/server-sdk": "^1.23.0",
+    "@openfeature/growthbook-provider": "^0.1.2",
+    "@growthbook/growthbook": "^1.8.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
