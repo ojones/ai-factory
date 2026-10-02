@@ -37,7 +37,7 @@ export function createApp(): Express {
 
   // Mandatory global kill switch (STANDARDS-FEATURE-FLAGS.md): checked once
   // here, not re-derived per route. Everything mounted after this — the
-  // static frontend, and any Built-Application-specific API routes — is
+  // static frontend, and any Managed-App-specific API routes — is
   // gated by it.
   //
   // The default passed here MUST be `false`, not `true` — confirmed live

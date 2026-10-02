@@ -2,7 +2,7 @@
 
 This file is auto-loaded into the Agent's system prompt (OpenHands natively
 reads `AGENTS.md` at the repo root). It's seeded by the Factory's Starter
-Template — extend it with project-specific notes as this Built Application
+Template — extend it with project-specific notes as this Managed App
 grows; a rules file nobody updates goes stale.
 
 ## Stack
@@ -62,7 +62,7 @@ business logic plus one boot/health-check smoke test — see
   the equivalent for other types) — that default is what OpenFeature falls
   back to if the GrowthBook instance is ever unreachable, per
   STANDARDS-FEATURE-FLAGS.md's resilience rule.
-- `GROWTHBOOK_CLIENT_KEY` (required) is the per-Built-Application SDK
+- `GROWTHBOOK_CLIENT_KEY` (required) is the per-Managed-App SDK
   connection key, pushed as a repo secret by the Orchestrator.
 
 ## Rules
@@ -78,6 +78,6 @@ template was seeded from:
 - `STANDARDS-VISIBILITY.md`
 - `STANDARDS-FEATURE-FLAGS.md`
 
-If this repo was seeded into a new Built Application, those files may not
+If this repo was seeded into a new Managed App, those files may not
 be physically present here — treat this section as a pointer back to the
 Factory's canonical copies.

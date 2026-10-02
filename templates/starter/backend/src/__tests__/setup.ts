@@ -8,7 +8,7 @@ import { OpenFeature, TypedInMemoryProvider } from "@openfeature/server-sdk";
 // the kill switch "on" so existing functional tests exercise normal
 // behavior; a test that specifically needs the "off" case can call
 // `OpenFeature.getProvider().putConfiguration(...)` to flip it. Extend
-// this with new flags as this Built Application adds them.
+// this with new flags as this Managed App adds them.
 OpenFeature.setProvider(
   new TypedInMemoryProvider({
     "global-kill-switch": {

@@ -1,6 +1,6 @@
 # Feature-Flag Standards
 
-Part of [STANDARDS.md](STANDARDS.md). See [GLOSSARY.md](GLOSSARY.md) for terminology. GrowthBook hosting and per-Built-Application provisioning lives in [ARCHITECTURE.md](ARCHITECTURE.md#feature-flag-infrastructure) — this file covers only what a Built Application's own code must do.
+Part of [STANDARDS.md](STANDARDS.md). See [GLOSSARY.md](GLOSSARY.md) for terminology. GrowthBook hosting and per-Managed-App provisioning lives in [ARCHITECTURE.md](ARCHITECTURE.md#feature-flag-infrastructure) — this file covers only what a Managed App's own code must do.
 
 ## Flagging policy
 
@@ -9,7 +9,7 @@ Every Agent-authored, user-facing feature/behavior change is wrapped behind its 
 
 ## Mandatory kill switch
 
-Every Built Application ships, baked into the Starter Template, one global kill-switch flag with a fixed canonical key, checked once in top-level middleware, returning a maintenance response when off — identical across every Built Application, not named/placed ad hoc per project.
+Every Managed App ships, baked into the Starter Template, one global kill-switch flag with a fixed canonical key, checked once in top-level middleware, returning a maintenance response when off — identical across every Managed App, not named/placed ad hoc per project.
 → [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md)
 
 ## Code wiring

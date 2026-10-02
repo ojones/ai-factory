@@ -1,6 +1,6 @@
 /**
  * Minimal structured (JSON) logger — one line of JSON per log call, written
- * to stdout. Per STANDARDS-VISIBILITY.md, Built Application logs must be
+ * to stdout. Per STANDARDS-VISIBILITY.md, Managed App logs must be
  * structured JSON on stdout (Fly.io's log aggregation reads it directly, no
  * extra logging infra needed), so this intentionally does not shell out to a
  * logging framework — a few lines of JSON.stringify is the whole job.

@@ -1,6 +1,6 @@
 # Standards
 
-The authored conventions Agents must follow when producing a Built Application, per [GLOSSARY.md](GLOSSARY.md). Distinct from [ARCHITECTURE.md](ARCHITECTURE.md): everything here is something a Built Application's own code must actually do, not how the Orchestrator itself is built or operated.
+The authored conventions Agents must follow when producing a Managed App, per [GLOSSARY.md](GLOSSARY.md). Distinct from [ARCHITECTURE.md](ARCHITECTURE.md): everything here is something a Managed App's own code must actually do, not how the Orchestrator itself is built or operated.
 
 - **[Coding](STANDARDS-CODING.md)** — the pinned application stack, repo/Starter Template conventions, test gate, style, git workflow, secrets handling, dependency policy.
 - **[Deployment](STANDARDS-DEPLOYMENT.md)** — containerization, registry/tagging, the build/deploy workflow split.

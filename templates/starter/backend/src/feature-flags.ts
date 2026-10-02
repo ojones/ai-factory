@@ -4,7 +4,7 @@ import { GrowthbookProvider } from "@openfeature/growthbook-provider";
 /**
  * Pinned flag-key naming convention (STANDARDS-FEATURE-FLAGS.md): per-feature
  * flags use `feature.<slug>`; the mandatory kill switch uses this fixed key,
- * identical across every Built Application.
+ * identical across every Managed App.
  */
 export const GLOBAL_KILL_SWITCH_KEY = "global-kill-switch";
 

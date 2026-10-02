@@ -47,4 +47,4 @@ what each one does.
    (Settings → API Keys / Personal Access Tokens) — GrowthBook has no API to
    create this token for you, so this one step stays manual per
    ARCHITECTURE.md. The Orchestrator holds this token to provision each new
-   Built Application's own GrowthBook project.
+   Managed App's own GrowthBook project.

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 /**
  * Trivial example component, present only to prove the frontend shape works
  * end to end: it builds, renders, and can call the backend's API. Real
- * Built Applications replace this with actual product UI.
+ * Managed Apps replace this with actual product UI.
  */
 export function App() {
   const [status, setStatus] = useState<string>("loading...");

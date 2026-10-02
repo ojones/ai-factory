@@ -17,19 +17,19 @@ A worker process, backed by an LLM, spawned by the Orchestrator to carry out one
 _Avoid_: bot, worker
 
 **Standards**:
-The authored conventions — coding style, repo layout, container, and deployment rules — that Agents must follow when producing a Built Application.
+The authored conventions — coding style, repo layout, container, and deployment rules — that Agents must follow when producing a Managed App.
 _Avoid_: rules, guidelines
 
-**Built Application**:
+**Managed App**:
 A backend+frontend software product produced by the Factory, containerized and deployed via GitHub. Distinct from the Factory itself.
-_Avoid_: product, project
+_Avoid_: product, project, built application (former term, renamed)
 
 **Build Run**:
-A single unattended execution of the Orchestrator, from kickoff to completion, working toward producing or updating one Built Application.
+A single unattended execution of the Orchestrator, from kickoff to completion, working toward producing or updating one Managed App.
 _Avoid_: job, session
 
 **Starter Template**:
-The fixed repo scaffold — directory structure, CI config, boilerplate — that the Orchestrator seeds every new Built Application from at the start of a Build Run.
+The fixed repo scaffold — directory structure, CI config, boilerplate — that the Orchestrator seeds every new Managed App from at the start of a Build Run.
 _Avoid_: scaffold, boilerplate
 
 **Build Run Summary**:

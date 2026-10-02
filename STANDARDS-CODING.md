@@ -4,17 +4,17 @@ Part of [STANDARDS.md](STANDARDS.md). See [GLOSSARY.md](GLOSSARY.md) for termino
 
 ## Stack
 
-Every Built Application is **Express (backend) + React (frontend), both in TypeScript** — one Node.js codebase, frontend built via Vite to static assets served directly by Express's `express.static()`. Not re-derived per project: only JS/TS pairs a competitive backend framework with a genuine frontend-framework ecosystem, and Express/React are each their ecosystem's dominant, most battle-tested choice. Runner-up: FastAPI (Python) + React — loses on forcing a second language into every Built Application.
+Every Managed App is **Express (backend) + React (frontend), both in TypeScript** — one Node.js codebase, frontend built via Vite to static assets served directly by Express's `express.static()`. Not re-derived per project: only JS/TS pairs a competitive backend framework with a genuine frontend-framework ecosystem, and Express/React are each their ecosystem's dominant, most battle-tested choice. Runner-up: FastAPI (Python) + React — loses on forcing a second language into every Managed App.
 → [issues/20](.scratch/orchestrator-spec/issues/20-which-application-stack.md)
 
 ## Starter Template
 
-Every new Built Application is seeded from a fixed **Starter Template** (directory structure, CI config, boilerplate) rather than built from scratch each Build Run — cheaper in agent tokens, keeps every Built Application structurally identical.
+Every new Managed App is seeded from a fixed **Starter Template** (directory structure, CI config, boilerplate) rather than built from scratch each Build Run — cheaper in agent tokens, keeps every Managed App structurally identical.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
 ## Rule discovery
 
-`AGENTS.md` at the repo root — OpenHands natively auto-loads this into its system prompt. The Starter Template seeds its base content (stack, structure, how to run tests/build, pointers to these Standards); Agents extend it with project-specific notes as the Built Application grows.
+`AGENTS.md` at the repo root — OpenHands natively auto-loads this into its system prompt. The Starter Template seeds its base content (stack, structure, how to run tests/build, pointers to these Standards); Agents extend it with project-specific notes as the Managed App grows.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
 ## Test gate
