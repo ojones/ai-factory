@@ -49,6 +49,15 @@ A minimum observability/reporting requirement for unattended Build Runs is part 
 **Mechanism**: a **Build Run Summary** written to `GITHUB_STEP_SUMMARY` (status, what changed, test results, cost spent, deploy outcome + a link to that deployment's Fly log viewer). The raw OpenHands `--json` JSONL event stream is uploaded as a build artifact for deep-dive debugging. A curated, machine-readable **Build Run Report** (same fields as the Summary) is produced alongside it for future tooling. On failure — a crash, or the cost/time budget exhausted before CI went green — an explicit workflow step auto-creates a GitHub Issue in the Managed App's repo, distinguishing which.
 → [issues/06](.scratch/orchestrator-spec/issues/06-visibility-in-scope.md), [issues/13](.scratch/orchestrator-spec/issues/13-visibility-standard-design.md)
 
+## Intake
+
+A Managed App's build begins with an **Intake** issue — a GitHub Issue Form on this repo (ai-factory) labelled `intake`, titled the Managed App's name (kebab-cased for the eventual repo name), carrying two fields: a free-text description of what to build (playing the same role as the hand-typed `task` input a Build Run takes today), and an optional cost-cap override (defaults to the standard per-Build-Run cap). The submitter edits and discusses the issue freely — title, body, comments — until it's ready.
+
+**Trigger: the `ready-for-staging` label.** Adding it to an `intake`-labelled issue fires a GitHub Actions workflow (`issues: labeled`) that kicks off App Staging — not issue creation itself, so the Intake Spec can be iterated on first. The workflow refuses (commenting why) if another `intake` issue is already past this label, or a Build Run is in flight: v1 runs one Managed App through Intake → App Staging → Build Run at a time. This is a deliberate stepping stone, not a durable limit — lifting it, and extending Intake to ongoing feature/bug work against already-existing Managed Apps, is expected to be the Orchestrator's next real destination once a single new Managed App has been proven end-to-end.
+
+On success, the Intake issue is closed with a comment linking the new Managed App's repo.
+→ [issue #17](https://github.com/ojones/ai-factory/issues/17)
+
 ## Deployment provisioning
 
 For each new Managed App, the Orchestrator creates its repo and pushes deploy secrets into it unattended: one GitHub App installation (not a personal access token, so it works indefinitely without renewal) for repo creation/secrets, and a single shared Fly.io org-level API token pushed as the `FLY_API_TOKEN` secret into every new repo.

@@ -28,6 +28,18 @@ _Avoid_: product, project, built application (former term, renamed)
 A single unattended execution of the Orchestrator, from kickoff to completion, working toward producing or updating one Managed App.
 _Avoid_: job, session
 
+**Intake**:
+The act of submitting an Intake Spec to the Orchestrator, proposing a new Managed App.
+_Avoid_: submission, request
+
+**Intake Spec**:
+The description of a Managed App to be built — scope and constraints — submitted via Intake, before its repo or any infrastructure exists.
+_Avoid_: idea, ticket, project
+
+**App Staging**:
+The one-time setup of a new Managed App's infrastructure — repo, secrets, Fly app, GrowthBook project — that happens after an Intake Spec is accepted and before its first Build Run.
+_Avoid_: provisioning (as a Factory-level phase name; the word still applies loosely to individual scripts/steps within App Staging), bootstrapping, onboarding
+
 **Starter Template**:
 The fixed repo scaffold — directory structure, CI config, boilerplate — that the Orchestrator seeds every new Managed App from at the start of a Build Run.
 _Avoid_: scaffold, boilerplate
