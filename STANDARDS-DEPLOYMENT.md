@@ -18,3 +18,10 @@ Two separate, chained GitHub Actions workflow files: `build.yml` (target-agnosti
 
 **Swappability** is expressed structurally: the build workflow never changes across targets; moving a Managed App to a different host means replacing only `deploy-fly.yml` (and its referenced native config) with a new deploy workflow — a single, isolated file change by construction.
 → [issues/12](.scratch/orchestrator-spec/issues/12-deployment-standards-content.md)
+
+## Starter Template contents: workflows and Fly config
+
+`build.yml`, `deploy-fly.yml`, and the Test Gate workflow (`test-gate.yml`, triggered on push to `main`) ship as **permanent, unmodified Starter Template content** — every Managed App gets byte-identical copies; App Staging never generates or mutates their YAML.
+
+The one value that varies per Managed App — the Fly app name — is never injected or persisted by App Staging either. Intake already fixes the repo name to the Managed App's name ([ARCHITECTURE.md's Intake section](ARCHITECTURE.md#intake)), so every reference to the Fly app name (`fly.toml`'s `app` field, `fly/provision.sh`'s app-name variable, `deploy-fly.yml`'s Fly-specific steps) derives it live from the repo's own name instead of having App Staging template or persist a separate value.
+→ [issue #21](https://github.com/ojones/ai-factory/issues/21)
