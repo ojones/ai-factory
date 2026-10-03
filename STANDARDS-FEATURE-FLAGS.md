@@ -9,13 +9,15 @@ Every Agent-authored, user-facing feature/behavior change is wrapped behind its 
 
 ## Mandatory kill switch
 
-Every Managed App ships, baked into the Starter Template, one global kill-switch flag with a fixed canonical key, checked once in top-level middleware, returning a maintenance response when off — identical across every Managed App, not named/placed ad hoc per project.
-→ [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md)
+Every Managed App ships, baked into the Starter Template, one global kill-switch flag, checked once in top-level middleware, returning a maintenance response when off — identical in *shape and placement* across every Managed App, but not a literal identical key (see Code wiring): all Managed Apps share one GrowthBook project, so an app-scoped key is what keeps one app's kill switch from flipping another app's.
+→ [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [#22](https://github.com/ojones/ai-factory/issues/22)
 
 ## Code wiring
 
-A pinned flag-key naming convention (`feature.<slug>` for per-feature flags; `global-kill-switch` for the mandatory kill switch), and a single OpenFeature client initialized once at app startup from the SDK connection key env var — not re-derived per feature. The client polls for live flag updates (`pollingInterval`) rather than using SSE streaming, which GrowthBook's own docs confirm is cloud/proxy-only, not available to a bare self-hosted instance.
-→ [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [build ticket #14](https://github.com/ojones/ai-factory/issues/14)
+All Managed Apps share one GrowthBook project (see [ARCHITECTURE.md](ARCHITECTURE.md#feature-flag-infrastructure) — the free self-hosted tier caps at 1 project), with no GrowthBook-level boundary between apps. The flag-key naming convention carries the only isolation that exists, and so is app-scoped: **`<app-slug>.feature.<slug>`** for per-feature flags, **`<app-slug>.global-kill-switch`** for the mandatory kill switch. The app slug is derived live by the Managed App's own code (e.g. from its repo name, the same env/derivation already used for the Fly app name per [#21](https://github.com/ojones/ai-factory/issues/21)) — never injected or persisted by App Staging, keeping the Starter Template's flag-handling code unmodified per app.
+
+A single OpenFeature client is initialized once at app startup from the SDK connection key env var — not re-derived per feature. The client polls for live flag updates (`pollingInterval`) rather than using SSE streaming, which GrowthBook's own docs confirm is cloud/proxy-only, not available to a bare self-hosted instance.
+→ [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [build ticket #14](https://github.com/ojones/ai-factory/issues/14), [#22](https://github.com/ojones/ai-factory/issues/22)
 
 ## Resilience
 
