@@ -1,5 +1,8 @@
 import { OpenFeature, TypedInMemoryProvider } from "@openfeature/server-sdk";
 
+// Flag keys are scoped by app slug (feature-flags.ts); tests use a fixed one.
+process.env.APP_SLUG = "test-app";
+
 // Tests never call initFeatureFlags() (that would hit the real shared
 // GrowthBook instance) — without a provider, OpenFeature's default no-op
 // provider returns whatever default each call site passes, which is
@@ -11,7 +14,7 @@ import { OpenFeature, TypedInMemoryProvider } from "@openfeature/server-sdk";
 // this with new flags as this Managed App adds them.
 OpenFeature.setProvider(
   new TypedInMemoryProvider({
-    "global-kill-switch": {
+    "test-app.global-kill-switch": {
       variants: { on: true, off: false },
       defaultVariant: "on",
     },

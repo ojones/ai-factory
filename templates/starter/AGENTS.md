@@ -52,18 +52,30 @@ business logic plus one boot/health-check smoke test — see
   initialized once at startup (`index.ts`, before `app.listen()`) — never
   re-derived per request.
 - Flag-key convention: every new user-facing feature/behavior change gets
-  its own flag, keyed `feature.<slug>` (e.g. `feature.todos-crud`). The
-  mandatory global kill switch uses the fixed key `global-kill-switch`
-  (see `GLOBAL_KILL_SWITCH_KEY` in `feature-flags.ts`) — already wired into
-  top-level middleware in `app.ts`, mounted after the health route (so
-  health checks keep working in maintenance mode) and before everything
+  its own flag, `<app-slug>.feature.<slug>` (e.g. `my-app.feature.todos-crud`).
+  The app slug is derived at runtime (`appSlug()`; Fly's `FLY_APP_NAME`, or
+  `APP_SLUG` locally) — never hardcode it. Use `featureKey(slug)` /
+  `killSwitchKey()` and `isFeatureEnabled(res, slug)` from `feature-flags.ts`
+  at every call site, never raw key strings, so Preview works uniformly. The
+  mandatory global kill switch (`<app-slug>.global-kill-switch`) is already
+  wired into top-level middleware in `app.ts`, mounted after the health route
+  (so health checks keep working in maintenance mode) and before everything
   else.
+- **Record every new flag in `flags.json`** (repo root, an array of
+  `{"slug": "todos-crud", "description": "..."}`) in the same commit that
+  adds it in code. The Orchestrator reads this to create and release flags
+  after review; an unrecorded flag never gets released. Ship the feature
+  dark: it must stay behind its flag until the Orchestrator releases it.
+- Preview: requests carrying `PREVIEW_TOKEN` (header `X-Preview-Token`, or
+  `?preview=`) see every feature flag as on, so reviewers can test dark
+  features. This is wired in `feature-flags.ts`; don't build another bypass.
 - Every call site must pass a real default value to `getBooleanValue()` (or
   the equivalent for other types) — that default is what OpenFeature falls
   back to if the GrowthBook instance is ever unreachable, per
   STANDARDS-FEATURE-FLAGS.md's resilience rule.
 - `GROWTHBOOK_CLIENT_KEY` (required) is the per-Managed-App SDK
-  connection key, pushed as a repo secret by the Orchestrator.
+  connection key, and `PREVIEW_TOKEN` the preview secret; both are pushed as
+  repo secrets by the Orchestrator.
 
 ## Rules
 

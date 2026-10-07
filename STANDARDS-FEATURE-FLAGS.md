@@ -28,7 +28,7 @@ Every OpenFeature call site must supply a real, sensible default value. Resilien
 
 ## Flag manifest
 
-Every new flag is recorded in `flags.json` at the repo root — key, description, and the SHA that added it — in the same commit that introduces it in code. The release step reads the manifest to know what a Build Run introduced. A flag need not exist in GrowthBook for code to ship dark: a missing flag evaluates to `false`, so the release step creates it in GrowthBook at release time.
+Every new flag is recorded in `flags.json` at the repo root — an array of `{slug, description}` entries — in the same commit that introduces it in code. (The slug is the `<slug>` part of the key; the release step prefixes the app slug. No added-in commit is recorded: a commit can't contain its own hash.) The release step reads the manifest to know what a Build Run introduced. A flag need not exist in GrowthBook for code to ship dark: a missing flag evaluates to `false`, so the release step creates it in GrowthBook at release time.
 → [issue #24](https://github.com/ojones/ai-factory/issues/24)
 
 ## Preview

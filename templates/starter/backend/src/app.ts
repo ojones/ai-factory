@@ -2,7 +2,7 @@ import path from "node:path";
 import express, { type Express } from "express";
 import { logger } from "./logger";
 import { healthRouter } from "./routes/health";
-import { GLOBAL_KILL_SWITCH_KEY, getFeatureFlagClient } from "./feature-flags";
+import { getFeatureFlagClient, killSwitchKey, previewMiddleware } from "./feature-flags";
 
 // The built frontend lives at ../../frontend/dist relative to this file's
 // compiled location (dist/app.js -> backend/dist -> backend/.. -> frontend/dist).
@@ -16,7 +16,12 @@ const FRONTEND_DIST = process.env.FRONTEND_DIST_PATH
 export function createApp(): Express {
   const app = express();
 
+  // Fly terminates TLS in front of the app; trusting one proxy hop makes
+  // req.secure reflect the original request (for the preview cookie).
+  app.set("trust proxy", 1);
+
   app.use(express.json());
+  app.use(previewMiddleware());
 
   // One structured JSON log line per request (STANDARDS-VISIBILITY.md).
   app.use((req, res, next) => {
@@ -55,7 +60,7 @@ export function createApp(): Express {
   // this library's bug actually permits.
   app.use(async (req, res, next) => {
     const client = getFeatureFlagClient();
-    const enabled = await client.getBooleanValue(GLOBAL_KILL_SWITCH_KEY, false);
+    const enabled = await client.getBooleanValue(killSwitchKey(), false);
     if (!enabled) {
       res.status(503).json({
         status: "maintenance",
