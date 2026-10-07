@@ -1,0 +1,100 @@
+name: Smoke-test reviewer model
+
+# Issue #33: confirm the reviewer model works before it is relied on.
+# Spends a few cents of DeepInfra credit. Prints only pass/fail, never a key.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "DeepInfra model id to test"
+        required: false
+        default: "deepseek-ai/DeepSeek-V4-Pro-0813"
+      trials:
+        description: "Review trials per fixture"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  api-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Direct API checks (cost field, tool calls, structured output, fixtures)
+        env:
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          MODEL: ${{ inputs.model }}
+          TRIALS: ${{ inputs.trials }}
+        run: python3 agents/smoke/run.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-results
+          path: smoke-results.json
+          if-no-files-found: ignore
+
+  openhands-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install OpenHands
+        run: pip install openhands
+      - name: Build a throwaway repo containing a known off-by-one
+        run: |
+          set -e
+          mkdir -p /tmp/target/backend/src/routes && cd /tmp/target
+          git init -q && git config user.email t@t && git config user.name t
+          cat > backend/src/routes/items.ts <<'TS'
+          export const items: { id: number; title: string }[] = [];
+          export function page(pageNo: number, limit: number) {
+            const start = pageNo * limit;
+            return items.slice(start, start + limit);
+          }
+          TS
+          git add -A && git commit -qm "base"
+          sed -i 's/start + limit)/start + limit + 1)/' backend/src/routes/items.ts
+          git commit -qam "Add pagination helper tweak"
+      - name: Run the reviewer through OpenHands (read-only)
+        env:
+          LLM_MODEL: openai/${{ inputs.model }}
+          LLM_BASE_URL: https://api.deepinfra.com/v1/openai
+          LLM_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          RUNTIME: process
+        run: |
+          cd /tmp/target
+          task='You are a READ-ONLY code reviewer. Do not modify, create or delete any file in this repository. Run `git show HEAD` and review that commit for correctness bugs, security problems, and feature-flag violations. Then write your verdict as JSON to /tmp/verdict.json with exactly this shape: {"verdict":"clean"|"changes_requested","findings":[{"severity":"blocking"|"minor","summary":"...","evidence":"..."}]}. Use verdict "clean" only if there are no blocking findings.'
+          openhands --headless --override-with-envs --json -t "$task" | tee /tmp/openhands.jsonl
+      - name: Assert the verdict
+        run: |
+          python3 - <<'PY'
+          import json, re, subprocess, sys
+          ok = True
+          def check(name, cond, detail=""):
+              global ok
+              print(("PASS  " if cond else "FAIL  ") + name, detail)
+              ok = ok and cond
+          try:
+              v = json.load(open("/tmp/verdict.json"))
+              check("verdict file is valid JSON", True)
+          except Exception as e:
+              check("verdict file is valid JSON", False, f"({e})"); sys.exit(1)
+          check("verdict is changes_requested", v.get("verdict") == "changes_requested", f"(got {v.get('verdict')})")
+          blob = " ".join(f.get("summary", "") + " " + f.get("evidence", "") for f in v.get("findings", []))
+          check("finding identifies the off-by-one", bool(re.search(r"off.by.one|limit \+ 1|limit\+1|extra|slice", blob, re.I)))
+          dirty = subprocess.run(["git", "-C", "/tmp/target", "status", "--porcelain"], capture_output=True, text=True).stdout.strip()
+          check("reviewer left the repo untouched", dirty == "", f"({dirty or 'clean'})")
+          lines = open("/tmp/openhands.jsonl").read().splitlines()
+          check("OpenHands produced an event stream", len(lines) > 3, f"({len(lines)} lines)")
+          sys.exit(0 if ok else 1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: openhands-reviewer-log
+          path: /tmp/openhands.jsonl
+          if-no-files-found: ignore

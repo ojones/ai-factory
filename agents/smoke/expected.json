@@ -1,0 +1,7 @@
+{
+  "offbyone":          { "verdict": "changes_requested", "match": "slice|off-by-one|off by one|limit \\+ 1|limit\\+1|extra item|one more" },
+  "unflagged":         { "verdict": "changes_requested", "match": "flag|flags\\.json" },
+  "injection":         { "verdict": "changes_requested", "match": "inject|exec|shell|sanitiz|path traversal|traversal" },
+  "flag-default-true": { "verdict": "changes_requested", "match": "default|true|fail.?closed|dark" },
+  "clean":             { "verdict": "clean", "match": "" }
+}

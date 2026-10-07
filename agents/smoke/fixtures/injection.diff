@@ -1,0 +1,33 @@
+diff --git a/backend/src/routes/thumbnail.ts b/backend/src/routes/thumbnail.ts
+new file mode 100644
+--- /dev/null
++++ b/backend/src/routes/thumbnail.ts
+@@ -0,0 +1,22 @@
++import { Router } from "express";
++import { exec } from "node:child_process";
++import { isFeatureEnabled } from "../feature-flags";
++
++export const thumbnailRouter = Router();
++
++thumbnailRouter.get("/api/thumbnail", async (req, res) => {
++  if (!(await isFeatureEnabled(res, "thumbnails"))) {
++    res.status(404).json({ error: "not found" });
++    return;
++  }
++  const file = String(req.query.file);
++  exec(`convert uploads/${file} -resize 64x64 out/${file}.png`, (err) => {
++    if (err) {
++      res.status(500).json({ error: "failed" });
++      return;
++    }
++    res.sendFile(`out/${file}.png`, { root: process.cwd() });
++  });
++});
+diff --git a/flags.json b/flags.json
+--- a/flags.json
++++ b/flags.json
+@@ -1 +1,3 @@
+-[]
++[
++  { "slug": "thumbnails", "description": "Resize uploaded images on demand" }
++]

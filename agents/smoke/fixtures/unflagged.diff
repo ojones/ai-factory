@@ -1,0 +1,23 @@
+diff --git a/backend/src/routes/export.ts b/backend/src/routes/export.ts
+new file mode 100644
+--- /dev/null
++++ b/backend/src/routes/export.ts
+@@ -0,0 +1,12 @@
++import { Router } from "express";
++import { items } from "./items";
++
++export const exportRouter = Router();
++
++// Lets users download all their items as CSV.
++exportRouter.get("/api/export", (_req, res) => {
++  const rows = items.map((i) => `${i.id},${i.title}`).join("\n");
++  res.type("text/csv").send(`id,title\n${rows}`);
++});
+diff --git a/backend/src/app.ts b/backend/src/app.ts
+--- a/backend/src/app.ts
++++ b/backend/src/app.ts
+@@ -3,2 +3,4 @@ import { itemsRouter } from "./routes/items";
++import { exportRouter } from "./routes/export";
+ 
+ app.use(itemsRouter);
++app.use(exportRouter);
