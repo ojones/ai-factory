@@ -37,11 +37,11 @@ The description of a Managed App to be built — scope and constraints — submi
 _Avoid_: idea, ticket, project
 
 **App Staging**:
-The one-time setup of a new Managed App's infrastructure — repo, secrets, Fly app, GrowthBook SDK key — that happens after an Intake Spec is accepted and before its first Build Run.
+The one-time setup of a new Managed App's baseline — repo, seeded Starter Template code, and secrets (including its GrowthBook SDK key) — that happens after an Intake Spec is accepted and before its first Build Run.
 _Avoid_: provisioning (as a Factory-level phase name; the word still applies loosely to individual scripts/steps within App Staging), bootstrapping, onboarding
 
 **Starter Template**:
-The fixed repo scaffold — directory structure, CI config, boilerplate — that the Orchestrator seeds every new Managed App from at the start of a Build Run.
+The fixed repo scaffold — directory structure, CI config, boilerplate — that App Staging seeds every new Managed App from.
 _Avoid_: scaffold, boilerplate
 
 **Build Run Summary**:

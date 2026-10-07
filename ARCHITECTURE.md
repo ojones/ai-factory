@@ -60,8 +60,22 @@ On success, the Intake issue is closed with a comment linking the new Managed Ap
 
 ## Deployment provisioning
 
-For each new Managed App, the Orchestrator creates its repo and pushes deploy secrets into it unattended: one GitHub App installation (not a personal access token, so it works indefinitely without renewal) for repo creation/secrets, and a single shared Fly.io org-level API token pushed as the `FLY_API_TOKEN` secret into every new repo.
-→ [issues/12](.scratch/orchestrator-spec/issues/12-deployment-standards-content.md)
+**App Staging** creates only the baseline of a new Managed App — repo, seeded code, secrets — then hands off. Coding, review, and deployment all happen afterward, in Build Runs.
+
+**Credential: one fine-grained personal access token**, scoped to the owner's personal GitHub account with **no expiration**, stored as an Actions secret in ai-factory. A GitHub App installation was the earlier pin but cannot work: installation tokens get `403 Resource not accessible by integration` on `POST /user/repos` for personal accounts, so repo creation — the first step of every App Staging run — is blocked (findings: [issue #20](https://github.com/ojones/ai-factory/issues/20)). The PAT must cover repository creation, contents, workflows (to push the seeded `.github/workflows/` files), secrets write, and actions (to dispatch); exact scope names to be confirmed at build time. A fine-grained PAT cannot be created or rotated by API, so changing it is a manual step. **Accepted tradeoff:** repo creation forces "All repositories" scope, so the PAT can also write secrets in ai-factory and any other repo the owner has. A separate dedicated GitHub account to contain this was considered and rejected for v1 (one owner; extra identity to maintain). A GitHub org (which would make the App route work) was rejected for the same setup-cost reason; revisit if collaborators are added.
+
+**Repos**: public, under the owner's personal account, named from the Intake issue title. Public means unlimited Actions minutes and plain GHCR pulls.
+
+**Seeding**: the Starter Template stays in this monorepo at `templates/starter/` as the single source of truth — no separate template repo. App Staging creates an empty repo, writes the tracked files of `templates/starter/` (via `git archive`, never the working directory, so ignored files like `node_modules` can't leak in), adds `INTAKE.md` (the Intake Spec as submitted, a link to the Intake issue, and the cost cap used — a snapshot, never edited afterward), and makes one initial commit.
+
+**Secrets pushed into the new repo**: `FLY_API_TOKEN` (the single shared Fly org-level token) and `GROWTHBOOK_CLIENT_KEY` (see [Feature-flag infrastructure](#feature-flag-infrastructure)). No DeepInfra credential is pushed: the Build Run workflow lives in ai-factory, checks out the Managed App repo with the PAT, and mints each run's capped credential in the same job, so the DeepInfra parent key never leaves ai-factory and never reaches an agent's environment.
+
+**Fly app**: not created by App Staging. `fly/provision.sh` creates it idempotently on first deploy, deriving the name from the repo name ([STANDARDS-DEPLOYMENT.md](STANDARDS-DEPLOYMENT.md#starter-template-contents-workflows-and-fly-config)).
+
+**Idempotency**: every step is check-then-act, so App Staging is safely re-runnable by re-adding the `ready-for-staging` label after a partial failure. Repo ownership is proven by a marker in the repo description, `Intake: ojones/ai-factory#<N>`. A rerun adopts an existing repo only if the marker matches this Intake issue; any other pre-existing repo with that name (including `ai-factory` itself) is a hard stop, with an explanatory comment on the Intake issue, and nothing is ever overwritten.
+
+**Handoff**: App Staging's last step dispatches the Build Run workflow with only the Intake issue number and app name. The Build Run reads the task and cost-cap override from the issue body when it starts and snapshots it, so later edits don't affect a run in flight. The Intake issue then closes (see [Intake](#intake)).
+→ [issue #20](https://github.com/ojones/ai-factory/issues/20), [issue #23](https://github.com/ojones/ai-factory/issues/23)
 
 ## Feature-flag infrastructure
 
@@ -74,5 +88,5 @@ For each new Managed App, the Orchestrator creates its repo and pushes deploy se
 
 Isolation between Managed Apps is therefore by **flag-key naming only**, not by any GrowthBook access boundary — every Managed App's SDK connection key can technically fetch every other app's flag payload. This is an accepted tradeoff for this personal project, not an oversight. See [STANDARDS-FEATURE-FLAGS.md](STANDARDS-FEATURE-FLAGS.md#code-wiring) for the naming convention this forces.
 
-At the start of each Build Run, the Orchestrator calls GrowthBook's REST API to create a new, app-scoped, read-only SDK connection key against the single shared project (no project creation call anymore), which gets pushed into the new repo's secrets alongside the Fly token. One key per Managed App is still minted — it buys no isolation, but keeps revocation, rotation, and GrowthBook's own per-connection usage view organized per app.
+During App Staging, the Orchestrator calls GrowthBook's REST API once to create an app-scoped, read-only SDK connection key, named for the app, against the single shared project (no project creation call anymore), and pushes it into the new repo's secrets alongside the Fly token. On a rerun after a partial failure, any existing key with that name is revoked and a fresh one minted and re-pushed. One key per Managed App is still minted — it buys no isolation, but keeps revocation, rotation, and GrowthBook's own per-connection usage view organized per app.
 → [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [#22](https://github.com/ojones/ai-factory/issues/22)

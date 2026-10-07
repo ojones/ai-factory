@@ -13,7 +13,7 @@ Candidate tooling to evaluate if/when this moves forward: Matt Pocock's [sandcas
 ## Answer
 
 **Two cases, handled separately.**
-- **Different Managed Apps concurrently:** allowed. Each app's Build Run runs in its own repo on its own GitHub Actions runner, so no new isolation mechanism is needed. Two shared resources need care: cost tracking must be per-Build-Run (the per-run scoped credential's own usage, not DeepInfra's account-wide total, or simultaneous runs would trip each other's cap), and the number of simultaneous Build Runs is a single configurable cap, not a queue.
+- **Different Managed Apps concurrently:** allowed. Each app's Build Run runs on its own GitHub Actions runner (the Build Run workflow lives in ai-factory and checks out the Managed App repo — see [#23](https://github.com/ojones/ai-factory/issues/23)), so no new isolation mechanism is needed. Two shared resources need care: cost tracking must be per-Build-Run (the per-run scoped credential's own usage, not DeepInfra's account-wide total, or simultaneous runs would trip each other's cap), and the number of simultaneous Build Runs is a single configurable cap, not a queue.
 - **Same Managed App concurrently:** serialized. Tool: GitHub Actions' native `concurrency:` group, one group per Managed App, `cancel-in-progress: false`. This guarantees non-overlap only. A group holds one running and one pending job, and a newer pending job replaces an older one.
 
 **Requirement for the displacement gap:** no accepted request may be dropped. The trigger layer (Intake / App Staging) must record every request durably, and a finished Build Run checks for unprocessed requests and re-dispatches. Where that record lives is decided by the Intake successor map.
