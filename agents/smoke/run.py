@@ -18,10 +18,13 @@ KEY = os.environ["DEEPINFRA_API_KEY"]
 TRIALS = int(os.environ.get("TRIALS", "3"))
 HERE = pathlib.Path(__file__).parent
 
+# Property order matters: generation follows it, so the model must write its
+# analysis and findings BEFORE it commits to a verdict. (A first attempt with
+# `verdict` first approved every diff, including an obvious command injection.)
 VERDICT_SCHEMA = {
     "type": "object",
     "properties": {
-        "verdict": {"type": "string", "enum": ["clean", "changes_requested"]},
+        "analysis": {"type": "string"},
         "findings": {
             "type": "array",
             "items": {
@@ -35,8 +38,9 @@ VERDICT_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "verdict": {"type": "string", "enum": ["clean", "changes_requested"]},
     },
-    "required": ["verdict", "findings"],
+    "required": ["analysis", "findings", "verdict"],
     "additionalProperties": False,
 }
 RESPONSE_FORMAT = {
@@ -50,7 +54,8 @@ Review the diff. Report as blocking any of:
 - a user-facing feature or behavior change that is NOT behind a feature flag checked with
   isFeatureEnabled(res, slug), or whose slug is not recorded in flags.json
 - a feature-flag default that is not `false` (flags must fail closed)
-Return verdict "clean" only if there are no blocking findings. Cite evidence from the diff."""
+First write your analysis, then list findings, then give the verdict: "clean" only if there are
+no blocking findings. Cite evidence from the diff."""
 
 TOOLS = [{
     "type": "function",
@@ -81,7 +86,12 @@ def message(resp):
 
 def parse_verdict(resp):
     text = message(resp).get("content") or ""
-    return json.loads(text)
+    v = json.loads(text)
+    # The Orchestrator derives the verdict from the findings instead of
+    # trusting the model's own field.
+    v["model_verdict"] = v["verdict"]
+    v["verdict"] = "changes_requested" if any(f["severity"] == "blocking" for f in v["findings"]) else "clean"
+    return v
 
 # T1
 try:
@@ -144,7 +154,7 @@ for name, diff in fixtures.items():
             total_cost += r.get("usage", {}).get("estimated_cost") or 0
             v = parse_verdict(r)
             sev = [f["severity"] for f in v["findings"]]
-            print(f"      {name}: verdict={v['verdict']} findings={sev} "
+            print(f"      {name}: verdict={v['verdict']} (model said {v['model_verdict']}) findings={sev} "
                   f"first={(v['findings'][0]['summary'][:90] if v['findings'] else '-')!r}", flush=True)
             if v["verdict"] != want["verdict"]:
                 continue
