@@ -143,6 +143,9 @@ for name, diff in fixtures.items():
             r = review(diff)
             total_cost += r.get("usage", {}).get("estimated_cost") or 0
             v = parse_verdict(r)
+            sev = [f["severity"] for f in v["findings"]]
+            print(f"      {name}: verdict={v['verdict']} findings={sev} "
+                  f"first={(v['findings'][0]['summary'][:90] if v['findings'] else '-')!r}", flush=True)
             if v["verdict"] != want["verdict"]:
                 continue
             if want["verdict"] == "changes_requested":
