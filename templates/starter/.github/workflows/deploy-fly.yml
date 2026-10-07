@@ -1,0 +1,89 @@
+name: Deploy to Fly
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+
+permissions:
+  contents: read
+  packages: read
+  issues: write
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # The Fly app name is the repo name; never injected by App Staging.
+      FLY_APP_NAME: ${{ github.event.repository.name }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Provision (idempotent)
+        run: |
+          chmod +x fly/provision.sh
+          fly/provision.sh
+
+      - name: Sync runtime secrets to Fly
+        # These are read by the running app (process.env), so as GitHub
+        # secrets alone they never reach it. Synced on every deploy so a key
+        # rotation propagates without a manual `fly secrets set`.
+        env:
+          GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
+          PREVIEW_TOKEN: ${{ secrets.PREVIEW_TOKEN }}
+        run: |
+          flyctl secrets set --stage --app "$FLY_APP_NAME" \
+            GROWTHBOOK_CLIENT_KEY="$GROWTHBOOK_CLIENT_KEY" \
+            PREVIEW_TOKEN="$PREVIEW_TOKEN"
+
+      - name: Copy image from GHCR to Fly's registry
+        # GHCR packages are private by default and Fly can't authenticate to
+        # pull them; flipping visibility is UI-only. So pull with this job's
+        # own token and re-push to Fly's registry, keeping GHCR (tagged by SHA)
+        # as the source of truth.
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          src="ghcr.io/${{ github.repository }}:${SHA}"
+          dst="registry.fly.io/${FLY_APP_NAME}:${SHA}"
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          flyctl auth docker
+          docker pull "$src"
+          docker tag "$src" "$dst"
+          docker push "$dst"
+
+      - name: Deploy
+        run: |
+          flyctl deploy --app "$FLY_APP_NAME" \
+            --image "registry.fly.io/${FLY_APP_NAME}:${SHA}"
+
+      - name: Write deploy summary
+        if: success()
+        run: |
+          {
+            echo "## Deploy Outcome"
+            echo
+            echo "**Status**: :white_check_mark: deployed"
+            echo
+            echo "**Image**: \`ghcr.io/${{ github.repository }}:${SHA}\`"
+            echo
+            echo "**App URL**: https://${FLY_APP_NAME}.fly.dev"
+            echo
+            echo "**Fly log viewer**: https://fly.io/apps/${FLY_APP_NAME}/monitoring"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report failure as a GitHub Issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body=$(printf '**Status**: `crash`\n\n**Message**: The Deploy to Fly workflow failed for commit `%s`. This is a deploy-side failure, not a budget/cost issue — see the run log for details.\n\n**Deploy run**: %s' "$SHA" "$run_url")
+          gh issue create --title "Deploy to Fly failed: crash" --body "$body"
