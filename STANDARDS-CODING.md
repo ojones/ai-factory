@@ -21,7 +21,7 @@ Every new Managed App is seeded from a fixed **Starter Template** (directory str
 
 A hard gate in the deployment pipeline, not Agent judgment: unit tests for business logic, plus one minimal boot/health-check smoke test. No coverage-percentage threshold.
 
-If the gate fails after a push, the same Build Run watches the GitHub Actions run and iterates until green, bounded by the cost guardrail ([ARCHITECTURE.md](ARCHITECTURE.md#cost-guardrails)) — never a fire-and-forget push that can leave `main` broken indefinitely.
+If the gate fails after a push, the same Build Run keeps watching the GitHub Actions run (a Pipeline Agent diagnoses, the coder fixes — see [ARCHITECTURE.md](ARCHITECTURE.md#agents-and-build-run-stages)) until green, bounded by the cost guardrail ([ARCHITECTURE.md](ARCHITECTURE.md#cost-guardrails)) — never a fire-and-forget push that can leave `main` broken indefinitely.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
 ## Style
@@ -31,7 +31,7 @@ Purely mechanical — an auto-formatter is the entire style guide. No prose conv
 
 ## Git workflow
 
-Agents push directly to `main` — no PR/review gate. The test gate above is the real safety net; a self-merged PR would add a step without adding safety.
+Only the coder Agent pushes, and it pushes directly to `main` — no branches, no PRs. Review happens after the push, on `main`, while the new feature is still dark behind its feature flag ([STANDARDS-FEATURE-FLAGS.md](STANDARDS-FEATURE-FLAGS.md#release-and-retirement)). The flag is the gate for going public, the test gate is the gate for a healthy build, and a self-merged PR would add a step without adding safety.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
 ## Secrets and configuration

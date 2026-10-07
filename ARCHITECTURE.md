@@ -11,11 +11,40 @@ The Orchestrator reuses an existing open-source CLI coding-agent harness rather 
 **Harness: [OpenHands](https://github.com/All-Hands-AI/OpenHands)** (MIT). SWE-bench-leading, pluggable to open-weight models via LiteLLM, purpose-built `--headless` CLI mode with `--json` structured output. Runner-up: mini-swe-agent.
 → [issues/01](.scratch/orchestrator-spec/issues/01-agent-runtime-reuse-harness.md), [issues/07](.scratch/orchestrator-spec/issues/07-which-agent-harness.md)
 
+## Agents and Build Run stages
+
+A Build Run runs several Agents in sequence, each a separate headless OpenHands invocation with its own role prompt. Role prompts live in ai-factory, not in the Managed App repo, so the coder can't edit its reviewer's instructions. Agents hand off through `main` and structured JSON files (findings, verdicts), never through branches or PRs. **The coder is the only Agent that pushes.**
+
+**Roles**
+- **Coder**: implements the task from the Intake issue, pushing directly to `main`. Every user-facing change goes behind a feature flag recorded in `flags.json` ([STANDARDS-FEATURE-FLAGS.md](STANDARDS-FEATURE-FLAGS.md)). Runs on the pinned Qwen3-Coder model.
+- **Reviewer**: read-only on code. Reviews the pushed code on `main` and emits a structured JSON verdict with findings. Missing flags on user-facing changes are its top-priority finding; it wraps nothing itself and sends the finding back to the coder. Its model should differ from the coder's, since a clean review releases to everyone and a shared model shares blind spots; the pick is a research ticket, not decided here.
+- **Tester**: runs the deployed app and exercises the dark feature using the Preview Token. Can't push. Runs on the pinned model.
+- **Pipeline Agent**: invoked only when CI or the deploy fails. Deterministic polling does the normal watching, so the happy path costs no tokens. It diagnoses from logs and Fly status and hands a fix request back to the coder. It can't edit code or workflows.
+
+**Stages, in one Build Run**
+1. The coder pushes to `main`.
+2. CI, the build, and the deploy run (the Test Gate and workflows are unchanged). The new feature is **deployed dark** because its flag is off. Failures go to the Pipeline Agent and back to the coder, bounded by the cost cap and time limit as before.
+3. The reviewer and tester examine the deployed app. Findings go to the coder, who pushes fixes to `main`, still dark. This loop is a fixed, configurable number of rounds, default **10**; a round is one review and test pass followed by one fix commit.
+4. **Release**: a deterministic Orchestrator step, never an Agent, creates and enables the new flags in GrowthBook, but only when all four hold for the pushed SHA: CI green, deploy healthy, the tester's preview run passed, and the reviewer's verdict clean. It then posts a "released" comment in the Managed App repo. Rolling back is the owner flipping the flag off in GrowthBook; the step never re-enables a flag that already exists.
+5. If the round limit, cost cap, or time limit is hit first, the flag stays off, no release happens, and a "needs human" or "budget exhausted" Issue is opened in the Managed App repo. Dark-by-default makes this the safe outcome, so no budget is reserved for later stages. One deterministic final step always writes the Summary and Issue even after a breach.
+
+**Credentials**: no Agent holds the GrowthBook admin key. The key's scope isn't app-scoped (all Managed Apps share one project), so an Agent holding it could change any app's flags or kill switch, and the release step is the gate the Agents are being checked against. Agents read flag state with the app's SDK key if they need to.
+
+**Cost**: all Agents share the Build Run's one capped credential. The "refuse the next turn" rule applies run-wide; there are no per-Agent budgets.
+
+**Retirement**: deleting a flag and its code path happens only on an explicit request from the owner, as a normal Intake. No Agent proposes or performs it unprompted.
+→ [issue #24](https://github.com/ojones/ai-factory/issues/24)
+
 ## Model serving
 
 Open-weight model inference is consumed via a pay-per-token API, not self-hosted GPU inference — Build Runs are bounded, not continuously GPU-saturated, so idle self-hosted cost would dominate.
 
 **Provider/model: [DeepInfra](https://deepinfra.com) serving `Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo`** (Apache 2.0). Cheapest confirmed per-token price for a model RL-trained for long multi-turn tool-calling agentic loops; leads open-weight models on agentic tool-use benchmarks. Runner-up: Together AI (same model).
+
+**Reviewer model: `deepseek-ai/DeepSeek-V4-Pro-0813`** (MIT, 1M context, $1.30 in / $2.60 out per 1M tokens), a different lab than the coder so a clean review isn't a shared blind spot. Runner-up: `DeepSeek-V4.1-Flash`. Conditional on a smoke test before it is relied on: replay known-buggy diffs through OpenHands with this model and confirm `usage.estimated_cost` is returned and tool calls round-trip. No code-review benchmark covering open-weight models exists, so the quality case rests on owner-reported agentic-coding numbers.
+→ [issue #25](https://github.com/ojones/ai-factory/issues/25), [research](https://github.com/ojones/ai-factory/blob/research/reviewer-model/.scratch/orchestrator-spec/research/reviewer-model.md)
+
+**Models, prompts, and limits are config, not architecture.** Every per-role model, the provider endpoint, each role's prompt, and the review-round limit live in [agents/](agents/README.md), so any of them can be switched or tuned without editing this document.
 → [issues/02](.scratch/orchestrator-spec/issues/02-model-serving-api-not-selfhosted.md), [issues/08](.scratch/orchestrator-spec/issues/08-which-model-provider.md)
 
 ## Orchestrator host
@@ -46,7 +75,7 @@ The spec requires a budget cap + hard stop exist and are enforced; concrete doll
 
 A minimum observability/reporting requirement for unattended Build Runs is part of the architecture.
 
-**Mechanism**: a **Build Run Summary** written to `GITHUB_STEP_SUMMARY` (status, what changed, test results, cost spent, deploy outcome + a link to that deployment's Fly log viewer). The raw OpenHands `--json` JSONL event stream is uploaded as a build artifact for deep-dive debugging. A curated, machine-readable **Build Run Report** (same fields as the Summary) is produced alongside it for future tooling. On failure — a crash, or the cost/time budget exhausted before CI went green — an explicit workflow step auto-creates a GitHub Issue in the Managed App's repo, distinguishing which.
+**Mechanism**: a **Build Run Summary** written to `GITHUB_STEP_SUMMARY` (status, what changed, test results, cost spent, deploy outcome + a link to that deployment's Fly log viewer). The raw OpenHands `--json` JSONL event stream is uploaded as a build artifact for deep-dive debugging. A curated, machine-readable **Build Run Report** (same fields as the Summary) is produced alongside it for future tooling. The Summary has a row per stage (Agent, rounds used, cost, verdict) plus the release outcome, and each Agent invocation uploads its own JSONL artifact; the Report carries the same fields. On failure — a crash, the cost/time budget exhausted before CI went green, or the review-round limit reached without a clean verdict — an explicit workflow step auto-creates a GitHub Issue in the Managed App's repo, distinguishing which.
 → [issues/06](.scratch/orchestrator-spec/issues/06-visibility-in-scope.md), [issues/13](.scratch/orchestrator-spec/issues/13-visibility-standard-design.md)
 
 ## Intake
@@ -68,7 +97,7 @@ On success, the Intake issue is closed with a comment linking the new Managed Ap
 
 **Seeding**: the Starter Template stays in this monorepo at `templates/starter/` as the single source of truth — no separate template repo. App Staging creates an empty repo, writes the tracked files of `templates/starter/` (via `git archive`, never the working directory, so ignored files like `node_modules` can't leak in), adds `INTAKE.md` (the Intake Spec as submitted, a link to the Intake issue, and the cost cap used — a snapshot, never edited afterward), and makes one initial commit.
 
-**Secrets pushed into the new repo**: `FLY_API_TOKEN` (the single shared Fly org-level token) and `GROWTHBOOK_CLIENT_KEY` (see [Feature-flag infrastructure](#feature-flag-infrastructure)). No DeepInfra credential is pushed: the Build Run workflow lives in ai-factory, checks out the Managed App repo with the PAT, and mints each run's capped credential in the same job, so the DeepInfra parent key never leaves ai-factory and never reaches an agent's environment.
+**Secrets pushed into the new repo**: `FLY_API_TOKEN` (the single shared Fly org-level token), `GROWTHBOOK_CLIENT_KEY` (see [Feature-flag infrastructure](#feature-flag-infrastructure)), and `PREVIEW_TOKEN`. The preview token is derived as `HMAC(master secret held in ai-factory, app slug)` rather than stored per app, because GitHub secrets are write-only: the Build Run recomputes it to exercise a dark feature, with no per-app storage. No DeepInfra credential is pushed: the Build Run workflow lives in ai-factory, checks out the Managed App repo with the PAT, and mints each run's capped credential in the same job, so the DeepInfra parent key never leaves ai-factory and never reaches an agent's environment.
 
 **Fly app**: not created by App Staging. `fly/provision.sh` creates it idempotently on first deploy, deriving the name from the repo name ([STANDARDS-DEPLOYMENT.md](STANDARDS-DEPLOYMENT.md#starter-template-contents-workflows-and-fly-config)).
 

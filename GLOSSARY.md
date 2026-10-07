@@ -9,11 +9,11 @@ This repo and everything it defines: the Standards, the Orchestrator, and the re
 _Avoid_: the system, the platform
 
 **Orchestrator**:
-The long-running service that schedules and supervises Build Runs, dispatching work to Agents and enforcing the Standards.
+The ephemeral compute that runs a Build Run — scheduling its stages, dispatching work to Agents, and enforcing the Standards — and exists only while that run is active.
 _Avoid_: the factory (when the runtime process specifically is meant), the runner
 
 **Agent**:
-A worker process, backed by an LLM, spawned by the Orchestrator to carry out one unit of coding work within a Build Run.
+A worker process, backed by an LLM, spawned by the Orchestrator to carry out one role's unit of work (coding, reviewing, testing, or diagnosing a failed pipeline) within a Build Run.
 _Avoid_: bot, worker
 
 **Standards**:
@@ -51,3 +51,19 @@ _Avoid_: the log, the report
 **Build Run Report**:
 The machine-readable counterpart to the Build Run Summary — a structured artifact carrying the same fields, for future tooling to consume.
 _Avoid_: the summary
+
+**Deploy**:
+Making a Managed App's new code live on its host. Deployed code may still be hidden behind a feature flag.
+_Avoid_: publish, ship (as a synonym for Release)
+
+**Release**:
+Enabling a feature's flag so it is available to all users.
+_Avoid_: publish, go live
+
+**Retire**:
+Deleting a feature's flag and its code path after the feature is permanently on. Only done on the owner's explicit request.
+_Avoid_: remove, clean up
+
+**Preview Token**:
+A secret that lets its holder see features still hidden behind a flag, while everyone else sees them dark.
+_Avoid_: backdoor, bypass key

@@ -1,0 +1,23 @@
+# Per-role Agent configuration. See README.md. Model ids are DeepInfra ids.
+
+provider:
+  base_url: https://api.deepinfra.com/v1/openai
+
+roles:
+  coder:
+    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    prompt: prompts/coder.md
+  tester:
+    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    prompt: prompts/tester.md
+  reviewer:
+    # Deliberately a different lab than the coder, so they don't share blind spots.
+    # Pinned pending the smoke test in issue #25; runner-up deepseek-ai/DeepSeek-V4.1-Flash.
+    model: deepseek-ai/DeepSeek-V4-Pro-0813
+    prompt: prompts/reviewer.md
+  pipeline:
+    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    prompt: prompts/pipeline.md
+
+limits:
+  review_rounds: 10

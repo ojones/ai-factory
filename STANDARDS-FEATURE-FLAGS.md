@@ -4,7 +4,7 @@ Part of [STANDARDS.md](STANDARDS.md). See [GLOSSARY.md](GLOSSARY.md) for termino
 
 ## Flagging policy
 
-Every Agent-authored, user-facing feature/behavior change is wrapped behind its own flag by default — not left to Agent discretion over what counts as "risky." This is the production safety net compensating for the no-PR-review, direct-push-to-main git workflow ([STANDARDS-CODING.md](STANDARDS-CODING.md#git-workflow)).
+Every Agent-authored, user-facing feature/behavior change is wrapped behind its own flag by default — not left to Agent discretion over what counts as "risky." This is the production safety net, and also the review gate, compensating for the direct-push-to-main, no-branch git workflow ([STANDARDS-CODING.md](STANDARDS-CODING.md#git-workflow)).
 → [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md)
 
 ## Mandatory kill switch
@@ -25,3 +25,22 @@ Every OpenFeature call site must supply a real, sensible default value. Resilien
 
 **That default must always be `false` for a boolean flag — never `true`.** Confirmed live against `@openfeature/growthbook-provider@0.1.2`: GrowthBook represents an "off" boolean as `value: null`, and this provider's `translateResult` unconditionally substitutes the caller's default for any `null` value, with no way to distinguish "off" from "not found." Passing `true` makes a flag's off state permanently unobservable — the flag could never actually turn anything off, defeating its entire purpose. The real tradeoff this forces: "intentionally off" and "GrowthBook unreachable" become indistinguishable, so every flag fails *closed* on an outage, not open, for as long as this library bug stands. Revisit this note if a future `@openfeature/growthbook-provider` release fixes it.
 → [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [build ticket #14](https://github.com/ojones/ai-factory/issues/14)
+
+## Flag manifest
+
+Every new flag is recorded in `flags.json` at the repo root — key, description, and the SHA that added it — in the same commit that introduces it in code. The release step reads the manifest to know what a Build Run introduced. A flag need not exist in GrowthBook for code to ship dark: a missing flag evaluates to `false`, so the release step creates it in GrowthBook at release time.
+→ [issue #24](https://github.com/ojones/ai-factory/issues/24)
+
+## Preview
+
+Every Managed App's flag wrapper honors a **Preview Token** so the tester can exercise a dark feature in the real deployment. A request carrying the token — as an `X-Preview-Token` header, or a `?preview=<token>` query parameter that sets an HttpOnly cookie for browser sessions — evaluates every `feature.*` flag as on. The token is compared against the `PREVIEW_TOKEN` env var. The override never applies to the global kill switch, and it works when GrowthBook is unreachable. Without a valid token the feature stays dark to everyone.
+→ [issue #24](https://github.com/ojones/ai-factory/issues/24)
+
+## Release and retirement
+
+**Release** is the flag being enabled for all users. It is performed by a deterministic Orchestrator step after review and tests are clean, never by an Agent, and never re-enables a flag that already exists in GrowthBook (so an owner's manual rollback sticks).
+
+**Retirement** — deleting a flag and its code path — happens only on an explicit request from the owner. Agents never retire a flag on their own initiative. A released flag simply stays on, doubling as a rollback lever.
+
+Unflagged changes (bug fixes, refactors, dependency bumps) go live on deploy with the Test Gate as their only pre-live gate; the reviewer checks them after the fact and a missing flag on a user-facing change is a blocking finding.
+→ [issue #24](https://github.com/ojones/ai-factory/issues/24)
