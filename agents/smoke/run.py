@@ -47,15 +47,15 @@ RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {"name": "review_verdict", "schema": VERDICT_SCHEMA, "strict": True},
 }
-REVIEW_SYSTEM = """You are a read-only code reviewer for an Express + TypeScript Managed App.
-Review the diff. Report as blocking any of:
-- correctness bugs (off-by-one, wrong logic, unhandled errors)
-- security problems (injection, path traversal, unsafe input handling)
-- a user-facing feature or behavior change that is NOT behind a feature flag checked with
-  isFeatureEnabled(res, slug), or whose slug is not recorded in flags.json
-- a feature-flag default that is not `false` (flags must fail closed)
-First write your analysis, then list findings, then give the verdict: "clean" only if there are
-no blocking findings. Cite evidence from the diff."""
+# The real reviewer prompt, with its placeholders filled for a direct API call:
+# the diff is in the message and the verdict is the reply, not a file.
+REVIEW_SYSTEM = (
+    (HERE.parent / "prompts" / "reviewer.md").read_text()
+    .replace("{{app_name}}", "smoke-app")
+    .replace("`{{base_sha}}..{{head_sha}}` (`git log` and `git diff` show them)", "in the diff you are given")
+    .replace("`{{verdict_path}}`", "your reply")
+    + "\nReply with the JSON object only."
+)
 
 TOOLS = [{
     "type": "function",
