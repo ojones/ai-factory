@@ -12,7 +12,7 @@ roles:
     prompt: prompts/tester.md
   reviewer:
     # Deliberately a different lab than the coder, so they don't share blind spots.
-    # Pinned pending the smoke test in issue #25; runner-up deepseek-ai/DeepSeek-V4.1-Flash.
+    # Smoke-tested in issue #33 (agents/smoke/); runner-up deepseek-ai/DeepSeek-V4.1-Flash.
     model: deepseek-ai/DeepSeek-V4-Pro-0813
     prompt: prompts/reviewer.md
   pipeline:
