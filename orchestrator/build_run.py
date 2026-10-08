@@ -689,12 +689,25 @@ def render_summary(d):
              f"**Cost**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f} cap  ",
              f"**Review passes**: {d['review_passes']}  ", f"**Final commit**: `{d['head_sha'] or '-'}`  ",
              f"**App**: https://{d['app']}.fly.dev  ", f"**Fly log viewer**: https://fly.io/apps/{d['app']}/monitoring", "",
-             "| Stage | Agent | Round | Cost | Calls | Peak context | Verdict |", "|---|---|---|---|---|---|---|"]
+             "| Stage | Agent | Round | Cost | Calls | Peak context | Tokens in (cached) | Tokens out | Condenser calls | Verdict |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     goal = d.get("context_goal_tokens", 100000)
+    peaks = []
     for s in d["stages"]:
         u = s.get("usage")
-        peak = f"{u['peak_context']:,}" + (" :warning:" if u["peak_context"] > goal else "") if u else "-"
-        lines.append(f"| {s['stage']} | {s['agent']} | {s['round']} | ${s['cost_usd']:.4f} | {u['calls'] if u else '-'} | {peak} | {s['verdict']} |")
+        if u:
+            peaks.append((u["peak_context"], f"{s['agent']} {s['round']}"))
+            peak = f"{u['peak_context']:,}" + (" :warning:" if u["peak_context"] > goal else "")
+            cols = [str(u["calls"]), peak, f"{u['prompt_tokens']:,} ({u['cache_read_tokens']:,})",
+                    f"{u['completion_tokens']:,}", str(u["condenser_calls"])]
+        else:
+            cols = ["-"] * 5
+        lines.append(f"| {s['stage']} | {s['agent']} | {s['round']} | ${s['cost_usd']:.4f} | {' | '.join(cols)} | {s['verdict']} |")
+    if peaks:
+        top, who = max(peaks)
+        verdict = "over the goal" if top > goal else "under the goal"
+        lines += ["", f"**Peak context this run**: {top:,} tokens ({who}), {verdict} of {goal:,}. "
+                  "A peak is the largest prompt in a single LLM call, i.e. how big one Agent's context got."]
     rel = d.get("release")
     lines += ["", "**Release**: " + (f"released {', '.join(rel['released']) or 'nothing new'}" if rel else "not released")]
     if d["blocking"] and d["outcome"] not in ("released", "nothing_to_release"):
