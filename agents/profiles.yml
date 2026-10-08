@@ -40,3 +40,6 @@ limits:
   pipeline_fix_attempts: 5
   # Build Runs allowed in flight across all Managed Apps (v1 stages one at a time).
   max_simultaneous_build_runs: 1
+  # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to
+  # stay under, so Agents work in the model's reliable range. Over-goal stages are flagged.
+  context_goal_tokens: 100000

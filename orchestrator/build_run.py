@@ -128,6 +128,34 @@ def preview_token(master_secret, slug):
     return hmac.new(master_secret.encode(), slug.encode(), hashlib.sha256).hexdigest()
 
 
+def summarize_token_usage(base_state):
+    """Per-invocation context stats from OpenHands' persisted base_state.json.
+
+    prompt_tokens of one LLM call is that call's context size, so the max over calls is the
+    invocation's peak context. The condenser's own calls are counted separately.
+    """
+    metrics = (base_state.get("stats") or {}).get("usage_to_metrics") or {}
+    agent = (metrics.get("agent") or {}).get("token_usages") or []
+    condenser = (metrics.get("condenser") or {}).get("token_usages") or []
+    prompts = [u.get("prompt_tokens", 0) for u in agent]
+    return {"calls": len(agent), "condenser_calls": len(condenser),
+            "peak_context": max(prompts, default=0), "last_context": prompts[-1] if prompts else 0,
+            "prompt_tokens": sum(prompts), "completion_tokens": sum(u.get("completion_tokens", 0) for u in agent),
+            "cache_read_tokens": sum(u.get("cache_read_tokens", 0) for u in agent)}
+
+
+def merge_usage(a, b):
+    """Combine two invocations' stats (a retry of the same role)."""
+    if not a:
+        return b
+    if not b:
+        return a
+    out = {k: a[k] + b[k] for k in a if k not in ("peak_context", "last_context")}
+    out["peak_context"] = max(a["peak_context"], b["peak_context"])
+    out["last_context"] = b["last_context"]
+    return out
+
+
 def render(template, values):
     out = template
     for k, v in values.items():
@@ -233,9 +261,9 @@ class State:
         tmp.write_text(json.dumps(self.d, indent=2))
         tmp.replace(self.path)
 
-    def stage(self, name, agent, rnd, cost, verdict):
+    def stage(self, name, agent, rnd, cost, verdict, usage=None):
         self.d["stages"].append({"stage": name, "agent": agent, "round": rnd,
-                                 "cost_usd": round(cost, 6), "verdict": verdict})
+                                 "cost_usd": round(cost, 6), "verdict": verdict, "usage": usage})
         self.save()
         return self.d["stages"][-1]
 
@@ -268,6 +296,7 @@ class BuildRun:
         self.deadline = self.start + self.lim["time_limit_minutes"] * 60
         self.cap = None
         self.meter = None
+        self._usage = None
         self.preview = None
         self.auth_header = "Authorization: Basic " + base64.b64encode(
             f"x-access-token:{self.pat}".encode()).decode()
@@ -308,6 +337,7 @@ class BuildRun:
         self.task, self.cap = parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
                                            self.lim["cost_cap_usd_ceiling"])
         self.state.d["cap_usd"] = self.cap
+        self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
         self.state.save()
         self.wait_for_capacity()
         self.meter = Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
@@ -355,6 +385,7 @@ class BuildRun:
         before = self.state.d["spent_usd"]
         jwt = self.meter.mint(self.cfg["roles"][role]["model"])
         jsonl = self.art / f"openhands-{role}-{label}.jsonl"
+        known = self.conversation_dirs()
         log(f"::group::{role} ({label})")
         try:
             with jsonl.open("w") as f:
@@ -367,7 +398,32 @@ class BuildRun:
         log(f"{role} ({label}) exited {rc}; cost ${after - before:.4f}; run total ${after:.4f} of ${self.cap:.2f}")
         log("::endgroup::")
         self._last_cost = after - before
+        usage = self.collect_usage(role, label, known)
+        self._usage = merge_usage(self._usage, usage)
+        if usage:
+            goal = self.lim.get("context_goal_tokens", 100000)
+            log(f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens"
+                + (f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""))
         return rc
+
+    def conversation_dirs(self):
+        root = Path(os.environ.get("HOME", "~")).expanduser() / ".openhands" / "conversations"
+        return {p.name for p in root.iterdir()} if root.is_dir() else set()
+
+    def collect_usage(self, role, label, known):
+        """Read the conversation this invocation created and keep its raw state as an artifact."""
+        root = Path(os.environ.get("HOME", "~")).expanduser() / ".openhands" / "conversations"
+        for name in sorted(self.conversation_dirs() - known):
+            src = root / name / "base_state.json"
+            doc = load_json(src)
+            if doc is not None:
+                (self.art / f"openhands-{role}-{label}-state.json").write_text(src.read_text())
+                return summarize_token_usage(doc)
+        return None
+
+    def take_usage(self):
+        usage, self._usage = self._usage, None
+        return usage
 
     def agent_json(self, role, label, values, path, extra_env=None, check=None):
         """Run a role that writes a JSON file; one retry if the file is missing or malformed."""
@@ -414,7 +470,7 @@ class BuildRun:
                     problem = f"Your commits changed protected Starter Template files ({', '.join(bad)}). They were discarded. Redo the work without touching them."
             if problem:
                 attempts += 1
-                self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}")
+                self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
                 if attempts >= 3:
                     raise NeedsHuman("other", f"the coder could not produce an acceptable commit: {problem}")
                 task = f"{problem}\n\nOriginal task:\n{task0}"
@@ -424,7 +480,7 @@ class BuildRun:
                cwd=self.app_dir)
             self.state.d["head_sha"] = head
             self.state.d["commits"].append(head)
-            self.state.stage("Coder", "coder", label, cost, f"pushed {head[:8]}")
+            self.state.stage("Coder", "coder", label, cost, f"pushed {head[:8]}", self.take_usage())
             return head
 
     # --- CI / deploy
@@ -489,7 +545,7 @@ class BuildRun:
                                       "diagnosis_path": self.work / f"diagnosis-{n}.json"},
                 self.work / f"diagnosis-{n}.json", check=lambda d: d.get("category") in ("code", "workflow", "infra", "flaky"))
             diag = load_json(self.work / f"diagnosis-{n}.json")
-            self.state.stage(f"{failed[0]} failed", "pipeline", n, cost, diag["category"])
+            self.state.stage(f"{failed[0]} failed", "pipeline", n, cost, diag["category"], self.take_usage())
             cat = diag["category"]
             if cat in ("flaky", "infra") and diag.get("retry_recommended") and retries > 0:
                 retries -= 1
@@ -514,7 +570,7 @@ class BuildRun:
             self.work / f"verdict-{rnd}.json", check=lambda doc: derive_review(doc) and None)
         self.restore_tree()
         clean, blocking, minor = derive_review(reviewer_doc)
-        self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking")
+        self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking", self.take_usage())
 
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
@@ -528,7 +584,7 @@ class BuildRun:
                 check=lambda doc: derive_test(doc, flags) and None)
             self.restore_tree()
             tpassed, test_failures = derive_test(tdoc, flags)
-            self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed")
+            self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", self.take_usage())
         else:
             tpassed = True
             self.state.stage("Test", "tester", rnd, 0, "skipped: no new flags")
@@ -633,9 +689,12 @@ def render_summary(d):
              f"**Cost**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f} cap  ",
              f"**Review passes**: {d['review_passes']}  ", f"**Final commit**: `{d['head_sha'] or '-'}`  ",
              f"**App**: https://{d['app']}.fly.dev  ", f"**Fly log viewer**: https://fly.io/apps/{d['app']}/monitoring", "",
-             "| Stage | Agent | Round | Cost | Verdict |", "|---|---|---|---|---|"]
+             "| Stage | Agent | Round | Cost | Calls | Peak context | Verdict |", "|---|---|---|---|---|---|---|"]
+    goal = d.get("context_goal_tokens", 100000)
     for s in d["stages"]:
-        lines.append(f"| {s['stage']} | {s['agent']} | {s['round']} | ${s['cost_usd']:.4f} | {s['verdict']} |")
+        u = s.get("usage")
+        peak = f"{u['peak_context']:,}" + (" :warning:" if u["peak_context"] > goal else "") if u else "-"
+        lines.append(f"| {s['stage']} | {s['agent']} | {s['round']} | ${s['cost_usd']:.4f} | {u['calls'] if u else '-'} | {peak} | {s['verdict']} |")
     rel = d.get("release")
     lines += ["", "**Release**: " + (f"released {', '.join(rel['released']) or 'nothing new'}" if rel else "not released")]
     if d["blocking"] and d["outcome"] not in ("released", "nothing_to_release"):

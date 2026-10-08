@@ -121,6 +121,30 @@ class PreviewToken(unittest.TestCase):
         self.assertEqual(shell.stdout.strip(), b.preview_token("x", "demo-app"))
 
 
+class TokenUsage(unittest.TestCase):
+    STATE = {"stats": {"usage_to_metrics": {
+        "agent": {"token_usages": [
+            {"prompt_tokens": 13490, "completion_tokens": 144, "cache_read_tokens": 0},
+            {"prompt_tokens": 60000, "completion_tokens": 65, "cache_read_tokens": 13616},
+            {"prompt_tokens": 41000, "completion_tokens": 10, "cache_read_tokens": 0}]},
+        "condenser": {"token_usages": [{"prompt_tokens": 70000}]}}}}
+
+    def test_peak_is_the_largest_single_call_context(self):
+        u = b.summarize_token_usage(self.STATE)
+        self.assertEqual((u["calls"], u["condenser_calls"], u["peak_context"], u["last_context"]), (3, 1, 60000, 41000))
+        self.assertEqual(u["prompt_tokens"], 114490)
+
+    def test_missing_stats_is_zeroes_not_an_error(self):
+        self.assertEqual(b.summarize_token_usage({})["peak_context"], 0)
+
+    def test_merge_keeps_the_larger_peak_and_sums_the_rest(self):
+        a = b.summarize_token_usage(self.STATE)
+        m = b.merge_usage(a, b.summarize_token_usage({"stats": {"usage_to_metrics": {"agent": {"token_usages": [
+            {"prompt_tokens": 90000, "completion_tokens": 1}]}}}}))
+        self.assertEqual((m["calls"], m["peak_context"], m["last_context"]), (4, 90000, 90000))
+        self.assertIsNone(b.merge_usage(None, None))
+
+
 class BudgetAccounting(unittest.TestCase):
     def setUp(self):
         self.calls, self.spend = [], {}
