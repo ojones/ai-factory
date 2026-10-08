@@ -9,6 +9,11 @@ on:
       app_name:
         description: Managed App name (its repo and Fly app name)
         required: true
+      repo_action:
+        description: What to do with the GitHub repo
+        type: choice
+        options: [delete, archive]
+        default: delete
       dry_run:
         description: Print the plan without changing anything
         type: boolean
@@ -37,4 +42,5 @@ jobs:
           FACTORY_REPO: ${{ github.repository }}
           APP_NAME: ${{ inputs.app_name }}
           DRY_RUN: ${{ inputs.dry_run }}
+          REPO_ACTION: ${{ inputs.repo_action }}
         run: infra/app-staging/teardown.sh

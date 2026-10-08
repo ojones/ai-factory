@@ -10,13 +10,17 @@
 # delete a repo App Staging did not create.
 #
 # Env: FACTORY_PAT (fine-grained; needs Administration: read and write to delete), FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT,
-# FACTORY_REPO, APP_NAME, DRY_RUN (true|false).
+# FACTORY_REPO, APP_NAME, DRY_RUN (true|false), REPO_ACTION (delete|archive,
+# default delete; archive keeps the repo read-only and needs no Administration).
 set -euo pipefail
 
 GROWTHBOOK_API="${GROWTHBOOK_API_HOST:-https://ai-factory-growthbook.fly.dev:3100}/api/v1"
 OWNER="${FACTORY_REPO%%/*}"
 SLUG="$APP_NAME"
 DRY_RUN="${DRY_RUN:-true}"
+REPO_ACTION="${REPO_ACTION:-delete}"
+[[ "$REPO_ACTION" == delete || "$REPO_ACTION" == archive ]] ||
+  { echo "::error::REPO_ACTION must be delete or archive." >&2; exit 1; }
 
 pat() { GH_TOKEN="$FACTORY_PAT" "$@"; }
 gb() { curl -sS --fail-with-body --max-time 30 -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" "$@"; }
@@ -89,4 +93,12 @@ for f in $flags; do
 done
 
 # --- the repo, last, so a failed earlier step can be retried with the marker intact ---
-[ "$REPO_EXISTS" = false ] || act "repo" "delete repo $OWNER/$SLUG" pat gh api -X DELETE "repos/$OWNER/$SLUG"
+if [ "$REPO_EXISTS" = true ]; then
+  if [ "$REPO_ACTION" = delete ]; then
+    act "repo" "delete repo $OWNER/$SLUG" pat gh api -X DELETE "repos/$OWNER/$SLUG"
+  elif [ "$(jq -r '.archived' <<<"$out")" = true ]; then
+    note "repo" "already archived"
+  else
+    act "repo" "archive repo $OWNER/$SLUG" pat gh api -X PATCH "repos/$OWNER/$SLUG" -F archived=true
+  fi
+fi

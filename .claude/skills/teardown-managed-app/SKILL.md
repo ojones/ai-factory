@@ -17,9 +17,9 @@ The deletions are irreversible. The user must confirm each app by name in the cu
      -q '.[] | select(.description | startswith("Intake: ojones/ai-factory#")) | "\(.name)\t\(.description)"'
    ```
    For each, say which Intake it came from and the outcome of its last Build Run (`gh run list --workflow build-run.yml`). Let the user choose. Do not suggest an app that has a Build Run in flight.
-2. **Dry run**, always freshly run in this session even if an earlier one exists, because the app's state may have changed.
+2. **Dry run** (ask the user whether the repo should be deleted, the default, or archived, and pass `-f repo_action=archive` for the latter), always freshly run in this session even if an earlier one exists, because the app's state may have changed.
    ```bash
-   gh workflow run teardown.yml -f app_name=<app> -f dry_run=true
+   gh workflow run teardown.yml -f app_name=<app> -f dry_run=true [-f repo_action=archive]
    gh run watch "$(gh run list --workflow teardown.yml --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
    gh run view --log "$(gh run list --workflow teardown.yml --limit 1 --json databaseId -q '.[0].databaseId')"
    ```
@@ -27,7 +27,7 @@ The deletions are irreversible. The user must confirm each app by name in the cu
 3. **Ask for confirmation** naming the app and what will be destroyed. If the app is live and released, say so, since its users lose the service.
 4. **Real run**, only after a yes: the same commands with `-f dry_run=false`.
 5. **Verify** each resource independently of the workflow's own log (`set -a; . ./.env; set +a` provides `GROWTHBOOK_ADMIN_PAT`):
-   - repo: `gh api repos/ojones/<app>` returns 404
+   - repo: `gh api repos/ojones/<app>` returns 404 (deleted) or `archived: true` (archived)
    - Fly app: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(fly auth token)" https://api.machines.dev/v1/apps/<app>` returns 404
    - SDK connection: no entry named `<app>` in `curl -s -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" https://ai-factory-growthbook.fly.dev:3100/api/v1/sdk-connections`
    - flags: every `<app>.` flag in `.../api/v1/features?limit=100` has `archived: true`
