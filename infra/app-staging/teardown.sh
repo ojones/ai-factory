@@ -9,7 +9,7 @@
 # touched if its description carries our Intake marker, so this can never
 # delete a repo App Staging did not create.
 #
-# Env: FACTORY_PAT (needs delete_repo), FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT,
+# Env: FACTORY_PAT (fine-grained; needs Administration: read and write to delete), FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT,
 # FACTORY_REPO, APP_NAME, DRY_RUN (true|false).
 set -euo pipefail
 
