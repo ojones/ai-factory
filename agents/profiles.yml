@@ -21,3 +21,10 @@ roles:
 
 limits:
   review_rounds: 10
+  # Per-Build-Run LLM spend. The default applies when an Intake gives no
+  # override; an Intake override may not exceed the ceiling. Starting values
+  # to revise after the first real multi-agent run (issue #34).
+  cost_cap_usd_default: 2.00
+  cost_cap_usd_ceiling: 10.00
+  # Lifetime of the run's scoped JWT; the Actions job limit is 6 hours.
+  jwt_ttl_seconds: 21600
