@@ -12,8 +12,10 @@ roles:
     prompt: prompts/tester.md
   reviewer:
     # Deliberately a different lab than the coder, so they don't share blind spots.
-    # Smoke-tested in issue #33 (agents/smoke/); runner-up deepseek-ai/DeepSeek-V4.1-Flash.
-    model: deepseek-ai/DeepSeek-V4-Pro-0813
+    # Pro (deepseek-ai/DeepSeek-V4-Pro-0813, the #25 pick) spent 7-20 minutes per review in real
+    # Build Runs, reasoning at ~40 tokens/s. Flash scored 50/50 on the smoke fixtures against
+    # Pro's 48/50, at ~10s a review, so it is the reviewer (issue #41). Switch back by editing here.
+    model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/reviewer.md
   pipeline:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
