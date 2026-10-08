@@ -1,0 +1,40 @@
+name: Teardown
+
+# Manually removes one Managed App's resources (issue #40): Fly app, GrowthBook
+# SDK connection and repo. Dry run by default. The work is in
+# infra/app-staging/teardown.sh.
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: Managed App name (its repo and Fly app name)
+        required: true
+      dry_run:
+        description: Print the plan without changing anything
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: app-staging
+  cancel-in-progress: false
+
+jobs:
+  teardown:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tear down the Managed App
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          GROWTHBOOK_ADMIN_PAT: ${{ secrets.GROWTHBOOK_ADMIN_PAT }}
+          FACTORY_REPO: ${{ github.repository }}
+          APP_NAME: ${{ inputs.app_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: infra/app-staging/teardown.sh
