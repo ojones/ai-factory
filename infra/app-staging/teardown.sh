@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Teardown of one Managed App (issue #40). Run by .github/workflows/teardown.yml.
 #
-# Deletes what App Staging and the first Build Run created: the Fly app, the
-# GrowthBook SDK connection, and the GitHub repo. GrowthBook's REST API cannot
-# delete or archive flags, so those are listed for archiving by hand in the UI.
+# Removes what App Staging and the first Build Run created: the Fly app, the
+# GrowthBook SDK connection, the app's flags (archived, since GrowthBook's REST
+# API cannot delete them) and the GitHub repo. Ends with a table of outcomes.
 #
 # Dry run (the default) prints the plan and changes nothing. A repo is only
 # touched if its description carries our Intake marker, so this can never
@@ -21,10 +21,24 @@ DRY_RUN="${DRY_RUN:-true}"
 pat() { GH_TOKEN="$FACTORY_PAT" "$@"; }
 gb() { curl -sS --fail-with-body --max-time 30 -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" "$@"; }
 fly_api() { curl -sS --max-time 30 -H "Authorization: Bearer $FLY_API_TOKEN" "$@"; }
-act() { # act "description" cmd...: run it, or just announce it on a dry run
-  local what="$1"; shift
-  if [ "$DRY_RUN" = true ]; then echo "[dry run] would: $what"; else echo "$what"; "$@"; fi
+ROWS=()
+act() { # act "resource" "description" cmd...: run it, or just announce it on a dry run
+  local resource="$1" what="$2"; shift 2
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dry run] would: $what"; ROWS+=("$resource|would $what")
+  else
+    echo "$what"; "$@"; ROWS+=("$resource|done: $what")
+  fi
 }
+note() { echo "$2"; ROWS+=("$1|$2"); }
+print_table() { # printed even after a failure, so a partial teardown is visible
+  [ "${#ROWS[@]}" -gt 0 ] || return 0
+  local out="### Teardown of \`$SLUG\` (dry run: $DRY_RUN)"$'\n\n| Resource | Outcome |\n|---|---|\n' row
+  for row in "${ROWS[@]}"; do out+="| ${row%%|*} | ${row#*|} |"$'\n'; done
+  printf '\n%s' "$out"
+  [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s' "$out" >>"$GITHUB_STEP_SUMMARY"
+}
+trap print_table EXIT
 
 [[ "$SLUG" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ && ${#SLUG} -le 30 ]] ||
   { echo "::error::'$SLUG' is not a valid Managed App name." >&2; exit 1; }
@@ -42,7 +56,7 @@ if out="$(pat gh api "repos/$OWNER/$SLUG" 2>&1)"; then
     { echo "::error::$OWNER/$SLUG exists but was not created by App Staging (description: '$repo_desc'). Refusing." >&2; exit 1; }
   REPO_EXISTS=true
 elif grep -q 'HTTP 404' <<<"$out"; then
-  REPO_EXISTS=false; echo "Repo $OWNER/$SLUG: already gone."
+  REPO_EXISTS=false; note "repo" "already gone"
 else
   echo "$out" >&2; exit 1
 fi
@@ -55,24 +69,24 @@ done
 # --- Fly app --------------------------------------------------------------------------
 fly_code="$(fly_api -o /dev/null -w '%{http_code}' "https://api.machines.dev/v1/apps/$SLUG")"
 case "$fly_code" in
-  200) act "destroy Fly app $SLUG" fly_api -f -X DELETE "https://api.machines.dev/v1/apps/$SLUG" ;;
-  404) echo "Fly app $SLUG: already gone." ;;
-  403) echo "Fly app $SLUG: not in our account, leaving it alone." ;;
+  200) act "Fly app" "destroy Fly app $SLUG" fly_api -f -X DELETE "https://api.machines.dev/v1/apps/$SLUG" ;;
+  404) note "Fly app" "already gone" ;;
+  403) note "Fly app" "not in our account, left alone" ;;
   *) echo "::error::Unexpected HTTP $fly_code for Fly app $SLUG" >&2; exit 1 ;;
 esac
 
-# --- GrowthBook: the SDK connection; list the flags for hand archiving ---------------
-for id in $(gb "$GROWTHBOOK_API/sdk-connections?limit=100" | jq -r --arg n "$SLUG" '.connections[] | select(.name == $n) | .id'); do
-  act "revoke GrowthBook SDK connection $id" gb -o /dev/null -X DELETE "$GROWTHBOOK_API/sdk-connections/$id"
+# --- GrowthBook: the SDK connection, then archive the app's flags -------------------------
+conns="$(gb "$GROWTHBOOK_API/sdk-connections?limit=100" | jq -r --arg n "$SLUG" '.connections[] | select(.name == $n) | .id')"
+[ -n "$conns" ] || note "SDK connection" "already gone"
+for id in $conns; do
+  act "SDK connection" "revoke GrowthBook SDK connection $id" gb -o /dev/null -X DELETE "$GROWTHBOOK_API/sdk-connections/$id"
 done
+# The REST API cannot delete a flag, but a POST with archived=true works.
 flags="$(gb "$GROWTHBOOK_API/features?limit=100" | jq -r --arg p "$SLUG." '.features[] | select((.id | startswith($p)) and (.archived | not)) | .id')"
-if [ -n "$flags" ]; then
-  echo "GrowthBook flags to archive by hand (the REST API cannot do it): https://ai-factory-growthbook.fly.dev/features"
-  sed 's/^/  - /' <<<"$flags"
-  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    { echo "### Archive these GrowthBook flags by hand"; sed 's/^/- `/; s/$/`/' <<<"$flags"; } >>"$GITHUB_STEP_SUMMARY"
-  fi
-fi
+[ -n "$flags" ] || note "flags" "none left to archive"
+for f in $flags; do
+  act "flag \`$f\`" "archive flag $f" gb -o /dev/null -X POST -H 'Content-Type: application/json' -d '{"archived":true}' "$GROWTHBOOK_API/features/$f"
+done
 
 # --- the repo, last, so a failed earlier step can be retried with the marker intact ---
-[ "$REPO_EXISTS" = false ] || act "delete repo $OWNER/$SLUG" pat gh api -X DELETE "repos/$OWNER/$SLUG"
+[ "$REPO_EXISTS" = false ] || act "repo" "delete repo $OWNER/$SLUG" pat gh api -X DELETE "repos/$OWNER/$SLUG"

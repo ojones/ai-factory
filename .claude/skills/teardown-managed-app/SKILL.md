@@ -7,7 +7,7 @@ description: Tear down a Managed App the Factory built (Fly app, GrowthBook SDK 
 
 Removal is done by the `Teardown` workflow (`.github/workflows/teardown.yml`, script `infra/app-staging/teardown.sh`). Run it through `gh`; do not reimplement its steps by hand with `fly`, `gh repo delete` or `curl`. The script holds the safety checks (Intake marker on the repo, no Build Run in flight, Factory infrastructure refused). If it refuses, report why and stop.
 
-The deletions are irreversible. The user must confirm each app by name in the current conversation, after seeing the dry-run plan. Never infer approval from an earlier teardown, and never batch several apps under one confirmation.
+The deletions are irreversible. The user must confirm each app by name in the current conversation, after seeing that app's dry-run plan. "Do one" or "do the first" is not a name: ask which app. Never infer approval from an earlier teardown, and never batch several apps under one confirmation.
 
 ## Steps
 
@@ -17,23 +17,28 @@ The deletions are irreversible. The user must confirm each app by name in the cu
      -q '.[] | select(.description | startswith("Intake: ojones/ai-factory#")) | "\(.name)\t\(.description)"'
    ```
    For each, say which Intake it came from and the outcome of its last Build Run (`gh run list --workflow build-run.yml`). Let the user choose. Do not suggest an app that has a Build Run in flight.
-2. **Dry run.**
+2. **Dry run**, always freshly run in this session even if an earlier one exists, because the app's state may have changed.
    ```bash
    gh workflow run teardown.yml -f app_name=<app> -f dry_run=true
    gh run watch "$(gh run list --workflow teardown.yml --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
    gh run view --log "$(gh run list --workflow teardown.yml --limit 1 --json databaseId -q '.[0].databaseId')"
    ```
-   Show the user the `[dry run] would:` lines and the flags listed for hand archiving.
+   Show the user the outcomes table at the end of the log (Fly app, SDK connection, each flag, repo).
 3. **Ask for confirmation** naming the app and what will be destroyed. If the app is live and released, say so, since its users lose the service.
 4. **Real run**, only after a yes: the same commands with `-f dry_run=false`.
-5. **Verify**: the repo returns 404 (`gh api repos/ojones/<app>`), and the Fly app is gone (`curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(fly auth token)" https://api.machines.dev/v1/apps/<app>` returns 404).
-6. **Hand over the flags.** GrowthBook's API cannot archive flags. Give the user the list from the run summary and the link https://ai-factory-growthbook.fly.dev/features. Say plainly that this part is still theirs to do.
+5. **Verify** each resource independently of the workflow's own log (`set -a; . ./.env; set +a` provides `GROWTHBOOK_ADMIN_PAT`):
+   - repo: `gh api repos/ojones/<app>` returns 404
+   - Fly app: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(fly auth token)" https://api.machines.dev/v1/apps/<app>` returns 404
+   - SDK connection: no entry named `<app>` in `curl -s -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" https://ai-factory-growthbook.fly.dev:3100/api/v1/sdk-connections`
+   - flags: every `<app>.` flag in `.../api/v1/features?limit=100` has `archived: true`
+6. **Report** the verified result per resource. GrowthBook cannot delete flags, only archive them, so say that archived flags still exist in the project.
 7. **Record it**: if there is a related open ticket (such as the cleanup ticket #40), comment which apps were removed.
 
 ## If the script fails
 
 - *Repo delete fails with 403 or "Must have admin rights"*: the `FACTORY_PAT` lacks the fine-grained Administration permission. Tell the user; do not try another token.
 - *The Fly app is "not in our account"*: it belongs to someone else. Leave it; the rest of the teardown still applies.
+- *Flag archive fails*: the admin PAT may have lost permission. Report it; do not use another credential.
 - *Partial failure*: every step is check-then-act, so rerun the same workflow. The repo is deleted last so its marker stays available for retries.
 
 ## Keeping this skill current
