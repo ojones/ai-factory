@@ -28,7 +28,7 @@ The deletions are irreversible. The user must confirm each app by name in the cu
 4. **Real run**, only after a yes: the same commands with `-f dry_run=false`.
 5. **Verify** each resource independently of the workflow's own log (`set -a; . ./.env; set +a` provides `GROWTHBOOK_ADMIN_PAT`):
    - repo: `gh api repos/ojones/<app>` returns 404 (deleted) or `archived: true` (archived)
-   - Fly app: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(fly auth token)" https://api.machines.dev/v1/apps/<app>` returns 404
+   - Fly app: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(fly auth token)" https://api.machines.dev/v1/apps/<app>` returns 404 (403 means the name is held by another account and was never ours, which is fine)
    - SDK connection: no entry named `<app>` in `curl -s -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" https://ai-factory-growthbook.fly.dev:3100/api/v1/sdk-connections`
    - flags: every `<app>.` flag in `.../api/v1/features?limit=100` has `archived: true`
 6. **Report** the verified result per resource. GrowthBook cannot delete flags, only archive them, so say that archived flags still exist in the project.
