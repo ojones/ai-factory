@@ -24,7 +24,7 @@ ISSUE_URL="https://github.com/${FACTORY_REPO}/issues/${ISSUE_NUMBER}"
 # gh as the PAT: repo creation, secrets, seeding, and the Build Run dispatch.
 pat() { GH_TOKEN="$FACTORY_PAT" "$@"; }
 
-gb() { curl -fsS --fail-with-body --max-time 30 \
+gb() { curl -sS --fail-with-body --max-time 30 \
   -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" -H 'Content-Type: application/json' "$@"; }
 
 comment() { gh issue comment "$ISSUE_NUMBER" --repo "$FACTORY_REPO" --body "$1" >/dev/null; }
