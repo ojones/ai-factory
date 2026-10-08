@@ -71,15 +71,27 @@ def record(name, ok, detail=""):
     results.append((name, ok, detail))
     print(f"{'PASS' if ok else 'FAIL'}  {name} {detail}", flush=True)
 
-def chat(payload):
+def chat(payload, attempts=5):
+    """One API call. Retries overload (429), server errors (5xx) and timeouts with backoff:
+    those say nothing about the model, and counting them as wrong verdicts made a busy
+    provider look like a regression."""
     body = json.dumps({"model": MODEL, **payload}).encode()
     req = urllib.request.Request(f"{BASE}/chat/completions", data=body, headers={
         "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}")
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            detail = f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}"
+            if (e.code == 429 or e.code >= 500) and attempt < attempts:
+                time.sleep(10 * attempt)
+                continue
+            raise RuntimeError(detail)
+        except (TimeoutError, urllib.error.URLError) as e:
+            if attempt == attempts:
+                raise RuntimeError(f"{type(e).__name__}: {e}")
+            time.sleep(10 * attempt)
 
 def message(resp):
     return resp["choices"][0]["message"]
