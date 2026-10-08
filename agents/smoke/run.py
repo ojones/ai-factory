@@ -162,6 +162,10 @@ for name, diff in fixtures.items():
                 blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "blocking")
                 if not re.search(want["match"], blob, re.I):
                     continue
+            if want.get("minor_match"):
+                blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "minor")
+                if not re.search(want["minor_match"], blob, re.I):
+                    continue
             passed += 1
         except Exception as e:
             print(f"      trial error on {name}: {e}", flush=True)
