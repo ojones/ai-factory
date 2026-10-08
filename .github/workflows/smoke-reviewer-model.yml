@@ -9,6 +9,14 @@ on:
         description: "DeepInfra model id to test"
         required: false
         default: "deepseek-ai/DeepSeek-V4-Pro-0813"
+      reasoning_effort:
+        description: "Optional reasoning_effort (low, medium, high); empty = model default"
+        required: false
+        default: ""
+      openhands_check:
+        description: "Also run the slower OpenHands end-to-end check"
+        type: boolean
+        default: true
       trials:
         description: "Review trials per fixture"
         required: false
@@ -27,6 +35,7 @@ jobs:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           MODEL: ${{ inputs.model }}
           TRIALS: ${{ inputs.trials }}
+          REASONING_EFFORT: ${{ inputs.reasoning_effort }}
         run: python3 agents/smoke/run.py
       - uses: actions/upload-artifact@v4
         if: always()
@@ -36,6 +45,7 @@ jobs:
           if-no-files-found: ignore
 
   openhands-check:
+    if: ${{ inputs.openhands_check }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

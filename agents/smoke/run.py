@@ -11,11 +11,15 @@ Checks, against DeepInfra's OpenAI-compatible API, that the model:
 Prints pass/fail only. The key comes from DEEPINFRA_API_KEY and is never printed.
 """
 import json, os, re, sys, time, urllib.request, urllib.error, pathlib
+from concurrent.futures import ThreadPoolExecutor
 
 MODEL = os.environ.get("MODEL", "deepseek-ai/DeepSeek-V4-Pro-0813")
 BASE = "https://api.deepinfra.com/v1/openai"
 KEY = os.environ["DEEPINFRA_API_KEY"]
 TRIALS = int(os.environ.get("TRIALS", "3"))
+WORKERS = int(os.environ.get("WORKERS", "6"))
+# Optional: "low" | "medium" | "high", sent as reasoning_effort on every call.
+REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "")
 HERE = pathlib.Path(__file__).parent
 
 # Property order matters: generation follows it, so the model must write its
@@ -75,7 +79,8 @@ def chat(payload, attempts=5):
     """One API call. Retries overload (429), server errors (5xx) and timeouts with backoff:
     those say nothing about the model, and counting them as wrong verdicts made a busy
     provider look like a regression."""
-    body = json.dumps({"model": MODEL, **payload}).encode()
+    extra = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
+    body = json.dumps({"model": MODEL, **extra, **payload}).encode()
     req = urllib.request.Request(f"{BASE}/chat/completions", data=body, headers={
         "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
     for attempt in range(1, attempts + 1):
@@ -161,39 +166,62 @@ try:
 except Exception as e:
     record("T4 structured output + tools together", False, f"({e})")
 
-# T5
-total_cost = 0.0
-for name, diff in fixtures.items():
-    want = expected[name]
-    passed = 0
-    for _ in range(TRIALS):
-        try:
-            r = review(diff)
-            total_cost += r.get("usage", {}).get("estimated_cost") or 0
-            v = parse_verdict(r)
-            sev = [f["severity"] for f in v["findings"]]
-            print(f"      {name}: verdict={v['verdict']} (model said {v['model_verdict']}) findings={sev} "
-                  f"first={(v['findings'][0]['summary'][:90] if v['findings'] else '-')!r}", flush=True)
-            if v["verdict"] != want["verdict"]:
-                continue
-            if want["verdict"] == "changes_requested":
-                blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "blocking")
-                if not re.search(want["match"], blob, re.I):
-                    continue
-            if want.get("no_finding_match"):
-                blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"])
-                if re.search(want["no_finding_match"], blob, re.I):
-                    continue
-            if want.get("minor_match"):
-                blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "minor")
-                if not re.search(want["minor_match"], blob, re.I):
-                    continue
-            passed += 1
-        except Exception as e:
-            print(f"      trial error on {name}: {e}", flush=True)
-    record(f"T5 fixture {name}", passed >= max(1, TRIALS - 1), f"({passed}/{TRIALS} trials correct)")
+# T5: every (fixture, trial) is an independent call, so they run in parallel. A trial that errors
+# (provider overload, timeout) after the retries says nothing about the model, so it is reported
+# separately and does not count against the fixture.
+def grade(want, v):
+    if v["verdict"] != want["verdict"]:
+        return False
+    if want["verdict"] == "changes_requested":
+        blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "blocking")
+        if not re.search(want["match"], blob, re.I):
+            return False
+    if want.get("no_finding_match"):
+        blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"])
+        if re.search(want["no_finding_match"], blob, re.I):
+            return False
+    if want.get("minor_match"):
+        blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "minor")
+        if not re.search(want["minor_match"], blob, re.I):
+            return False
+    return True
 
-print(f"\nTotal estimated cost of T5 calls: ${total_cost:.4f}")
+def trial(name):
+    start = time.time()
+    try:
+        r = review(fixtures[name])
+        v = parse_verdict(r)
+        u = r.get("usage", {})
+        return {"name": name, "ok": grade(expected[name], v), "v": v, "secs": time.time() - start,
+                "cost": u.get("estimated_cost") or 0, "tokens": u.get("completion_tokens") or 0}
+    except Exception as e:
+        return {"name": name, "error": str(e)}
+
+jobs = [name for name in fixtures for _ in range(TRIALS)]
+with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+    outcomes = list(pool.map(trial, jobs))
+
+total_cost = 0.0
+for name in fixtures:
+    rows = [o for o in outcomes if o["name"] == name]
+    good = [o for o in rows if "error" not in o]
+    for o in rows:
+        if "error" in o:
+            print(f"      trial error on {name}: {o['error']}", flush=True)
+        else:
+            v = o["v"]
+            print(f"      {name}: verdict={v['verdict']} (model said {v['model_verdict']}) findings={[f['severity'] for f in v['findings']]} "
+                  f"first={(v['findings'][0]['summary'][:90] if v['findings'] else '-')!r}", flush=True)
+    total_cost += sum(o["cost"] for o in good)
+    passed = sum(o["ok"] for o in good)
+    stats = (f"; avg {sum(o['secs'] for o in good) / len(good):.0f}s, {sum(o['tokens'] for o in good) // len(good)} output tokens"
+             if good else "")
+    errors = len(rows) - len(good)
+    record(f"T5 fixture {name}", bool(good) and passed >= max(1, len(good) - 1),
+           f"({passed}/{len(good)} trials correct{f', {errors} errored' if errors else ''}{stats})")
+
+print(f"\nModel {MODEL}, reasoning_effort={REASONING_EFFORT or 'default'}")
+print(f"Total estimated cost of T5 calls: ${total_cost:.4f}")
 failed = [n for n, ok, _ in results if not ok]
 pathlib.Path("smoke-results.json").write_text(json.dumps(
     [{"name": n, "ok": ok, "detail": d} for n, ok, d in results], indent=2))
