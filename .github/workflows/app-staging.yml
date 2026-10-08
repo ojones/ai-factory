@@ -1,0 +1,43 @@
+name: App Staging
+
+# Adding `ready-for-staging` to an `intake` issue stages a new Managed App
+# (ARCHITECTURE.md → Intake, Deployment provisioning). The work is in
+# infra/app-staging/stage.sh.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+# One Managed App through Intake → App Staging → Build Run at a time.
+concurrency:
+  group: app-staging
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    if: >-
+      github.event.label.name == 'ready-for-staging' &&
+      contains(github.event.issue.labels.*.name, 'intake')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the Managed App
+        env:
+          # GITHUB_TOKEN handles issue comments/labels/close in ai-factory; the
+          # PAT does everything that touches the new repo, plus the dispatch.
+          GH_TOKEN: ${{ github.token }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          GROWTHBOOK_ADMIN_PAT: ${{ secrets.GROWTHBOOK_ADMIN_PAT }}
+          PREVIEW_MASTER_SECRET: ${{ secrets.PREVIEW_MASTER_SECRET }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          FACTORY_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: infra/app-staging/stage.sh

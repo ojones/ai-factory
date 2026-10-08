@@ -1,0 +1,24 @@
+name: Build Run
+
+# PLACEHOLDER (issue #31). App Staging's handoff dispatches this workflow with
+# the Intake issue number and app name; the real multi-agent Build Run is issue
+# #32 and replaces this file. Until then it only proves the handoff arrives.
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Intake issue number in ai-factory"
+        required: true
+      app_name:
+        description: "Managed App name (its repo name)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-run:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Build Run placeholder: intake #${{ inputs.issue_number }}, app ${{ inputs.app_name }}"

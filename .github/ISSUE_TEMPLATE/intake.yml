@@ -1,0 +1,26 @@
+name: Intake — new Managed App
+description: Propose a new Managed App for the Factory to build.
+title: "my-app-name"
+labels: ["intake"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **The issue title is the Managed App's name**, kebab-cased (lowercase letters, digits and hyphens, at most 30 characters). It becomes the repo and Fly app name.
+
+        Edit this issue freely until it's ready. When it is, add the `ready-for-staging` label to start App Staging.
+  - type: textarea
+    id: description
+    attributes:
+      label: What should be built?
+      description: The Intake Spec — scope and constraints for the first Build Run.
+    validations:
+      required: true
+  - type: input
+    id: cost_cap
+    attributes:
+      label: Cost cap override (USD)
+      description: Optional. Leave blank for the standard per-Build-Run cap. May not exceed the configured ceiling.
+      placeholder: "2.00"
+    validations:
+      required: false
