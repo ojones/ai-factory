@@ -28,3 +28,15 @@ limits:
   cost_cap_usd_ceiling: 10.00
   # Lifetime of the run's scoped JWT; the Actions job limit is 6 hours.
   jwt_ttl_seconds: 21600
+  # Wall-clock budget for the whole Build Run; the Actions job limit is 6 hours.
+  time_limit_minutes: 330
+  # Per Agent invocation; a hung Agent is killed and counts as a failed attempt.
+  agent_timeout_minutes: 45
+  # Waiting for Test Gate -> Build -> Deploy of one pushed commit.
+  pipeline_timeout_minutes: 25
+  # Re-runs of a failed pipeline step the Pipeline Agent diagnoses as flaky/infra.
+  pipeline_retries: 2
+  # Coder fixes triggered by Pipeline Agent diagnoses (separate from review_rounds).
+  pipeline_fix_attempts: 5
+  # Build Runs allowed in flight across all Managed Apps (v1 stages one at a time).
+  max_simultaneous_build_runs: 1

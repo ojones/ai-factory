@@ -1,8 +1,9 @@
 name: Build Run
 
-# PLACEHOLDER (issue #31). App Staging's handoff dispatches this workflow with
-# the Intake issue number and app name; the real multi-agent Build Run is issue
-# #32 and replaces this file. Until then it only proves the handoff arrives.
+# The multi-agent Build Run (issue #32), dispatched by App Staging with the
+# Intake issue number and app name. All logic is in orchestrator/build_run.py;
+# the stages and rules it implements are in ARCHITECTURE.md → Agents and Build
+# Run stages. Role prompts, models and limits come from agents/.
 on:
   workflow_dispatch:
     inputs:
@@ -15,10 +16,76 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  actions: read
+
+# Same Managed App: serialized. A group holds one running and one pending run,
+# and a newer pending run replaces an older one; v1 dispatches exactly one
+# Build Run per Intake, so no accepted request is displaced.
+concurrency:
+  group: build-run-${{ inputs.app_name }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: ${{ inputs.app_name }}
+  ISSUE_NUMBER: ${{ inputs.issue_number }}
+  BUILD_RUN_DIR: ${{ github.workspace }}/run
+  APP_DIR: ${{ github.workspace }}/app
 
 jobs:
   build-run:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
-      - run: |
-          echo "Build Run placeholder: intake #${{ inputs.issue_number }}, app ${{ inputs.app_name }}"
+      - uses: actions/checkout@v4
+        with:
+          path: factory
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Install OpenHands and the orchestrator's dependencies
+        run: pip install openhands pyyaml
+
+      - name: Unit-test the orchestrator's deterministic logic
+        run: python -m unittest discover factory/orchestrator
+
+      - name: Run the Build Run
+        env:
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          GROWTHBOOK_ADMIN_PAT: ${{ secrets.GROWTHBOOK_ADMIN_PAT }}
+          PREVIEW_MASTER_SECRET: ${{ secrets.PREVIEW_MASTER_SECRET }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: python factory/orchestrator/build_run.py run
+
+      # Always last: Summary, Report, and the failure Issue, even after a
+      # breach, a crash or a cancel.
+      - name: Write Summary and Report; open failure Issue
+        if: always()
+        env:
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+        run: python factory/orchestrator/build_run.py finalize
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-run
+          path: |
+            run/artifacts/
+            run/state.json
+            run/verdict-*.json
+            run/test-report-*.json
+            run/diagnosis-*.json
+            run/findings-*.json
+          if-no-files-found: ignore

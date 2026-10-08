@@ -18,7 +18,7 @@ The Build Run replaces `{{name}}` placeholders before invoking OpenHands.
 | coder | `app_name`, `round`, `task`, `findings_path` |
 | reviewer | `app_name`, `base_sha`, `head_sha`, `verdict_path` |
 | tester | `app_name`, `app_url`, `head_sha`, `report_path`; env `PREVIEW_TOKEN` |
-| pipeline | `app_name`, `head_sha`, `failure_run_url`, `diagnosis_path` |
+| pipeline | `app_name`, `head_sha`, `failure_run_url`, `diagnosis_path`, `context_dir` |
 
 ## Output contracts
 
