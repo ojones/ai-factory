@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -182,23 +183,40 @@ def load_config():
     return yaml.safe_load((FACTORY_DIR / "agents" / "profiles.yml").read_text())
 
 
-class Meter:
-    """The run's one scoped JWT: enforcer (403 after the cap) and meter (spending_current)."""
+class Budget:
+    """The run's one cap, enforced and metered by DeepInfra scoped JWTs.
 
-    def __init__(self, admin_key, models, cap, ttl):
-        self.admin_key = admin_key
-        status, r = http("POST", f"{DEEPINFRA}/v1/scoped-jwt", admin_key,
-                         {"api_key_name": "auto", "models": models, "expires_delta": ttl, "spending_limit": cap})
+    A spending-limited JWT can carry only one model, so each Agent invocation gets its own
+    single-model JWT limited to what is left of the run's cap. DeepInfra refuses the first call
+    after a JWT's limit (403) and the crossing call completes. The run's spend is the sum of every
+    JWT's spending_current, so there are still no per-Agent budgets.
+    """
+
+    def __init__(self, admin_key, cap, ttl):
+        self.admin_key, self.cap, self.ttl = admin_key, cap, ttl
+        self.tokens = {}  # jwt -> last read spending_current
+
+    def mint(self, model):
+        remaining = round(self.cap - self.spent_known(), 6)
+        if remaining <= 0:
+            raise BudgetExhausted(f"${self.spent_known():.4f} spent against a ${self.cap:.2f} cap")
+        status, r = http("POST", f"{DEEPINFRA}/v1/scoped-jwt", self.admin_key,
+                         {"api_key_name": "auto", "models": [model], "expires_delta": self.ttl, "spending_limit": remaining})
         if status != 200 or "token" not in r:
-            raise RuntimeError(f"could not mint scoped JWT: HTTP {status}")
-        self.jwt = r["token"]
-        print(f"::add-mask::{self.jwt}", flush=True)
+            raise RuntimeError(f"could not mint scoped JWT: HTTP {status} {r}")
+        print(f"::add-mask::{r['token']}", flush=True)
+        self.tokens[r["token"]] = 0.0
+        return r["token"]
 
-    def spent(self):
-        status, r = http("GET", f"{DEEPINFRA}/v1/scoped-jwt?jwtoken={self.jwt}", self.admin_key)
+    def spent_known(self):
+        return sum(self.tokens.values())
+
+    def refresh(self, jwt):
+        status, r = http("GET", f"{DEEPINFRA}/v1/scoped-jwt?jwtoken={jwt}", self.admin_key)
         if status != 200:
             raise RuntimeError(f"could not read JWT spend: HTTP {status}")
-        return float(r["spending_current"])
+        self.tokens[jwt] = float(r["spending_current"])
+        return self.spent_known()
 
 
 class State:
@@ -274,8 +292,8 @@ class BuildRun:
         if time.time() > self.deadline:
             raise NeedsHuman("time_limit", f"the {self.lim['time_limit_minutes']}-minute time limit was reached")
 
-    def refresh_spend(self):
-        self.state.d["spent_usd"] = round(self.meter.spent(), 6)
+    def record_spend(self, jwt):
+        self.state.d["spent_usd"] = round(self.meter.refresh(jwt), 6)
         self.state.save()
         return self.state.d["spent_usd"]
 
@@ -292,8 +310,7 @@ class BuildRun:
         self.state.d["cap_usd"] = self.cap
         self.state.save()
         self.wait_for_capacity()
-        models = sorted({r["model"] for r in self.cfg["roles"].values()})
-        self.meter = Meter(os.environ["DEEPINFRA_API_KEY"], models, self.cap, self.lim["jwt_ttl_seconds"])
+        self.meter = Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
         self.preview = preview_token(os.environ["PREVIEW_MASTER_SECRET"], self.app)
         print(f"::add-mask::{self.preview}", flush=True)
         # Clone with the PAT passed per command only, so the checkout stores no credential
@@ -322,11 +339,11 @@ class BuildRun:
 
     # --- agents
 
-    def agent_env(self, role, extra=None):
+    def agent_env(self, role, jwt, extra=None):
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
         profile = self.cfg["roles"][role]
         env.update({"LLM_MODEL": "openai/" + profile["model"], "LLM_BASE_URL": self.cfg["provider"]["base_url"],
-                    "LLM_API_KEY": self.meter.jwt, "RUNTIME": "process"})
+                    "LLM_API_KEY": jwt, "RUNTIME": "process"})
         env.update(extra or {})
         return env
 
@@ -336,16 +353,17 @@ class BuildRun:
         template = (FACTORY_DIR / "agents" / self.cfg["roles"][role]["prompt"]).read_text()
         prompt = render(template, {"app_name": self.app, **values})
         before = self.state.d["spent_usd"]
+        jwt = self.meter.mint(self.cfg["roles"][role]["model"])
         jsonl = self.art / f"openhands-{role}-{label}.jsonl"
         log(f"::group::{role} ({label})")
         try:
             with jsonl.open("w") as f:
                 rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt],
-                                    cwd=self.app_dir, env=self.agent_env(role, extra_env), stdout=f,
+                                    cwd=self.app_dir, env=self.agent_env(role, jwt, extra_env), stdout=f,
                                     stderr=subprocess.STDOUT, timeout=self.lim["agent_timeout_minutes"] * 60).returncode
         except subprocess.TimeoutExpired:
             rc = "timeout"
-        after = self.refresh_spend()
+        after = self.record_spend(jwt)
         log(f"{role} ({label}) exited {rc}; cost ${after - before:.4f}; run total ${after:.4f} of ${self.cap:.2f}")
         log("::endgroup::")
         self._last_cost = after - before
@@ -569,7 +587,6 @@ class BuildRun:
                 head = self.pipeline(head)
                 self.state.d["head_sha"] = head
                 clean, tpassed, flags, findings = self.review_and_test(base, head, rnd)
-                self.refresh_spend()
                 if release_gate(True, True, tpassed, clean, head, self.head()):
                     self.check_limits()
                     if flags:
@@ -590,6 +607,7 @@ class BuildRun:
             self.state.d.update(outcome={"time_limit": "time_limit", "round_limit": "round_limit"}.get(e.kind, "needs_human"),
                                 message=str(e))
         except Exception as e:  # noqa: BLE001 - any crash must still reach finalize
+            traceback.print_exc()
             self.state.d.update(outcome="crash", message=f"{type(e).__name__}: {e}")
         finally:
             self.state.save()
