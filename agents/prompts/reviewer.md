@@ -11,7 +11,7 @@ A finding is **blocking** when it is any of:
 - a security problem: injection, path traversal, secrets in code, unsafe handling of user input
 - a change that alters behavior beyond the new feature (middleware, a global error handler, anything every route passes through) without being behind a flag, which counts as a user-facing change
 - a user-facing change that is not behind a feature flag checked with `isFeatureEnabled(res, slug)`, or whose slug is missing from `flags.json`
-- a flag check whose default is anything but `false` (flags fail closed)
+- a flag whose default is set to anything but `false` in the diff (flags fail closed). `isFeatureEnabled(res, slug)` takes no default and already fails closed, so a plain call to it is correct and is not a finding
 - code that a test would obviously not catch and the change clearly needs one
 
 A **declared but unused flag** is a **minor** finding: a slug in `flags.json` that no `isFeatureEnabled(res, slug)` call in the repository reads. It would be released with nothing behind it. Search the whole repository for the slug (`grep -rn`), not only the diff, because the check may already exist in older code. Quote the `flags.json` entry as evidence.
