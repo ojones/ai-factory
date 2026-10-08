@@ -21,9 +21,11 @@ import re
 import subprocess
 import sys
 import time
+import threading
 import traceback
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 FACTORY_DIR = Path(__file__).resolve().parent.parent
@@ -224,8 +226,10 @@ class Budget:
         self.admin_key, self.cap, self.ttl = admin_key, cap, ttl
         self.tokens = {}  # jwt -> last read spending_current
 
-    def mint(self, model):
-        remaining = round(self.cap - self.spent_known(), 6)
+    def mint(self, model, share=1.0):
+        """`share` < 1 splits what is left between invocations that run at the same time, so
+        together they cannot spend past the cap."""
+        remaining = round((self.cap - self.spent_known()) * share, 6)
         if remaining <= 0:
             raise BudgetExhausted(f"${self.spent_known():.4f} spent against a ${self.cap:.2f} cap")
         status, r = http("POST", f"{DEEPINFRA}/v1/scoped-jwt", self.admin_key,
@@ -297,6 +301,7 @@ class BuildRun:
         self.cap = None
         self.meter = None
         self._usage = None
+        self.lock = threading.Lock()  # guards the meter, the state and log output across parallel Agents
         self.preview = None
         self.auth_header = "Authorization: Basic " + base64.b64encode(
             f"x-access-token:{self.pat}".encode()).decode()
@@ -307,8 +312,8 @@ class BuildRun:
     def gh(self, args, token=None, check=True):
         return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token or self.pat}, check=check)
 
-    def git(self, *args, check=True):
-        return sh(["git", *args], cwd=self.app_dir, check=check)
+    def git(self, *args, check=True, cwd=None):
+        return sh(["git", *args], cwd=cwd or self.app_dir, check=check)
 
     def head(self):
         return self.git("rev-parse", "HEAD").stdout.strip()
@@ -322,9 +327,10 @@ class BuildRun:
             raise NeedsHuman("time_limit", f"the {self.lim['time_limit_minutes']}-minute time limit was reached")
 
     def record_spend(self, jwt):
-        self.state.d["spent_usd"] = round(self.meter.refresh(jwt), 6)
-        self.state.save()
-        return self.state.d["spent_usd"]
+        with self.lock:
+            self.state.d["spent_usd"] = round(self.meter.refresh(jwt), 6)
+            self.state.save()
+            return self.state.d["spent_usd"]
 
     # --- setup
 
@@ -369,51 +375,70 @@ class BuildRun:
 
     # --- agents
 
-    def agent_env(self, role, jwt, extra=None):
+    def agent_env(self, role, jwt, extra=None, home=None):
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
+        if home:
+            env["HOME"] = str(home)
         profile = self.cfg["roles"][role]
         env.update({"LLM_MODEL": "openai/" + profile["model"], "LLM_BASE_URL": self.cfg["provider"]["base_url"],
                     "LLM_API_KEY": jwt, "RUNTIME": "process"})
         env.update(extra or {})
         return env
 
-    def run_agent(self, role, label, values, extra_env=None):
-        """One headless OpenHands invocation. Returns its exit status ('timeout' if killed)."""
+    def invoke(self, role, label, values, extra_env=None, cwd=None, home=None, share=1.0):
+        """One headless OpenHands invocation. Safe to call from several threads at once when each
+        has its own `home` (OpenHands keeps its conversations there) and `cwd`.
+        Returns (exit status, 'timeout' if killed; cost; token usage)."""
         self.check_limits()
         template = (FACTORY_DIR / "agents" / self.cfg["roles"][role]["prompt"]).read_text()
         prompt = render(template, {"app_name": self.app, **values})
-        before = self.state.d["spent_usd"]
-        jwt = self.meter.mint(self.cfg["roles"][role]["model"])
+        with self.lock:
+            before = self.state.d["spent_usd"]
+            jwt = self.meter.mint(self.cfg["roles"][role]["model"], share)
+        if home:
+            Path(home).mkdir(parents=True, exist_ok=True)
         jsonl = self.art / f"openhands-{role}-{label}.jsonl"
-        known = self.conversation_dirs()
-        log(f"::group::{role} ({label})")
+        known = self.conversation_dirs(home)
         try:
             with jsonl.open("w") as f:
                 rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt],
-                                    cwd=self.app_dir, env=self.agent_env(role, jwt, extra_env), stdout=f,
+                                    cwd=cwd or self.app_dir, env=self.agent_env(role, jwt, extra_env, home), stdout=f,
                                     stderr=subprocess.STDOUT, timeout=self.lim["agent_timeout_minutes"] * 60).returncode
         except subprocess.TimeoutExpired:
             rc = "timeout"
         after = self.record_spend(jwt)
-        log(f"{role} ({label}) exited {rc}; cost ${after - before:.4f}; run total ${after:.4f} of ${self.cap:.2f}")
-        log("::endgroup::")
-        self._last_cost = after - before
-        usage = self.collect_usage(role, label, known)
-        self._usage = merge_usage(self._usage, usage)
+        usage = self.collect_usage(role, label, known, home)
+        # Spend is read from the shared total, so with two Agents running its delta would include
+        # the other's; the JWT's own spend is this invocation's exact cost.
+        cost = self.meter.tokens[jwt]
+        lines = [f"::group::{role} ({label})",
+                 f"{role} ({label}) exited {rc}; cost ${cost:.4f}; run total ${after:.4f} of ${self.cap:.2f}", "::endgroup::"]
         if usage:
             goal = self.lim.get("context_goal_tokens", 100000)
-            log(f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens"
-                + (f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""))
+            lines.insert(2, f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens"
+                         + (f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""))
+        with self.lock:  # one block, so parallel Agents' groups do not interleave
+            for line in lines:
+                log(line)
+        return rc, cost, usage
+
+    def run_agent(self, role, label, values, extra_env=None):
+        """The sequential form: records cost and usage on the Build Run for the caller to read."""
+        rc, self._last_cost, usage = self.invoke(role, label, values, extra_env)
+        self._usage = merge_usage(self._usage, usage)
         return rc
 
-    def conversation_dirs(self):
-        root = Path(os.environ.get("HOME", "~")).expanduser() / ".openhands" / "conversations"
+    def conversations_root(self, home=None):
+        return Path(home or os.environ.get("HOME", "~")).expanduser() / ".openhands" / "conversations"
+
+    def conversation_dirs(self, home=None):
+        root = self.conversations_root(home)
         return {p.name for p in root.iterdir()} if root.is_dir() else set()
 
-    def collect_usage(self, role, label, known):
+    def collect_usage(self, role, label, known, home=None):
         """Read the conversation this invocation created and keep its raw state as an artifact."""
-        root = Path(os.environ.get("HOME", "~")).expanduser() / ".openhands" / "conversations"
-        for name in sorted(self.conversation_dirs() - known):
+        root = self.conversations_root(home)
+        for name in sorted(self.conversation_dirs(home) - known):
             src = root / name / "base_state.json"
             doc = load_json(src)
             if doc is not None:
@@ -425,28 +450,30 @@ class BuildRun:
         usage, self._usage = self._usage, None
         return usage
 
-    def agent_json(self, role, label, values, path, extra_env=None, check=None):
-        """Run a role that writes a JSON file; one retry if the file is missing or malformed."""
-        total_cost = 0.0
+    def agent_json(self, role, label, values, path, extra_env=None, check=None, cwd=None, home=None, share=1.0):
+        """Run a role that writes a JSON file; one retry if the file is missing or malformed.
+        Returns (document, cost, token usage)."""
+        total_cost, usage = 0.0, None
         for attempt in (1, 2):
             Path(path).unlink(missing_ok=True)
-            self.run_agent(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env)
-            total_cost += self._last_cost
+            _, cost, used = self.invoke(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env, cwd, home, share)
+            total_cost += cost
+            usage = merge_usage(usage, used)
             doc = load_json(path)
             try:
                 if doc is not None and (check is None or check(doc) is not False):
-                    return doc, total_cost
+                    return doc, total_cost, usage
             except (ValueError, AttributeError, TypeError):
                 pass
-            self.restore_tree()
+            self.restore_tree(cwd)
         raise NeedsHuman("other", f"the {role} produced no valid output file twice")
 
-    def restore_tree(self):
+    def restore_tree(self, cwd=None):
         """Read-only roles must leave the tree untouched; undo it if they did not."""
-        if self.git("status", "--porcelain").stdout.strip():
+        if self.git("status", "--porcelain", cwd=cwd).stdout.strip():
             log("A read-only Agent modified the working tree; restoring it.")
-            self.git("reset", "-q", "--hard", "HEAD")
-            self.git("clean", "-fdq")
+            self.git("reset", "-q", "--hard", "HEAD", cwd=cwd)
+            self.git("clean", "-fdq", cwd=cwd)
 
     # --- coder + push
 
@@ -540,12 +567,12 @@ class BuildRun:
             n += 1
             ctx = self.failure_context(failed, sha, n)
             url = failed[1]["url"] if failed[1] else f"https://github.com/{self.app_repo}/actions"
-            diag, cost = self.agent_json(
+            diag, cost, usage = self.agent_json(
                 "pipeline", f"p{n}", {"head_sha": sha, "failure_run_url": url, "context_dir": ctx,
                                       "diagnosis_path": self.work / f"diagnosis-{n}.json"},
                 self.work / f"diagnosis-{n}.json", check=lambda d: d.get("category") in ("code", "workflow", "infra", "flaky"))
             diag = load_json(self.work / f"diagnosis-{n}.json")
-            self.state.stage(f"{failed[0]} failed", "pipeline", n, cost, diag["category"], self.take_usage())
+            self.state.stage(f"{failed[0]} failed", "pipeline", n, cost, diag["category"], usage)
             cat = diag["category"]
             if cat in ("flaky", "infra") and diag.get("retry_recommended") and retries > 0:
                 retries -= 1
@@ -562,32 +589,62 @@ class BuildRun:
     # --- review + test
 
     def review_and_test(self, base, head, rnd):
+        """The reviewer reads the code and the tester drives the deployed app; neither needs the
+        other's result, so they run at the same time. Each gets half of what is left of the
+        budget, its own HOME (OpenHands keeps its conversations there) and, for the tester, its
+        own checkout of `head`."""
         d = self.state.d
         d["review_passes"] = rnd
         self.restore_tree()
-        reviewer_doc, cost = self.agent_json(
-            "reviewer", f"r{rnd}", {"base_sha": base, "head_sha": head, "verdict_path": self.work / f"verdict-{rnd}.json"},
-            self.work / f"verdict-{rnd}.json", check=lambda doc: derive_review(doc) and None)
-        self.restore_tree()
-        clean, blocking, minor = derive_review(reviewer_doc)
-        self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking", self.take_usage())
-
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
         flags = new_flag_slugs(base_flags, head_flags)
-        test_failures = []
-        if flags:
-            tdoc, cost = self.agent_json(
-                "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
-                                      "report_path": self.work / f"test-report-{rnd}.json"},
-                self.work / f"test-report-{rnd}.json", {"PREVIEW_TOKEN": self.preview},
-                check=lambda doc: derive_test(doc, flags) and None)
+        share = 0.5 if flags else 1.0
+        tester_tree = self.work / f"tester-tree-{rnd}"
+
+        def review():
+            return self.agent_json(
+                "reviewer", f"r{rnd}", {"base_sha": base, "head_sha": head, "verdict_path": self.work / f"verdict-{rnd}.json"},
+                self.work / f"verdict-{rnd}.json", check=lambda doc: derive_review(doc) and None,
+                home=self.work / f"home-reviewer-{rnd}", share=share)
+
+        def test():
+            self.git("worktree", "add", "--detach", str(tester_tree), head)
+            try:
+                return self.agent_json(
+                    "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
+                                          "report_path": self.work / f"test-report-{rnd}.json"},
+                    self.work / f"test-report-{rnd}.json", {"PREVIEW_TOKEN": self.preview},
+                    check=lambda doc: derive_test(doc, flags) and None,
+                    cwd=tester_tree, home=self.work / f"home-tester-{rnd}", share=share)
+            finally:
+                self.git("worktree", "remove", "--force", str(tester_tree), check=False)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            review_job = pool.submit(review)
+            test_job = pool.submit(test) if flags else None
+        # The pool has waited for both. Collect the reviewer first, then the tester, so a failure
+        # in one still lets the other's cost reach the state.
+        errors = []
+        try:
+            reviewer_doc, cost, usage = review_job.result()
             self.restore_tree()
-            tpassed, test_failures = derive_test(tdoc, flags)
-            self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", self.take_usage())
-        else:
-            tpassed = True
+            clean, blocking, minor = derive_review(reviewer_doc)
+            self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking", usage)
+        except Exception as e:  # noqa: BLE001 - re-raised below, after the tester is recorded
+            errors.append(e)
+        test_failures, tpassed = [], True
+        if test_job is None:
             self.state.stage("Test", "tester", rnd, 0, "skipped: no new flags")
+        else:
+            try:
+                tdoc, cost, usage = test_job.result()
+                tpassed, test_failures = derive_test(tdoc, flags)
+                self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", usage)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+        if errors:
+            raise errors[0]
         all_blocking = (
             [{"source": "reviewer", "summary": f.get("summary", ""), "evidence": f.get("evidence", "")} for f in blocking]
             + [{"source": "tester", "summary": f"{r.get('flag')}: {r.get('check')}", "evidence": r.get("evidence", "")}
@@ -598,8 +655,6 @@ class BuildRun:
                     "minor": [{"source": "reviewer", "summary": f.get("summary", ""), "evidence": f.get("evidence", "")}
                               for f in minor]}
         return clean, tpassed, flags, findings
-
-    # --- release
 
     def gb(self, method, path, body=None):
         return http(method, f"{GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)

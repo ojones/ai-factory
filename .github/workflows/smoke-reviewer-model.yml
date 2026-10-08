@@ -76,6 +76,9 @@ jobs:
           LLM_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           RUNTIME: process
         run: |
+          # The Build Run runs the reviewer and tester at once, each with its own HOME, so
+          # OpenHands must work with a HOME that has never held a conversation.
+          export HOME=/tmp/oh-home && mkdir -p "$HOME"
           cd /tmp/target
           task='You are a READ-ONLY code reviewer. Do not modify, create or delete any file in this repository. Run `git show HEAD` and review that commit for correctness bugs, security problems, and feature-flag violations. Then write your verdict as JSON to /tmp/verdict.json with exactly this shape: {"verdict":"clean"|"changes_requested","findings":[{"severity":"blocking"|"minor","summary":"...","evidence":"..."}]}. Use verdict "clean" only if there are no blocking findings.'
           openhands --headless --override-with-envs --json -t "$task" | tee /tmp/openhands.jsonl
@@ -98,6 +101,9 @@ jobs:
           check("finding identifies the off-by-one", bool(re.search(r"off.by.one|limit \+ 1|limit\+1|extra|slice", blob, re.I)))
           dirty = subprocess.run(["git", "-C", "/tmp/target", "status", "--porcelain"], capture_output=True, text=True).stdout.strip()
           check("reviewer left the repo untouched", dirty == "", f"({dirty or 'clean'})")
+          import glob
+          states = glob.glob("/tmp/oh-home/.openhands/conversations/*/base_state.json")
+          check("conversation state lands in the isolated HOME", len(states) == 1, f"({len(states)} found)")
           lines = open("/tmp/openhands.jsonl").read().splitlines()
           check("OpenHands produced an event stream", len(lines) > 3, f"({len(lines)} lines)")
           sys.exit(0 if ok else 1)

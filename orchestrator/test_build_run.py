@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -160,6 +161,85 @@ class SummaryRendering(unittest.TestCase):
         self.assertIn("Peak context this run**: 120,000 tokens (reviewer 1), over the goal of 100,000", out)
 
 
+class ParallelReviewAndTest(unittest.TestCase):
+    """The reviewer and the tester run at the same time. Agents are stubbed; git is faked."""
+
+    def make(self, head_flags, agent):
+        run = object.__new__(b.BuildRun)
+        run.app, run.preview = "demo", "tok"
+        run.work = Path("/tmp/work-test")
+        run.state = b.State("/tmp/work-test/state.json", "demo", "1", "url")
+        run.state.save = lambda: None
+        shown = {"base": "[]", "head": head_flags}
+
+        class R:  # stands in for subprocess.CompletedProcess
+            def __init__(self, out): self.stdout, self.returncode = out, 0
+
+        def git(*args, check=True, cwd=None):
+            if args[0] == "show":
+                return R(shown["base" if args[1].startswith("base") else "head"])
+            return R("")
+        run.git, run.restore_tree, run.agent_json = git, lambda cwd=None: None, agent
+        return run
+
+    CLEAN = {"analysis": "x", "findings": [], "verdict": "clean"}
+    PASS = {"passed": True, "results": [{"flag": "f", "check": "c", "passed": True, "evidence": "e"}]}
+
+    def test_reviewer_and_tester_overlap_and_split_the_budget(self):
+        both_running = threading.Barrier(2, timeout=5)  # only passes if both are in flight together
+        shares = {}
+
+        def agent(role, label, values, path, *a, share=1.0, **k):
+            shares[role] = share
+            both_running.wait()
+            return (self.CLEAN if role == "reviewer" else self.PASS), 0.1, None
+
+        run = self.make('[{"slug": "f", "description": "d"}]', agent)
+        clean, tpassed, flags, _ = run.review_and_test("base1", "head1", 1)
+        self.assertTrue(clean and tpassed)
+        self.assertEqual(flags, ["f"])
+        self.assertEqual(shares, {"reviewer": 0.5, "tester": 0.5})
+        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review", "Test"])
+
+    def test_no_new_flags_means_reviewer_only_with_the_whole_budget(self):
+        seen = []
+
+        def agent(role, label, values, path, *a, share=1.0, **k):
+            seen.append((role, share))
+            return self.CLEAN, 0.1, None
+
+        run = self.make("[]", agent)
+        run.review_and_test("base1", "head1", 1)
+        self.assertEqual(seen, [("reviewer", 1.0)])
+        self.assertEqual([x["verdict"] for x in run.state.d["stages"]], ["clean", "skipped: no new flags"])
+
+    def test_a_failing_tester_still_records_the_reviewer_and_then_raises(self):
+        def agent(role, label, values, path, *a, share=1.0, **k):
+            if role == "tester":
+                raise b.NeedsHuman("other", "the tester produced no valid output file twice")
+            return self.CLEAN, 0.1, None
+
+        run = self.make('[{"slug": "f", "description": "d"}]', agent)
+        with self.assertRaises(b.NeedsHuman):
+            run.review_and_test("base1", "head1", 1)
+        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review"])
+
+    def test_the_reviewer_failing_raises_after_the_tester_finished(self):
+        done = []
+
+        def agent(role, label, values, path, *a, share=1.0, **k):
+            if role == "reviewer":
+                raise b.BudgetExhausted("cap")
+            done.append(role)
+            return self.PASS, 0.1, None
+
+        run = self.make('[{"slug": "f", "description": "d"}]', agent)
+        with self.assertRaises(b.BudgetExhausted):
+            run.review_and_test("base1", "head1", 1)
+        self.assertEqual(done, ["tester"])
+        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Test"])
+
+
 class BudgetAccounting(unittest.TestCase):
     def setUp(self):
         self.calls, self.spend = [], {}
@@ -186,6 +266,13 @@ class BudgetAccounting(unittest.TestCase):
         post = [c[1] for c in self.calls if c[0] == "POST"]
         self.assertEqual([p["models"] for p in post], [["m1"], ["m2"]])
         self.assertEqual([p["spending_limit"] for p in post], [2.0, 1.25])
+
+    def test_a_share_splits_what_is_left_between_parallel_agents(self):
+        bud = b.Budget("admin", 2.0, 100)
+        bud.mint("m1", share=0.5)
+        bud.mint("m2", share=0.5)
+        post = [c[1] for c in self.calls if c[0] == "POST"]
+        self.assertEqual([p["spending_limit"] for p in post], [1.0, 1.0])
 
     def test_spend_sums_across_jwts_and_exhaustion_stops_minting(self):
         bud = b.Budget("admin", 1.0, 100)
