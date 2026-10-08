@@ -97,7 +97,19 @@ for status in queued in_progress; do
   [ -z "$running" ] || refuse "A Build Run is in flight ($running). v1 runs one Managed App at a time."
 done
 
-# --- 3. the repo: create, or adopt only if the marker proves it is ours -----------
+# --- 3. the Fly app name: Fly app names are global across all of Fly -----------------
+# 200 = ours (a rerun or a Managed App already deployed), 404 = free, 403 = taken by
+# someone else. Checked here so a collision refuses at Intake, not mid-Build Run.
+
+fly_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+  -H "Authorization: Bearer $FLY_API_TOKEN" "https://api.machines.dev/v1/apps/$SLUG")"
+case "$fly_code" in
+  200|404) ;;
+  403) refuse "The Fly app name \`$SLUG\` is already taken by another Fly account (Fly app names are unique across all of Fly). Nothing was changed. Rename this issue to something more distinctive, such as \`$OWNER-$SLUG\`." ;;
+  *) echo "::error::Unexpected HTTP $fly_code checking Fly app name $SLUG" >&2; exit 1 ;;
+esac
+
+# --- 4. the repo: create, or adopt only if the marker proves it is ours -----------
 
 if out="$(pat gh api "repos/$OWNER/$SLUG" 2>&1)"; then
   existing="$(jq -r '.description // ""' <<<"$out")"
@@ -112,7 +124,7 @@ else
   exit 1
 fi
 
-# --- 4. GrowthBook: fresh app-scoped SDK key, and the kill switch -------------------
+# --- 5. GrowthBook: fresh app-scoped SDK key, and the kill switch -------------------
 
 project_json="$(gb "$GROWTHBOOK_API/projects?limit=100")"
 [ "$(jq '.total' <<<"$project_json")" = 1 ] ||
@@ -144,7 +156,7 @@ else
     environments: {production: {enabled: true, rules: []}}}')" >/dev/null
 fi
 
-# --- 5. secrets (before the seed push, whose Test Gate → Build → Deploy chain needs them)
+# --- 6. secrets (before the seed push, whose Test Gate → Build → Deploy chain needs them)
 
 PREVIEW_TOKEN="$(infra/app-staging/preview-token.sh "$SLUG")"
 echo "::add-mask::$PREVIEW_TOKEN"
@@ -154,7 +166,7 @@ push_secret FLY_API_TOKEN "$FLY_API_TOKEN"
 push_secret GROWTHBOOK_CLIENT_KEY "$GROWTHBOOK_CLIENT_KEY"
 push_secret PREVIEW_TOKEN "$PREVIEW_TOKEN"
 
-# --- 6. seed: tracked Starter Template files + INTAKE.md, one commit ------------------
+# --- 7. seed: tracked Starter Template files + INTAKE.md, one commit ------------------
 
 AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$FACTORY_PAT" | base64 | tr -d '\n')"
 echo "::add-mask::${AUTH_HEADER#Authorization: Basic }"
@@ -184,7 +196,7 @@ else
   echo "Seeded $OWNER/$SLUG"
 fi
 
-# --- 7. hand off: dispatch the Build Run, then close the Intake -----------------------
+# --- 8. hand off: dispatch the Build Run, then close the Intake -----------------------
 
 pat gh workflow run build-run.yml --repo "$FACTORY_REPO" \
   -f issue_number="$ISSUE_NUMBER" -f app_name="$SLUG"

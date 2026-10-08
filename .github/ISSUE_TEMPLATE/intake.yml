@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **The issue title is the Managed App's name**, kebab-cased (lowercase letters, digits and hyphens, at most 30 characters). It becomes the repo and Fly app name.
+        **The issue title is the Managed App's name**, kebab-cased (lowercase letters, digits and hyphens, at most 30 characters). It becomes the repo and Fly app name. Fly app names are unique across all of Fly, so a common name (like `notes-app`) may already be taken; if App Staging reports a collision, rename this issue to something more distinctive.
 
         Edit this issue freely until it's ready. When it is, add the `ready-for-staging` label to start App Staging.
   - type: textarea

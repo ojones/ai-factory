@@ -24,6 +24,8 @@ Two separate, chained GitHub Actions workflow files: `build.yml` (target-agnosti
 `build.yml`, `deploy-fly.yml`, and the Test Gate workflow (`test-gate.yml`, triggered on push to `main`) ship as **permanent, unmodified Starter Template content** — every Managed App gets byte-identical copies; App Staging never generates or mutates their YAML.
 
 The one value that varies per Managed App — the Fly app name — is never injected or persisted by App Staging either. Intake already fixes the repo name to the Managed App's name ([ARCHITECTURE.md's Intake section](ARCHITECTURE.md#intake)), so every reference to the Fly app name derives it live from the repo's own name instead of having App Staging template or persist a separate value. Concretely, `fly.toml` has **no `app` field** (a static file can't derive it); `deploy-fly.yml` sets `FLY_APP_NAME` from the repository name and passes `--app` to every `flyctl` call, and `fly/provision.sh` reads `FLY_APP_NAME` from its environment.
+
+**Name collisions**: Fly app names are unique across all of Fly, so the Managed App's name (and therefore its repo name) must be globally free, not merely unused in the Factory's account. App Staging checks this before creating anything and refuses a taken name; pick something distinctive (e.g. prefix with the owner's handle).
 → [issue #21](https://github.com/ojones/ai-factory/issues/21)
 
 ## GHCR to Fly image handoff
