@@ -12,13 +12,15 @@ permissions:
   issues: write
   actions: read
 
-# One Managed App through Intake → App Staging → Build Run at a time.
-concurrency:
-  group: app-staging
-  cancel-in-progress: false
-
 jobs:
   stage:
+    # Job-level (not workflow-level) so that label events this job skips, like
+    # `intake` itself being added, never enter the group and cancel a real run
+    # waiting behind another. One Managed App through Intake → App Staging →
+    # Build Run at a time.
+    concurrency:
+      group: app-staging
+      cancel-in-progress: false
     if: >-
       github.event.label.name == 'ready-for-staging' &&
       contains(github.event.issue.labels.*.name, 'intake')
