@@ -1,8 +1,44 @@
 {
-  "offbyone":          { "verdict": "changes_requested", "match": "slice|off-by-one|off by one|limit \\+ 1|limit\\+1|extra item|one more" },
-  "unflagged":         { "verdict": "changes_requested", "match": "flag|flags\\.json" },
-  "injection":         { "verdict": "changes_requested", "match": "inject|exec|shell|sanitiz|path traversal|traversal" },
-  "flag-default-true": { "verdict": "changes_requested", "match": "default|true|fail.?closed|dark" },
-  "unused-flag":       { "verdict": "clean", "match": "", "minor_match": "search-highlight" },
-  "clean":             { "verdict": "clean", "match": "" }
+  "offbyone": {
+    "verdict": "changes_requested",
+    "match": "slice|off-by-one|off by one|limit \\+ 1|limit\\+1|extra item|one more"
+  },
+  "unflagged": {
+    "verdict": "changes_requested",
+    "match": "flag|flags\\.json"
+  },
+  "injection": {
+    "verdict": "changes_requested",
+    "match": "inject|exec|shell|sanitiz|path traversal|traversal"
+  },
+  "flag-default-true": {
+    "verdict": "changes_requested",
+    "match": "default|true|fail.?closed|dark"
+  },
+  "unused-flag": {
+    "verdict": "clean",
+    "match": "",
+    "minor_match": "search-highlight"
+  },
+  "clean": {
+    "verdict": "clean",
+    "match": ""
+  },
+  "spec-miss": {
+    "verdict": "changes_requested",
+    "match": "button|frontend|App\\.tsx|spec|intake|flag"
+  },
+  "global-handler": {
+    "verdict": "changes_requested",
+    "match": "global|every route|all routes|error handler|middleware|flag"
+  },
+  "lenient-id": {
+    "verdict": "changes_requested",
+    "match": "parseInt|1abc|trailing|lenient|malformed|wrong"
+  },
+  "spec-stated-design": {
+    "verdict": "clean",
+    "match": "",
+    "no_finding_match": "memory|restart|persist|lost"
+  }
 }

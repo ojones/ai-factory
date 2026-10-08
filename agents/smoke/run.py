@@ -119,7 +119,13 @@ try:
 except Exception as e:
     record("T2 tool call round-trip", False, f"({e})")
 
-fixtures = {p.stem: p.read_text() for p in sorted((HERE / "fixtures").glob("*.diff"))}
+def load_fixture(p):
+    # An optional <name>.intake.md stands in for the repo's INTAKE.md, which the real reviewer reads.
+    intake = p.with_suffix(".intake.md")
+    prefix = f"Contents of INTAKE.md:\n{intake.read_text()}\n\n" if intake.exists() else ""
+    return prefix + p.read_text()
+
+fixtures = {p.stem: load_fixture(p) for p in sorted((HERE / "fixtures").glob("*.diff"))}
 expected = json.loads((HERE / "expected.json").read_text())
 
 def review(diff, extra=None):
@@ -161,6 +167,10 @@ for name, diff in fixtures.items():
             if want["verdict"] == "changes_requested":
                 blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "blocking")
                 if not re.search(want["match"], blob, re.I):
+                    continue
+            if want.get("no_finding_match"):
+                blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"])
+                if re.search(want["no_finding_match"], blob, re.I):
                     continue
             if want.get("minor_match"):
                 blob = " ".join(f["summary"] + " " + f["evidence"] for f in v["findings"] if f["severity"] == "minor")
