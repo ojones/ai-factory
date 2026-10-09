@@ -9,7 +9,10 @@ MODE=single  one model call over a prompt the Orchestrator assembles (the Build 
 MODE=agent   the exploring OpenHands reviewer (what the Build Run used before)
 
 Env: DEEPINFRA_API_KEY, MODE, MODEL (default: the reviewer's model in agents/profiles.yml),
-CASES (comma-separated ids, default all), WORKERS (default 4), OWNER (default ojones).
+CASES (comma-separated ids, default all), REPEAT (runs per case, default 1; the model is not
+deterministic, so judge on 5), WORKERS (default 4), OWNER (default ojones).
+A case's "expect" is a list of regexes, one per real problem a review must find among its blocking
+findings; the report gives how often each was found.
 Prints per-case time, tokens and verdicts; writes replay-results.json.
 """
 import json, os, re, subprocess, sys, tempfile, time
@@ -24,6 +27,7 @@ KEY = os.environ["DEEPINFRA_API_KEY"]
 MODE = os.environ.get("MODE", "single")
 OWNER = os.environ.get("OWNER", "ojones")
 WORKERS = int(os.environ.get("WORKERS", "4"))
+REPEAT = int(os.environ.get("REPEAT", "1"))
 cfg = b.load_config()
 MODEL = os.environ.get("MODEL") or cfg["roles"]["reviewer"]["model"]
 BASE_URL = cfg["provider"]["base_url"]
@@ -93,29 +97,38 @@ def run(case):
 
 
 with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-    results = list(pool.map(run, cases))
+    results = list(pool.map(run, [c for c in cases for _ in range(REPEAT)]))
 
-print(f"MODE={MODE} MODEL={MODEL}\n")
-agree = 0
+print(f"MODE={MODE} MODEL={MODEL} REPEAT={REPEAT}\n")
+by_case = {}
 for r in results:
-    rec = r["recorded"]
-    if "error" in r:
-        print(f"{r['id']}: ERROR after {r['secs']}s: {r['error']}\n")
-        continue
-    same = r["clean"] == (rec["verdict"] == "clean")
-    agree += same
-    print(f"{r['id']}: {r['secs']}s, {r.get('prompt_tokens', '-')} prompt / {r['output_tokens']} output tokens"
-          f"{', ' + str(r['calls']) + ' calls' if 'calls' in r else ''}")
-    print(f"  recorded: {rec['verdict']}, {len(rec['blocking'])} blocking | now: {'clean' if r['clean'] else 'changes_requested'}, "
-          f"{len(r['blocking'])} blocking  -> verdict {'agrees' if same else 'DIFFERS'}")
-    for s in rec["blocking"]:
-        print(f"    recorded blocking: {s[:140]}")
-    for s in r["blocking"]:
-        print(f"    now blocking:      {s[:140]}")
-    print()
+    by_case.setdefault(r["id"], []).append(r)
+found_total = found_possible = 0
+for case in cases:
+    runs = by_case[case["id"]]
+    good = [r for r in runs if "error" not in r]
+    rec = case["recorded"]
+    line = f"{case['id']}: {len(good)}/{len(runs)} ok"
+    if good:
+        line += (f", avg {sum(r['secs'] for r in good) / len(good):.0f}s, {sum(r['output_tokens'] for r in good) // len(good)} output tokens"
+                 f", clean in {sum(r['clean'] for r in good)}/{len(good)} (recorded {rec['verdict']})")
+    print(line)
+    for pattern in case.get("expect", []):
+        hits = sum(bool(re.search(pattern, " ".join(r["blocking"]), re.I)) for r in good)
+        found_total += hits
+        found_possible += len(good)
+        print(f"    found {hits}/{len(good)}: /{pattern}/")
+    for r in runs:
+        if "error" in r:
+            print(f"    ERROR after {r['secs']}s: {r['error']}")
+    if REPEAT == 1 and good:
+        for s_ in rec["blocking"]:
+            print(f"    recorded blocking: {s_[:140]}")
+        for s_ in good[0]["blocking"]:
+            print(f"    now blocking:      {s_[:140]}")
 ok = [r for r in results if "error" not in r]
 if ok:
-    print(f"verdict agreement {agree}/{len(ok)}; average {sum(r['secs'] for r in ok) / len(ok):.0f}s, "
-          f"{sum(r['output_tokens'] for r in ok) // len(ok)} output tokens; "
+    print(f"\nKnown problems found: {found_total}/{found_possible} ({100 * found_total // max(found_possible, 1)}%)")
+    print(f"Average {sum(r['secs'] for r in ok) / len(ok):.0f}s, {sum(r['output_tokens'] for r in ok) // len(ok)} output tokens; "
           f"total cost ${sum(r.get('cost', 0) for r in ok):.4f}" + ("" if MODE == "single" else " (agent cost not summed)"))
 Path("replay-results.json").write_text(json.dumps(results, indent=1))

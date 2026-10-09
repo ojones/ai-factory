@@ -17,7 +17,12 @@
      "Note ids are generated with Math.random(), giving weak uniqueness guarantees for an identifier.",
      "Notes are held only in a module-level in-memory array, so all data is lost on process restart."
     ]
-   }
+   },
+   "expect": [
+    "req\\.body|undefined|malformed|500",
+    "placeholder|expect\\(true\\)|no-op|stub",
+    "delete button|frontend.*flag|not behind"
+   ]
   },
   {
    "id": "ojones-notes-r2",
@@ -35,7 +40,10 @@
      "Note ids are generated with Math.random(), giving weak uniqueness guarantees for an identifier.",
      "Notes are held only in a module-level in-memory array, so all data is lost when the process restarts."
     ]
-   }
+   },
+   "expect": [
+    "response\\.ok|fetchNotes|crash|global error|middleware"
+   ]
   },
   {
    "id": "ojones-notes-r3",
@@ -72,7 +80,12 @@
      "routes/notes.ts imports express but never uses it.",
      "Note ids are random with no collision check."
     ]
-   }
+   },
+   "expect": [
+    "kill switch",
+    "delete button",
+    "req\\.body|500|malformed"
+   ]
   },
   {
    "id": "ojones-notes-v2-r2",
@@ -91,7 +104,10 @@
      "Note ids are random with no collision check.",
      "Delete tests exercise the enabled path only via the PREVIEW_TOKEN bypass, never via the real flag being released."
     ]
-   }
+   },
+   "expect": [
+    "delete button|probe"
+   ]
   },
   {
    "id": "ojones-notes-v2-r3",
@@ -108,7 +124,10 @@
      "backend/src/__tests__/feature-flag.test.ts imports afterEach but never uses it.",
      "No test renders App.tsx, so the frontend Delete button's flag gating is only covered indirectly through the backend endpoint."
     ]
-   }
+   },
+   "expect": [
+    "feature-flag"
+   ]
   },
   {
    "id": "ojones-notes-v2-r4",

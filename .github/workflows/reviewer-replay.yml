@@ -14,6 +14,10 @@ on:
         description: "DeepInfra model id; empty = the reviewer's model in agents/profiles.yml"
         required: false
         default: ""
+      repeat:
+        description: "Runs per case (the model is not deterministic; use 5 to judge)"
+        required: false
+        default: "1"
       cases:
         description: "Comma-separated case ids from agents/replay/cases.json; empty = all"
         required: false
@@ -39,6 +43,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           MODEL: ${{ inputs.model }}
           CASES: ${{ inputs.cases }}
+          REPEAT: ${{ inputs.repeat }}
           WORKERS: ${{ inputs.mode == 'agent' && '3' || '4' }}
         run: python3 agents/replay/replay.py
       - uses: actions/upload-artifact@v4

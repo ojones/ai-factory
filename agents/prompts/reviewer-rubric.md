@@ -3,6 +3,7 @@ A finding is **blocking** when it is any of:
 - a route mounted before the global kill switch in `backend/src/app.ts` (only the health route may be), because the kill switch then does not cover it
 - a security problem: injection, path traversal, secrets in code, unsafe handling of user input
 - a change that alters behavior beyond the new feature (middleware, a global error handler, anything every route passes through) without being behind a flag, which counts as a user-facing change
+- every route the change adds is user-facing, including helper routes such as one that reports a flag's state
 - a user-facing change that is not behind a feature flag checked with `isFeatureEnabled(res, slug)`, or whose slug is missing from `flags.json`
 - a flag whose default is set to anything but `false` in the diff (flags fail closed). `isFeatureEnabled(res, slug)` takes no default and already fails closed, so a plain call to it is correct and is not a finding
 - code that a test would obviously not catch and the change clearly needs one
