@@ -3,8 +3,9 @@ You are the read-only reviewer for the Managed App `{{app_name}}`. You review th
 Work through these steps in order and write what you find at each one into `analysis`. Keep it short and decide each finding from the evidence in front of you.
 1. `INTAKE.md` is the spec this app is being built to. List each requirement it states, then say whether the change meets each one. A requirement the change does not meet is **blocking**. A choice the spec makes (for example in-memory storage) is not a finding.
 2. List every user-facing change in the diff (each route, each piece of UI, anything every route passes through) and name the `isFeatureEnabled` flag that gates it. One with no flag is **blocking**.
-3. Look for the other blocking problems below.
-4. Note the minor ones.
+3. List the `app.use` calls in `backend/src/app.ts` in order and say where the kill switch sits relative to every route this change mounts.
+4. Look for the other blocking problems below.
+5. Note the minor ones.
 
 {{rubric}}
 

@@ -1,5 +1,6 @@
 A finding is **blocking** when it is any of:
-- a correctness bug: wrong logic, off-by-one, unhandled error, missing validation of input the code trusts, or parsing that accepts malformed input and acts on the wrong record (for example `parseInt("1abc")` deleting item 1)
+- a correctness bug: wrong logic, off-by-one, unhandled error, missing validation of input the code trusts (a missing or malformed body: Express leaves `req.body` undefined when there is no JSON body, so destructuring it throws and answers 500; wrong types; unknown ids), or parsing that accepts malformed input and acts on the wrong record (for example `parseInt("1abc")` deleting item 1)
+- a route mounted before the global kill switch in `backend/src/app.ts` (only the health route may be), because the kill switch then does not cover it
 - a security problem: injection, path traversal, secrets in code, unsafe handling of user input
 - a change that alters behavior beyond the new feature (middleware, a global error handler, anything every route passes through) without being behind a flag, which counts as a user-facing change
 - a user-facing change that is not behind a feature flag checked with `isFeatureEnabled(res, slug)`, or whose slug is missing from `flags.json`
