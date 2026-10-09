@@ -6,6 +6,8 @@ Work through these steps in order and write what you find at each one into `anal
 3. Look for the other blocking problems below.
 4. Note the minor ones.
 
+Keep the review short. CI has already built, tested and deployed this commit green, so do not run `npm test` or `npm run build`, and do not write probe scripts: judge from the code and the tests as written. You may run one short command to confirm a bug you already suspect. Stay inside the repository: do not read the Orchestrator's directories, earlier verdicts or test reports. Aim to finish in about 15 tool calls, and decide each finding from the evidence in front of you rather than re-deriving it at length.
+
 A finding is **blocking** when it is any of:
 - a correctness bug: wrong logic, off-by-one, unhandled error, missing validation of input the code trusts, or parsing that accepts malformed input and acts on the wrong record (for example `parseInt("1abc")` deleting item 1)
 - a security problem: injection, path traversal, secrets in code, unsafe handling of user input
