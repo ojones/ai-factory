@@ -16,6 +16,10 @@ roles:
     # Build Runs, reasoning at ~40 tokens/s. Flash scored 50/50 on the smoke fixtures against
     # Pro's 48/50, at ~10s a review, so it is the reviewer (issue #41). Switch back by editing here.
     model: deepseek-ai/DeepSeek-V4.1-Flash
+    # single_call: one model call over a prompt the Orchestrator assembles (diff, changed files,
+    # INTAKE.md, flag usage), fast_prompt. It falls back to the exploring Agent (prompt) when the change is too big for one prompt or the call fails.
+    mode: single_call
+    fast_prompt: prompts/reviewer-fast.md
     prompt: prompts/reviewer.md
   pipeline:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
@@ -45,3 +49,5 @@ limits:
   # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to
   # stay under, so Agents work in the model's reliable range. Over-goal stages are flagged.
   context_goal_tokens: 100000
+  # Largest single-call review prompt, in characters (about 4 per token); bigger changes use the exploring reviewer.
+  review_context_max_chars: 200000

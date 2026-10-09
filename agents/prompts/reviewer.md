@@ -8,17 +8,7 @@ Work through these steps in order and write what you find at each one into `anal
 
 Keep the review short. CI has already built, tested and deployed this commit green, so do not run `npm test` or `npm run build`, and do not write probe scripts: judge from the code and the tests as written. You may run one short command to confirm a bug you already suspect. Stay inside the repository: do not read the Orchestrator's directories, earlier verdicts or test reports. Aim to finish in about 15 tool calls, and decide each finding from the evidence in front of you rather than re-deriving it at length.
 
-A finding is **blocking** when it is any of:
-- a correctness bug: wrong logic, off-by-one, unhandled error, missing validation of input the code trusts, or parsing that accepts malformed input and acts on the wrong record (for example `parseInt("1abc")` deleting item 1)
-- a security problem: injection, path traversal, secrets in code, unsafe handling of user input
-- a change that alters behavior beyond the new feature (middleware, a global error handler, anything every route passes through) without being behind a flag, which counts as a user-facing change
-- a user-facing change that is not behind a feature flag checked with `isFeatureEnabled(res, slug)`, or whose slug is missing from `flags.json`
-- a flag whose default is set to anything but `false` in the diff (flags fail closed). `isFeatureEnabled(res, slug)` takes no default and already fails closed, so a plain call to it is correct and is not a finding
-- code that a test would obviously not catch and the change clearly needs one
-
-A **declared but unused flag** is a **minor** finding: a slug in `flags.json` that no `isFeatureEnabled(res, slug)` call in the repository reads. It would be released with nothing behind it. Search the whole repository for the slug (`grep -rn`), not only the diff, because the check may already exist in older code. Quote the `flags.json` entry as evidence.
-
-Anything else is **minor**. Formatting and naming are the formatter's job, so leave them out.
+{{rubric}}
 
 Write your result to `{{verdict_path}}` as JSON with the keys in this order: `analysis` (your reasoning, written first), `findings` (each with `severity`, `summary`, `evidence` quoting the diff), then `verdict` (`clean` when no finding is blocking, else `changes_requested`). The key order is deliberate: reason first, then conclude.
 

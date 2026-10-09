@@ -158,6 +158,14 @@ def merge_usage(a, b):
     return out
 
 
+def load_prompt(prompt_path):
+    """A role prompt, with the shared reviewer rubric spliced in where it asks for `{{rubric}}`."""
+    text = (FACTORY_DIR / "agents" / prompt_path).read_text()
+    if "{{rubric}}" in text:
+        text = text.replace("{{rubric}}", (FACTORY_DIR / "agents" / "prompts" / "reviewer-rubric.md").read_text().strip())
+    return text
+
+
 def render(template, values):
     out = template
     for k, v in values.items():
@@ -166,6 +174,91 @@ def render(template, values):
     if left:
         raise ValueError(f"unreplaced prompt placeholders: {left}")
     return out
+
+
+# --- single-call review ------------------------------------------------------------
+
+# The two files every route passes through: the reviewer must see them even when unchanged,
+# to judge kill-switch ordering and how flags fail closed.
+REVIEW_CONTEXT_FILES = ("backend/src/app.ts", "backend/src/feature-flags.ts")
+SKIP_SUFFIXES = (".lock", "-lock.json", ".png", ".jpg", ".svg", ".ico", ".woff", ".woff2", ".map")
+
+REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "analysis": {"type": "string"},
+        "findings": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"severity": {"type": "string", "enum": ["blocking", "minor"]},
+                           "summary": {"type": "string"}, "evidence": {"type": "string"}},
+            "required": ["severity", "summary", "evidence"], "additionalProperties": False}},
+        "verdict": {"type": "string", "enum": ["clean", "changes_requested"]},
+    },
+    "required": ["analysis", "findings", "verdict"],
+    "additionalProperties": False,
+}
+
+
+class ContextTooLarge(Exception):
+    """The change does not fit in one prompt; the caller falls back to the exploring Agent."""
+
+
+class FastReviewFailed(Exception):
+    """The single call produced nothing usable; the caller falls back to the exploring Agent."""
+
+
+def numbered(text):
+    return "\n".join(f"{i}: {line}" for i, line in enumerate(text.split("\n"), 1))
+
+
+def build_review_context(git, base, head, max_chars):
+    """Everything the reviewer would otherwise go and look up, in one message.
+
+    `git(*args)` returns a git command's stdout ('' when it fails), run in the app checkout.
+    Raises ContextTooLarge when the change cannot be shown whole, so a partial view never
+    stands in for a review.
+    """
+    changed = [c for c in git("diff", "--name-only", "--diff-filter=d", base, head).split("\n") if c]
+    shown = [c for c in changed if not c.endswith(SKIP_SUFFIXES)]
+    extra = [f for f in REVIEW_CONTEXT_FILES if f not in shown]
+    parts = [f"# INTAKE.md\n{git('show', f'{head}:INTAKE.md')}",
+             f"# flags.json\n{git('show', f'{head}:flags.json')}",
+             f"# Diff {base[:8]}..{head[:8]}\n{git('diff', base, head, '--', ':(exclude)*lock*')}"]
+    for path in shown + [f for f in extra if git("show", f"{head}:{f}")]:
+        parts.append(f"# File at {head[:8]}: {path}\n{numbered(git('show', f'{head}:{path}'))}")
+    slugs = re.findall(r'"slug"\s*:\s*"([^"]+)"', git("show", f"{head}:flags.json"))
+    usage = []
+    for slug in slugs:
+        hits = git("grep", "-n", "-F", f'"{slug}"', head, "--", "backend", "frontend").strip()
+        usage.append(f"- {slug}: " + (hits.replace(f"{head}:", "").replace("\n", "\n    ") if hits else "NOT USED ANYWHERE"))
+    parts.append("# Where each declared flag is used (git grep)\n" + ("\n".join(usage) or "(no flags declared)"))
+    text = "\n\n".join(parts)
+    if len(text) > max_chars:
+        raise ContextTooLarge(f"{len(text):,} characters of context against a limit of {max_chars:,}")
+    return text
+
+
+def single_call_review(base_url, key, model, system, user, timeout=300, attempts=4):
+    """One structured chat completion. Retries overload and server errors; returns (document, usage)."""
+    body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "review_verdict", "schema": REVIEW_SCHEMA, "strict": True}}}
+    last = None
+    for attempt in range(1, attempts + 1):
+        status, r = http("POST", f"{base_url}/chat/completions", key, body, timeout=timeout)
+        if status == 200 and isinstance(r, dict):
+            try:
+                doc = json.loads(r["choices"][0]["message"]["content"])
+                derive_review(doc)
+                return doc, r.get("usage") or {}
+            except (KeyError, IndexError, TypeError, ValueError) as e:
+                last = f"unusable reply: {e}"
+        else:
+            last = f"HTTP {status}: {str(r)[:200]}"
+        if attempt < attempts and (status in (0, 429) or status >= 500 or status == 200):
+            time.sleep(5 * attempt)
+        else:
+            break
+    raise FastReviewFailed(last)
 
 
 # --- plumbing -----------------------------------------------------------------
@@ -390,8 +483,7 @@ class BuildRun:
         has its own `home` (OpenHands keeps its conversations there) and `cwd`.
         Returns (exit status, 'timeout' if killed; cost; token usage)."""
         self.check_limits()
-        template = (FACTORY_DIR / "agents" / self.cfg["roles"][role]["prompt"]).read_text()
-        prompt = render(template, {"app_name": self.app, **values})
+        prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, **values})
         with self.lock:
             before = self.state.d["spent_usd"]
             jwt = self.meter.mint(self.cfg["roles"][role]["model"], share)
@@ -588,6 +680,32 @@ class BuildRun:
 
     # --- review + test
 
+    def fast_review(self, base, head, rnd, share):
+        """The reviewer as one model call over a prompt the Orchestrator assembles (no tools, no
+        exploring). Returns (document, cost, usage) like agent_json, or raises ContextTooLarge or
+        FastReviewFailed, in which case the caller uses the exploring Agent."""
+        self.check_limits()
+        role = self.cfg["roles"]["reviewer"]
+        context = build_review_context(lambda *a: self.git(*a, check=False).stdout, base, head,
+                                       self.lim.get("review_context_max_chars", 200000))
+        system = render(load_prompt(role["fast_prompt"]), {"app_name": self.app, "base_sha": base[:8], "head_sha": head[:8]})
+        with self.lock:
+            jwt = self.meter.mint(role["model"], share)
+        start = time.time()
+        try:
+            doc, u = single_call_review(self.cfg["provider"]["base_url"], jwt, role["model"], system, context)
+        finally:
+            self.record_spend(jwt)
+        cost = self.meter.tokens[jwt]
+        (self.work / f"verdict-{rnd}.json").write_text(json.dumps(doc, indent=2))
+        prompt_tokens = u.get("prompt_tokens", 0)
+        usage = {"calls": 1, "condenser_calls": 0, "peak_context": prompt_tokens, "last_context": prompt_tokens,
+                 "prompt_tokens": prompt_tokens, "completion_tokens": u.get("completion_tokens", 0), "cache_read_tokens": 0}
+        with self.lock:
+            log(f"reviewer (r{rnd}) single call: {time.time() - start:.0f}s, {prompt_tokens:,} prompt and "
+                f"{usage['completion_tokens']:,} output tokens, cost ${cost:.4f}")
+        return doc, cost, usage
+
     def review_and_test(self, base, head, rnd):
         """The reviewer reads the code and the tester drives the deployed app; neither needs the
         other's result, so they run at the same time. Each gets half of what is left of the
@@ -601,8 +719,15 @@ class BuildRun:
         flags = new_flag_slugs(base_flags, head_flags)
         share = 0.5 if flags else 1.0
         tester_tree = self.work / f"tester-tree-{rnd}"
+        role_mode = self.cfg["roles"]["reviewer"].get("mode", "agent")
 
         def review():
+            if role_mode == "single_call":
+                try:
+                    return self.fast_review(base, head, rnd, share)
+                except (ContextTooLarge, FastReviewFailed) as e:
+                    with self.lock:
+                        log(f"Single-call review not possible ({e}); using the exploring reviewer.")
             return self.agent_json(
                 "reviewer", f"r{rnd}", {"base_sha": base, "head_sha": head, "verdict_path": self.work / f"verdict-{rnd}.json"},
                 self.work / f"verdict-{rnd}.json", check=lambda doc: derive_review(doc) and None,

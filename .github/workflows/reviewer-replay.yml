@@ -1,0 +1,49 @@
+name: Replay the reviewer
+
+# Issue #41: re-run only the reviewer over commits from real Build Runs, with the current prompts
+# and model, and compare with the recorded verdicts. Minutes and cents instead of a full Build Run.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "single (one model call) or agent (the exploring OpenHands reviewer)"
+        type: choice
+        options: [single, agent]
+        default: single
+      model:
+        description: "DeepInfra model id; empty = the reviewer's model in agents/profiles.yml"
+        required: false
+        default: ""
+      cases:
+        description: "Comma-separated case ids from agents/replay/cases.json; empty = all"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - if: ${{ inputs.mode == 'agent' }}
+        run: pip install openhands
+      - name: Replay
+        env:
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          MODE: ${{ inputs.mode }}
+          MODEL: ${{ inputs.model }}
+          CASES: ${{ inputs.cases }}
+          WORKERS: ${{ inputs.mode == 'agent' && '3' || '4' }}
+        run: python3 agents/replay/replay.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-results
+          path: replay-results.json
+          if-no-files-found: ignore

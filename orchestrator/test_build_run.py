@@ -103,7 +103,8 @@ class Prompts(unittest.TestCase):
     """Every role prompt's placeholders are exactly the ones the orchestrator supplies."""
     SUPPLIED = {
         "coder": {"app_name", "round", "task", "findings_path"},
-        "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path"},
+        "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric"},
+        "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric"},
         "tester": {"app_name", "app_url", "head_sha", "report_path"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
     }
@@ -113,6 +114,55 @@ class Prompts(unittest.TestCase):
         for role, supplied in self.SUPPLIED.items():
             text = (b.FACTORY_DIR / "agents" / "prompts" / f"{role}.md").read_text()
             self.assertEqual(set(re.findall(r"\{\{(\w+)\}\}", text)) - supplied, set(), role)
+
+
+class SingleCallReview(unittest.TestCase):
+    FILES = {"INTAKE.md": "Build notes.", "flags.json": '[{"slug": "notes-delete"}, {"slug": "unused"}]',
+             "backend/src/app.ts": "app", "backend/src/feature-flags.ts": "flags", "backend/src/routes/notes.ts": "a\nb"}
+
+    def git(self, *args):
+        if args[0] == "diff" and "--name-only" in args:
+            return "backend/src/routes/notes.ts\npackage-lock.json\n"
+        if args[0] == "diff":
+            return "DIFF TEXT"
+        if args[0] == "show":
+            return self.FILES.get(args[1].split(":", 1)[1], "")
+        if args[0] == "grep":
+            return "abc123:backend/src/routes/notes.ts:3:isFeatureEnabled(res, \"notes-delete\")\n" if "notes-delete" in args[3] else ""
+        return ""
+
+    def test_context_holds_the_spec_diff_numbered_files_and_flag_usage(self):
+        ctx = b.build_review_context(self.git, "base1234", "abc12345", 10000)
+        for needle in ("Build notes.", "DIFF TEXT", "1: a\n2: b", "# File at abc12345: backend/src/app.ts",
+                       "# File at abc12345: backend/src/feature-flags.ts",
+                       "- notes-delete: ", "- unused: NOT USED ANYWHERE"):
+            self.assertIn(needle, ctx)
+        self.assertNotIn("package-lock.json", ctx.split("# Where each")[0].replace("DIFF TEXT", ""))
+
+    def test_a_change_too_big_for_one_prompt_is_refused_not_truncated(self):
+        with self.assertRaises(b.ContextTooLarge):
+            b.build_review_context(self.git, "base1234", "abc12345", 50)
+
+    def test_call_retries_overload_then_returns_the_document(self):
+        replies = [(429, "busy"), (200, {"choices": [{"message": {"content": '{"analysis": "a", "findings": [], "verdict": "clean"}'}}],
+                                         "usage": {"prompt_tokens": 5}})]
+        orig, orig_sleep = b.http, b.time.sleep
+        b.http, b.time.sleep = (lambda *a, **k: replies.pop(0)), (lambda s: None)
+        try:
+            doc, usage = b.single_call_review("u", "k", "m", "sys", "user")
+        finally:
+            b.http, b.time.sleep = orig, orig_sleep
+        self.assertEqual(doc["verdict"], "clean")
+        self.assertEqual(usage["prompt_tokens"], 5)
+
+    def test_unusable_replies_end_in_a_failure_the_caller_can_fall_back_on(self):
+        orig, orig_sleep = b.http, b.time.sleep
+        b.http, b.time.sleep = (lambda *a, **k: (200, {"choices": [{"message": {"content": "not json"}}]})), (lambda s: None)
+        try:
+            with self.assertRaises(b.FastReviewFailed):
+                b.single_call_review("u", "k", "m", "sys", "user", attempts=2)
+        finally:
+            b.http, b.time.sleep = orig, orig_sleep
 
 
 class PreviewToken(unittest.TestCase):
@@ -167,6 +217,7 @@ class ParallelReviewAndTest(unittest.TestCase):
     def make(self, head_flags, agent):
         run = object.__new__(b.BuildRun)
         run.app, run.preview = "demo", "tok"
+        run.cfg = {"roles": {"reviewer": {"mode": "agent"}}}
         run.work = Path("/tmp/work-test")
         run.state = b.State("/tmp/work-test/state.json", "demo", "1", "url")
         run.state.save = lambda: None

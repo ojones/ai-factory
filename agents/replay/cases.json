@@ -1,0 +1,131 @@
+{
+ "cases": [
+  {
+   "id": "ojones-notes-r1",
+   "app": "ojones-notes",
+   "base": "b0bfe7db7298ce812cc64708cbd71c247443f473",
+   "head": "6fa98c03d14a30753b79af22313c46b15d675595",
+   "recorded": {
+    "verdict": "changes_requested",
+    "blocking": [
+     "POST /api/notes returns HTTP 500 (unhandled) when the request body is missing or malformed JSON, because req.body is destructured without a guard and the app has no error-handling middleware.",
+     "The notes list and create features (GET and POST /api/notes, plus the matching frontend UI) are user-facing changes shipped with no feature flag; only delete is gated, and no flag slug exists for list/create.",
+     "The enabled-delete code path has no real test: the only added DELETE test is a no-op placeholder (expect(true).toBe(true)), so the actual removal logic (findIndex/splice, 204, 404 for unknown id) is never exercised."
+    ],
+    "minor": [
+     "Frontend always renders the Delete button (even when the flag is off) and treats every 404 as \"feature disabled\", producing a wrong message when the note genuinely does not exist under an enabled flag.",
+     "Note ids are generated with Math.random(), giving weak uniqueness guarantees for an identifier.",
+     "Notes are held only in a module-level in-memory array, so all data is lost on process restart."
+    ]
+   }
+  },
+  {
+   "id": "ojones-notes-r2",
+   "app": "ojones-notes",
+   "base": "b0bfe7db7298ce812cc64708cbd71c247443f473",
+   "head": "095ac0234e23575c849de173278c22451ff6fc3e",
+   "recorded": {
+    "verdict": "changes_requested",
+    "blocking": [
+     "fetchNotes does not check response.ok, so in the default dark state (notes-list flag off) the 404 body {error:\"Not found\"} is stored as notes and notes.map throws during render, crashing the page. Unhandled and untested (no frontend tests)."
+    ],
+    "minor": [
+     "The delete-success test's final assertion expect(getResponse.body).toEqual(expect.arrayContaining([])) is vacuous \u2014 an empty array matches any array \u2014 so it never actually verifies the note was removed.",
+     "The frontend always renders the Delete button, and every 404 is reported as 'Delete feature is currently disabled' \u2014 a wrong message when the flag is on and the note simply does not exist.",
+     "Note ids are generated with Math.random(), giving weak uniqueness guarantees for an identifier.",
+     "Notes are held only in a module-level in-memory array, so all data is lost when the process restarts."
+    ]
+   }
+  },
+  {
+   "id": "ojones-notes-r3",
+   "app": "ojones-notes",
+   "base": "b0bfe7db7298ce812cc64708cbd71c247443f473",
+   "head": "c2a7ed9678b6c47c299194f221cf177141b99ee2",
+   "recorded": {
+    "verdict": "clean",
+    "blocking": [],
+    "minor": [
+     "The 'frontend-error-handling' flag is recorded in flags.json but never checked anywhere in code, so the error handling it describes ships unconditionally and the flag is inert.",
+     "Note ids are generated with Math.random(), giving weak uniqueness guarantees; a collision would let DELETE remove the wrong note.",
+     "Notes are stored only in a module-level in-memory array, so all data is lost on process restart.",
+     "The Delete button renders regardless of the notes-delete flag, and a 404 from DELETE cannot distinguish 'feature disabled' from 'note not found' for the user."
+    ]
+   }
+  },
+  {
+   "id": "ojones-notes-v2-r1",
+   "app": "ojones-notes-v2",
+   "base": "c880bb661f510ebb129f9d0fa7989ef9923aea30",
+   "head": "a4a0a3605678f134ec24b0e1cd5ca9154a7b7590",
+   "recorded": {
+    "verdict": "changes_requested",
+    "blocking": [
+     "POST /api/notes returns 500 (not the required 400) when the request body is missing or not JSON, because req.body is destructured without a guard.",
+     "The notes API is mounted before the mandatory global kill switch, so every /api/notes request bypasses it.",
+     "The user-facing frontend Delete button and its handler are not gated by any feature flag, so the delete UI ships live despite the spec requiring it dark behind notes-delete.",
+     "No test covers a missing or non-JSON POST body, so the 500 bug is not caught."
+    ],
+    "minor": [
+     "Delete tests exercise the enabled path only via the PREVIEW_TOKEN bypass, never via the real flag being released.",
+     "The frontend alerts on any delete 404, conflating a disabled feature with a missing note.",
+     "routes/notes.ts imports express but never uses it.",
+     "Note ids are random with no collision check."
+    ]
+   }
+  },
+  {
+   "id": "ojones-notes-v2-r2",
+   "app": "ojones-notes-v2",
+   "base": "c880bb661f510ebb129f9d0fa7989ef9923aea30",
+   "head": "0c47d68b034afb652021dbbd4141dd71004be43d",
+   "recorded": {
+    "verdict": "changes_requested",
+    "blocking": [
+     "The user-facing frontend Delete button is not gated behind a working feature flag, so the delete UI ships live even though the spec requires it dark behind notes-delete. The gate the frontend uses is broken: it probes DELETE and treats any 404 as 'feature enabled', but the disabled endpoint also returns 404.",
+     "No test would catch the frontend gating bug, and the change clearly needs one: the delete tests assert the same 404 status for the disabled and not-found paths, so the always-true probe passes CI."
+    ],
+    "minor": [
+     "handleDelete alerts 'Delete feature is not enabled' on any 404, conflating a disabled feature with a missing note.",
+     "routes/notes.ts imports express but never uses it.",
+     "Note ids are random with no collision check.",
+     "Delete tests exercise the enabled path only via the PREVIEW_TOKEN bypass, never via the real flag being released."
+    ]
+   }
+  },
+  {
+   "id": "ojones-notes-v2-r3",
+   "app": "ojones-notes-v2",
+   "base": "c880bb661f510ebb129f9d0fa7989ef9923aea30",
+   "head": "bcda262836183d0352a46d6b09da5754e7340c33",
+   "recorded": {
+    "verdict": "changes_requested",
+    "blocking": [
+     "New user-facing API route GET /api/feature-flag/:flagName is not gated by any feature flag (and has no slug in flags.json), so it ships live. It is a new route the spec did not ask for, and per the review rules a user-facing change with no flag is blocking."
+    ],
+    "minor": [
+     "The new unauthenticated /api/feature-flag/:flagName route discloses a feature flag's server-side state to any anonymous caller.",
+     "backend/src/__tests__/feature-flag.test.ts imports afterEach but never uses it.",
+     "No test renders App.tsx, so the frontend Delete button's flag gating is only covered indirectly through the backend endpoint."
+    ]
+   }
+  },
+  {
+   "id": "ojones-notes-v2-r4",
+   "app": "ojones-notes-v2",
+   "base": "c880bb661f510ebb129f9d0fa7989ef9923aea30",
+   "head": "8e8b54661e9e58ebe16009206380cf2f20ad6a98",
+   "recorded": {
+    "verdict": "clean",
+    "blocking": [],
+    "minor": [
+     "Malformed JSON sent with Content-Type: application/json is rejected by the pre-existing express.json() middleware and returns an HTML error page, not the route's JSON {error} shape.",
+     "The new GET /api/feature-flag/:flagName route discloses a feature flag's server-side state to any anonymous caller once its flag is released.",
+     "No test renders App.tsx, so the frontend Delete button's flag gating is covered only indirectly through the backend endpoint.",
+     "Delete tests reach the enabled path only through the PREVIEW_TOKEN bypass, never through the real flag being released.",
+     "Note ids are random with no collision check."
+    ]
+   }
+  }
+ ]
+}
