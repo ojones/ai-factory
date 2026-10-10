@@ -55,7 +55,7 @@ def single(case):
     repo = clones[case["app"]]
     ctx = b.build_review_context(git_in(repo), case["base"], case["head"], MAX_CHARS)
     system = b.render(b.load_prompt(cfg["roles"]["reviewer"]["fast_prompt"]),
-                      {"app_name": case["app"], "base_sha": case["base"][:8], "head_sha": case["head"][:8]})
+                      {"app_name": case["app"], "build_kind": "first build", "base_sha": case["base"][:8], "head_sha": case["head"][:8]})
     doc, usage = b.single_call_review(BASE_URL, KEY, MODEL, system, ctx)
     return doc, {"prompt_tokens": usage.get("prompt_tokens", 0), "output_tokens": usage.get("completion_tokens", 0),
                  "cost": usage.get("estimated_cost") or 0}
@@ -69,7 +69,7 @@ def agent(case):
     home.mkdir()
     verdict = work / f"verdict-{case['id']}.json"
     prompt = b.render(b.load_prompt(cfg["roles"]["reviewer"]["prompt"]),
-                      {"app_name": case["app"], "base_sha": case["base"], "head_sha": case["head"], "verdict_path": verdict})
+                      {"app_name": case["app"], "build_kind": "first build", "base_sha": case["base"], "head_sha": case["head"], "verdict_path": verdict})
     env = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR", "CI") if k in os.environ}
     env.update({"HOME": str(home), "LLM_MODEL": "openai/" + MODEL, "LLM_BASE_URL": BASE_URL, "LLM_API_KEY": KEY, "RUNTIME": "process"})
     log = work / f"agent-{case['id']}.jsonl"

@@ -51,8 +51,11 @@ business logic plus one boot/health-check smoke test — see
 - `backend/src/feature-flags.ts` holds the single OpenFeature client,
   initialized once at startup (`index.ts`, before `app.listen()`) — never
   re-derived per request.
-- Flag-key convention: every new user-facing feature/behavior change gets
-  its own flag, `<app-slug>.feature.<slug>` (e.g. `my-app.feature.todos-crud`).
+- When flags apply: the first build of an app needs none (the kill switch
+  covers it, and it goes live on deploy). Every later update to an existing
+  app goes behind a flag of its own, to protect `main`. One flag covers the
+  whole change, not each route or screen. If the Intake names a flag, add it.
+- Flag-key convention: `<app-slug>.feature.<slug>` (e.g. `my-app.feature.todos-crud`).
   The app slug is derived at runtime (`appSlug()`; Fly's `FLY_APP_NAME`, or
   `APP_SLUG` locally) — never hardcode it. Use `featureKey(slug)` /
   `killSwitchKey()` and `isFeatureEnabled(res, slug)` from `feature-flags.ts`
@@ -64,8 +67,8 @@ business logic plus one boot/health-check smoke test — see
 - **Record every new flag in `flags.json`** (repo root, an array of
   `{"slug": "todos-crud", "description": "..."}`) in the same commit that
   adds it in code. The Orchestrator reads this to create and release flags
-  after review; an unrecorded flag never gets released. Ship the feature
-  dark: it must stay behind its flag until the Orchestrator releases it.
+  after review; an unrecorded flag never gets released. A flagged change
+  ships dark: it must stay behind its flag until the Orchestrator releases it.
 - Preview: requests carrying `PREVIEW_TOKEN` (header `X-Preview-Token`, or
   `?preview=`) see every feature flag as on, so reviewers can test dark
   features. This is wired in `feature-flags.ts`; don't build another bypass.

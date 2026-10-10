@@ -22,7 +22,8 @@
     "req\\.body|undefined|malformed|500",
     "placeholder|expect\\(true\\)|no-op|stub",
     "delete button|frontend.*flag|not behind"
-   ]
+   ],
+   "build_kind": "first build"
   },
   {
    "id": "ojones-notes-r2",
@@ -43,7 +44,8 @@
    },
    "expect": [
     "response\\.ok|fetchNotes|crash|global error|middleware"
-   ]
+   ],
+   "build_kind": "first build"
   },
   {
    "id": "ojones-notes-r3",
@@ -59,7 +61,8 @@
      "Notes are stored only in a module-level in-memory array, so all data is lost on process restart.",
      "The Delete button renders regardless of the notes-delete flag, and a 404 from DELETE cannot distinguish 'feature disabled' from 'note not found' for the user."
     ]
-   }
+   },
+   "build_kind": "first build"
   },
   {
    "id": "ojones-notes-v2-r1",
@@ -85,7 +88,8 @@
     "kill switch",
     "delete button",
     "req\\.body|500|malformed"
-   ]
+   ],
+   "build_kind": "first build"
   },
   {
    "id": "ojones-notes-v2-r2",
@@ -107,7 +111,8 @@
    },
    "expect": [
     "delete button|probe"
-   ]
+   ],
+   "build_kind": "first build"
   },
   {
    "id": "ojones-notes-v2-r3",
@@ -125,9 +130,7 @@
      "No test renders App.tsx, so the frontend Delete button's flag gating is only covered indirectly through the backend endpoint."
     ]
    },
-   "expect": [
-    "feature-flag"
-   ]
+   "build_kind": "first build"
   },
   {
    "id": "ojones-notes-v2-r4",
@@ -144,7 +147,8 @@
      "Delete tests reach the enabled path only through the PREVIEW_TOKEN bypass, never through the real flag being released.",
      "Note ids are random with no collision check."
     ]
-   }
+   },
+   "build_kind": "first build"
   }
  ]
 }

@@ -7,7 +7,7 @@ Findings from the last review and test pass, as JSON at `{{findings_path}}` with
 
 Work like this:
 1. Read `AGENTS.md` and follow it, including its pointers to the Standards.
-2. Ship every user-facing change dark: wrap it in its own feature flag with `isFeatureEnabled(res, slug)`, and record `{"slug": ..., "description": ...}` in `flags.json` in the same commit. A flag stays off until the Orchestrator releases it.
+2. Flags protect `main`, and this is a {{build_kind}}. On an **update** to an existing app, wrap the whole change in one feature flag with `isFeatureEnabled(res, slug)` (one flag for the change, not one per route or screen) and record `{"slug": ..., "description": ...}` in `flags.json` in the same commit; it stays off until the Orchestrator releases it. On a **first build** flags are optional: add one only where the task names it or a piece is risky. Either way, if the task names a flag, add it.
 3. Run `npm install`, `npm run build`, and `npm test` from the repo root.
 4. Commit your work to `main` with a clear message. Do not push: the Orchestrator pushes after you finish, and has the only credential that can.
 

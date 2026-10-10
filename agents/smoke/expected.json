@@ -40,5 +40,11 @@
     "verdict": "clean",
     "match": "",
     "no_finding_match": "memory|restart|persist|lost"
+  },
+  "first-build-no-flags": {
+    "verdict": "clean",
+    "match": "",
+    "build_kind": "first build",
+    "no_finding_match": "flag"
   }
 }

@@ -45,6 +45,11 @@ class Verdicts(unittest.TestCase):
         with self.assertRaises(ValueError):
             b.derive_review({"verdict": "clean"})
 
+    def test_a_flagless_test_needs_at_least_one_result(self):
+        self.assertTrue(b.derive_test({"results": [{"flag": "", "passed": True}]}, [])[0])
+        with self.assertRaises(ValueError):
+            b.derive_test({"results": []}, [])
+
     def test_tester_passed_is_derived_and_flags_need_coverage(self):
         doc = {"passed": True, "results": [{"flag": "a", "check": "x", "passed": True}]}
         self.assertTrue(b.derive_test(doc, ["a"])[0])
@@ -102,10 +107,10 @@ class Guards(unittest.TestCase):
 class Prompts(unittest.TestCase):
     """Every role prompt's placeholders are exactly the ones the orchestrator supplies."""
     SUPPLIED = {
-        "coder": {"app_name", "round", "task", "findings_path"},
-        "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric"},
-        "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric"},
-        "tester": {"app_name", "app_url", "head_sha", "report_path"},
+        "coder": {"app_name", "round", "task", "findings_path", "build_kind"},
+        "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind"},
+        "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric", "build_kind"},
+        "tester": {"app_name", "app_url", "head_sha", "report_path", "build_kind"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
     }
 
@@ -252,17 +257,19 @@ class ParallelReviewAndTest(unittest.TestCase):
         self.assertEqual(shares, {"reviewer": 0.5, "tester": 0.5})
         self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review", "Test"])
 
-    def test_no_new_flags_means_reviewer_only_with_the_whole_budget(self):
+    def test_with_no_flags_the_tester_still_runs_against_the_intake(self):
         seen = []
 
         def agent(role, label, values, path, *a, share=1.0, **k):
-            seen.append((role, share))
-            return self.CLEAN, 0.1, None
+            seen.append(role)
+            return (self.CLEAN if role == "reviewer" else {"passed": True, "results": [
+                {"flag": "", "check": "requirement 1", "passed": True, "evidence": "e"}]}), 0.1, None
 
         run = self.make("[]", agent)
-        run.review_and_test("base1", "head1", 1)
-        self.assertEqual(seen, [("reviewer", 1.0)])
-        self.assertEqual([x["verdict"] for x in run.state.d["stages"]], ["clean", "skipped: no new flags"])
+        clean, tpassed, flags, _ = run.review_and_test("base1", "head1", 1)
+        self.assertEqual(sorted(seen), ["reviewer", "tester"])
+        self.assertTrue(clean and tpassed)
+        self.assertEqual(flags, [])
 
     def test_a_failing_tester_still_records_the_reviewer_and_then_raises(self):
         def agent(role, label, values, path, *a, share=1.0, **k):

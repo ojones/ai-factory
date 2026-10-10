@@ -51,15 +51,15 @@ RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {"name": "review_verdict", "schema": VERDICT_SCHEMA, "strict": True},
 }
-# The real reviewer prompt, with its placeholders filled for a direct API call:
-# the diff is in the message and the verdict is the reply, not a file.
-REVIEW_SYSTEM = (
-    (HERE.parent / "prompts" / "reviewer.md").read_text()
-    .replace("{{app_name}}", "smoke-app")
-    .replace("`{{base_sha}}..{{head_sha}}` (`git log` and `git diff` show them)", "in the diff you are given")
-    .replace("`{{verdict_path}}`", "your reply")
-    + "\nReply with the JSON object only."
-)
+# The real single-call reviewer prompt (agents/prompts/reviewer-fast.md plus the shared rubric), rendered
+# the way the Orchestrator renders it. A fixture is an update unless expected.json says "first build".
+sys.path.insert(0, str(HERE.parent.parent / "orchestrator"))
+import build_run as orchestrator  # noqa: E402
+
+def review_system(kind):
+    return orchestrator.render(
+        orchestrator.load_prompt("prompts/reviewer-fast.md"),
+        {"app_name": "smoke-app", "build_kind": kind, "base_sha": "base", "head_sha": "head"})
 
 TOOLS = [{
     "type": "function",
@@ -145,8 +145,8 @@ def load_fixture(p):
 fixtures = {p.stem: load_fixture(p) for p in sorted((HERE / "fixtures").glob("*.diff"))}
 expected = json.loads((HERE / "expected.json").read_text())
 
-def review(diff, extra=None):
-    return chat({"messages": [{"role": "system", "content": REVIEW_SYSTEM},
+def review(diff, extra=None, kind="update"):
+    return chat({"messages": [{"role": "system", "content": review_system(kind)},
                               {"role": "user", "content": f"Review this diff:\n\n{diff}"}],
                  "response_format": RESPONSE_FORMAT, **(extra or {})})
 
@@ -189,7 +189,7 @@ def grade(want, v):
 def trial(name):
     start = time.time()
     try:
-        r = review(fixtures[name])
+        r = review(fixtures[name], kind=expected[name].get("build_kind", "update"))
         v = parse_verdict(r)
         u = r.get("usage", {})
         return {"name": name, "ok": grade(expected[name], v), "v": v, "secs": time.time() - start,

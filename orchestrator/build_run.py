@@ -93,10 +93,14 @@ def derive_review(doc):
 
 
 def derive_test(doc, expected_flags):
-    """(passed, failures). passed is derived from the results, and every new flag needs a result."""
+    """(passed, failures). passed is derived from the results, and every new flag needs a result.
+    With no new flags (a first build) the results test the Intake's requirements, and there must
+    be at least one."""
     results = doc.get("results") if isinstance(doc, dict) else None
     if not isinstance(results, list):
         raise ValueError("tester output has no results list")
+    if not results and not expected_flags:
+        raise ValueError("tester recorded no results")
     failures = [r for r in results if not (isinstance(r, dict) and r.get("passed") is True)]
     covered = {r.get("flag") for r in results if isinstance(r, dict)}
     for slug in expected_flags:
@@ -396,6 +400,7 @@ class BuildRun:
         self._usage = None
         self.lock = threading.Lock()  # guards the meter, the state and log output across parallel Agents
         self.preview = None
+        self.build_kind = "first build"  # becomes "update" in setup() when the base commit has history
         self.auth_header = "Authorization: Basic " + base64.b64encode(
             f"x-access-token:{self.pat}".encode()).decode()
         print(f"::add-mask::{self.auth_header.split()[-1]}", flush=True)
@@ -449,6 +454,11 @@ class BuildRun:
         self.git("config", "user.name", "ai-factory-coder")
         self.git("config", "user.email", "coder@ai-factory.local")
         self.state.d["base_sha"] = self.head()
+        # The base of a first build is the seed commit, the repository's root. Any later Build Run
+        # starts from a commit with history, so its change is an update that needs flags.
+        has_parent = bool(self.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:])
+        self.build_kind = "update" if has_parent else "first build"
+        self.state.d["build_kind"] = self.build_kind
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
 
@@ -483,7 +493,7 @@ class BuildRun:
         has its own `home` (OpenHands keeps its conversations there) and `cwd`.
         Returns (exit status, 'timeout' if killed; cost; token usage)."""
         self.check_limits()
-        prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, **values})
+        prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, "build_kind": self.build_kind, **values})
         with self.lock:
             before = self.state.d["spent_usd"]
             jwt = self.meter.mint(self.cfg["roles"][role]["model"], share)
@@ -688,7 +698,7 @@ class BuildRun:
         role = self.cfg["roles"]["reviewer"]
         context = build_review_context(lambda *a: self.git(*a, check=False).stdout, base, head,
                                        self.lim.get("review_context_max_chars", 200000))
-        system = render(load_prompt(role["fast_prompt"]), {"app_name": self.app, "base_sha": base[:8], "head_sha": head[:8]})
+        system = render(load_prompt(role["fast_prompt"]), {"app_name": self.app, "build_kind": self.build_kind, "base_sha": base[:8], "head_sha": head[:8]})
         with self.lock:
             jwt = self.meter.mint(role["model"], share)
         start = time.time()
@@ -707,8 +717,9 @@ class BuildRun:
         return doc, cost, usage
 
     def review_and_test(self, base, head, rnd):
-        """The reviewer reads the code and the tester drives the deployed app; neither needs the
-        other's result, so they run at the same time. Each gets half of what is left of the
+        """The reviewer reads the code and the tester drives the deployed app (every round: a first
+        build without flags is tested against the Intake); neither needs the other's result, so they
+        run at the same time. Each gets half of what is left of the
         budget, its own HOME (OpenHands keeps its conversations there) and, for the tester, its
         own checkout of `head`."""
         d = self.state.d
@@ -717,7 +728,7 @@ class BuildRun:
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
         flags = new_flag_slugs(base_flags, head_flags)
-        share = 0.5 if flags else 1.0
+        share = 0.5
         tester_tree = self.work / f"tester-tree-{rnd}"
         role_mode = self.cfg["roles"]["reviewer"].get("mode", "agent")
 
@@ -747,7 +758,7 @@ class BuildRun:
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             review_job = pool.submit(review)
-            test_job = pool.submit(test) if flags else None
+            test_job = pool.submit(test)
         # The pool has waited for both. Collect the reviewer first, then the tester, so a failure
         # in one still lets the other's cost reach the state.
         errors = []
@@ -759,15 +770,12 @@ class BuildRun:
         except Exception as e:  # noqa: BLE001 - re-raised below, after the tester is recorded
             errors.append(e)
         test_failures, tpassed = [], True
-        if test_job is None:
-            self.state.stage("Test", "tester", rnd, 0, "skipped: no new flags")
-        else:
-            try:
-                tdoc, cost, usage = test_job.result()
-                tpassed, test_failures = derive_test(tdoc, flags)
-                self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", usage)
-            except Exception as e:  # noqa: BLE001
-                errors.append(e)
+        try:
+            tdoc, cost, usage = test_job.result()
+            tpassed, test_failures = derive_test(tdoc, flags)
+            self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", usage)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
         if errors:
             raise errors[0]
         all_blocking = (
@@ -829,7 +837,9 @@ class BuildRun:
                         self.release(flags, head)
                         self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
                     else:
-                        self.state.d.update(outcome="nothing_to_release", message="Clean, but the coder added no new flags.")
+                        self.state.d.update(outcome="nothing_to_release", message=(
+                            "First build deployed and live; it has no flags to release." if self.build_kind == "first build"
+                            else "Clean, but the update added no flag, so there was nothing to release."))
                     return
                 if rnd == self.lim["review_rounds"]:
                     raise NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")

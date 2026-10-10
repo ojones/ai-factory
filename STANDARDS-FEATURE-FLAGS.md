@@ -4,7 +4,14 @@ Part of [STANDARDS.md](STANDARDS.md). See [GLOSSARY.md](GLOSSARY.md) for termino
 
 ## Flagging policy
 
-Every Agent-authored, user-facing feature/behavior change is wrapped behind its own flag by default — not left to Agent discretion over what counts as "risky." This is the production safety net, and also the review gate, compensating for the direct-push-to-main, no-branch git workflow ([STANDARDS-CODING.md](STANDARDS-CODING.md#git-workflow)).
+A flag protects `main`. All work lands directly on a single `main` with no branches ([STANDARDS-CODING.md](STANDARDS-CODING.md#git-workflow)), so a flag is what keeps a change that is not yet proven from reaching users. The policy follows from that:
+
+- **A Managed App's first build needs no flags.** There is nothing yet to break, and the mandatory kill switch below still covers the whole app. The first build goes live on deploy. A flag there is allowed, and an Intake that asks for one gets it, but the coder is not required to add one and the reviewer never treats a missing flag as a finding.
+- **Every later update to an existing app is protected by a flag.** An update ships dark behind a flag of its own, and is released only after review and tests pass. Each update gets its own flag, separate from earlier updates', so one can be turned off without touching the others.
+- **A flag covers the change, not each route or screen.** One flag around everything the change encompasses is enough. Neither the coder nor the reviewer needs a flag per endpoint or UI piece, though finer flags are allowed where they help.
+- **What the Intake asks for stands.** If it names a flag, the flag is a requirement like any other.
+
+This is the production safety net, and also the review gate, compensating for the direct-push-to-main, no-branch git workflow.
 → [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md)
 
 ## Mandatory kill switch
@@ -42,5 +49,5 @@ Every Managed App's flag wrapper honors a **Preview Token** so the tester can ex
 
 **Retirement** — deleting a flag and its code path — happens only on an explicit request from the owner. Agents never retire a flag on their own initiative. A released flag simply stays on, doubling as a rollback lever.
 
-Unflagged changes (bug fixes, refactors, dependency bumps) go live on deploy with the Test Gate as their only pre-live gate; the reviewer checks them after the fact and a missing flag on a user-facing change is a blocking finding.
+Unflagged changes (bug fixes, refactors, dependency bumps) go live on deploy with the Test Gate as their only pre-live gate; the reviewer checks them after the fact. On an update, a user-facing change with no flag around it is a blocking finding; on a first build it is not.
 → [issue #24](https://github.com/ojones/ai-factory/issues/24)
