@@ -31,6 +31,8 @@ The coder's per-run wall time is measurably lower on the replay cases with no dr
 - [Minor findings become issues and template fixes](tickets/12-minor-findings-to-issues-and-templates.md): unresolved minors become app-repo suggestions and ai-factory learning issues; post-mortem agent considers each immediately; findings now saved on clean passes. Unrun on GitHub.
 - [Coder smoke screen](tickets/14-coder-smoke-screen.md): 7 models screened. Finalist DeepSeek-V4.1-Flash: equal pass rate (75%), 25% faster, 11x cheaper; GLM-5.3-Flash looked good once and failed repeats. Nothing changed in profiles.yml yet.
 - [Coder replay](tickets/15-coder-replay-top-two.md): on the two real recorded tasks DeepSeek-V4.1-Flash was clean 6/6, the 480B baseline 0/6 (all had real bugs); 18% faster per round, 6x cheaper. Coder model switched to DeepSeek-V4.1-Flash in profiles.yml (no fix_model).
+- [Fast reviewer evidence and when to use it](tickets/13-fast-reviewer-evidence-and-use.md): 0 of 7 blocking findings had blank evidence; no change. Fast reviewer stays the default with automatic fallback.
+- [Split big tasks](tickets/10-split-big-tasks.md): not now; trigger is a coder stage over ~15 min or peak context over 100k in a real run.
 - (pre-map, no ticket) `agents/prompts/coder.md` already tightened: targeted tests first, no reinstall unless needed, scoped staging, short report. Uncommitted and unmeasured.
 
 ## Not yet specified
