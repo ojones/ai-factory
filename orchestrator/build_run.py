@@ -664,7 +664,7 @@ class BuildRun:
             if failed is None and not self.healthy():
                 failed = ("Health check", None)
             if failed is None:
-                self.state.stage("CI / Build / Deploy", "-", "-", 0, f"green, deployed dark {sha[:8]}")
+                self.state.stage("CI / Build / Deploy", "-", "-", 0, f"green, deployed {sha[:8]}")
                 return sha
             n += 1
             ctx = self.failure_context(failed, sha, n)
