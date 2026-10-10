@@ -41,7 +41,11 @@ work = Path(tempfile.mkdtemp(prefix="replay-"))
 clones = {}
 for app in sorted({c["app"] for c in cases}):
     clones[app] = work / app
-    subprocess.run(["git", "clone", "-q", f"https://github.com/{OWNER}/{app}.git", str(clones[app])], check=True)
+    # The Managed Apps these commits came from have been torn down; their history is kept as a
+    # bundle beside this script. Fall back to GitHub for an app that still exists.
+    bundle = HERE / "data" / f"{app}.bundle"
+    source = str(bundle) if bundle.exists() else f"https://github.com/{OWNER}/{app}.git"
+    subprocess.run(["git", "clone", "-q", source, str(clones[app])], check=True)
 
 
 def git_in(repo):
