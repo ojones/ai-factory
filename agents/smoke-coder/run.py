@@ -47,9 +47,16 @@ def minimal_env(home=None):
 def run(cmd, cwd, env=None, timeout=600):
     try:
         p = subprocess.run(cmd, cwd=cwd, env=env or minimal_env(), capture_output=True, text=True, timeout=timeout)
-        return p.returncode, (p.stdout + p.stderr)[-1500:]
+        return p.returncode, (p.stdout + p.stderr)[-30000:]
     except subprocess.TimeoutExpired:
         return "timeout", ""
+
+
+def digest(out):
+    """The lines that say what failed (test names, assertions, type errors), not npm's boilerplate tail."""
+    keep = [l.strip() for l in out.splitlines()
+            if re.search(r"FAIL|AssertionError|expected|error TS|Error:|✗|×|Cannot find", l) and "npm error" not in l]
+    return " | ".join(keep[:8])[:700] or out[-300:]
 
 
 def load_tasks(only=None):
@@ -106,26 +113,44 @@ def score(workdir, task, base_sha):
     overlay(task["dir"] / "accept", workdir / "backend" / "src" / "__tests__" / "accept")
     code, out = run(["npm", "run", "check"], workdir)
     if code != 0:
-        return False, f"type-check failed: {out[-300:]}"
+        return False, f"type-check failed: {digest(out)}"
     code, out = run(["npm", "test"], workdir)
     if code != 0:
-        return False, f"tests failed: {out[-300:]}"
+        return False, f"tests failed: {digest(out)}"
     return True, "ok"
 
 
-def cost_of(state):
-    metrics = (state.get("stats") or {}).get("usage_to_metrics") or {}
-    return sum((m or {}).get("accumulated_cost") or 0 for m in metrics.values())
+def fetch_prices():
+    """USD per million tokens per DeepInfra model id, from the public /models list. OpenHands reports a
+    cost of 0 for models it has no price for, so cost is computed from tokens instead."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen("https://api.deepinfra.com/v1/openai/models", timeout=30) as r:
+            return {m["id"]: m.get("metadata", {}).get("pricing") or {} for m in json.load(r).get("data", [])}
+    except Exception:  # noqa: BLE001 - cost is a nicety; a run still scores without it
+        return {}
+
+
+def cost_of(state, price):
+    """Cached prompt tokens at the cache-read rate, the rest of the prompt at the input rate."""
+    total = 0.0
+    for m in ((state.get("stats") or {}).get("usage_to_metrics") or {}).values():
+        u = (m or {}).get("accumulated_token_usage") or {}
+        prompt, cached = u.get("prompt_tokens", 0), u.get("cache_read_tokens", 0)
+        total += ((prompt - cached) * price.get("input_tokens", 0) + cached * price.get("cache_read_tokens", price.get("input_tokens", 0))
+                  + u.get("completion_tokens", 0) * price.get("output_tokens", 0)) / 1e6
+    return total
 
 
 def one_run(job):
-    model, task, trial, base, root, key, base_url, timeout_min = job
-    workdir, home = root / f"{task['id']}-{trial}", root / f"home-{task['id']}-{trial}"
+    model, task, trial, base, root, key, base_url, timeout_min, prices = job
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", model).strip("-")
+    workdir, home = root / f"{slug}-{task['id']}-{trial}", root / f"home-{slug}-{task['id']}-{trial}"
     result = {"model": model, "task": task["id"], "trial": trial}
     try:
         fresh_workdir(base, task, workdir)
         base_sha = run(["git", "rev-parse", "HEAD"], workdir)[1].strip()
-        findings = root / f"findings-{task['id']}-{trial}.json"
+        findings = root / f"findings-{slug}-{task['id']}-{trial}.json"
         findings.write_text('{"blocking": [], "minor": []}')
         prompt = b.render(b.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), {
             "app_name": "smoke-app", "round": "1", "task": task["task"], "findings_path": findings,
@@ -145,7 +170,7 @@ def one_run(job):
         usage, cost = None, 0.0
         for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
             state = json.loads(state_file.read_text())
-            usage, cost = b.summarize_token_usage(state), cost_of(state)
+            usage, cost = b.summarize_token_usage(state), cost_of(state, prices.get(model, {}))
         result.update(calls=(usage or {}).get("calls", 0), llm_secs=(usage or {}).get("llm_seconds", 0),
                       peak_context=(usage or {}).get("peak_context", 0), cost=round(cost, 4))
         result["passed"], result["reason"] = (False, f"coder exited {rc}") if rc == "timeout" else score(workdir, task, base_sha)
@@ -212,7 +237,8 @@ def main():
     tasks = load_tasks(only)
     root = Path(tempfile.mkdtemp(prefix="smoke-coder-"))
     base = prepare_base(root)
-    jobs = [(m, t, i, base, root, key, base_url, timeout_min) for m in models for t in tasks for i in range(1, trials + 1)]
+    prices = fetch_prices()
+    jobs = [(m, t, i, base, root, key, base_url, timeout_min, prices) for m in models for t in tasks for i in range(1, trials + 1)]
     print(f"{len(jobs)} runs: {len(models)} model(s) x {len(tasks)} task(s) x {trials} trial(s), {workers} at a time", flush=True)
     results = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
