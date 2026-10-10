@@ -25,4 +25,4 @@ Built `agents/replay/coder_replay.py`: checks out each recorded app at its base 
 - **Only two distinct real tasks**, both the same kind of app; this is evidence, not proof. The smoke screen separately showed DeepSeek missing the todo task's distinct-id assertion 3 of 3 times.
 - A first attempt wasted about $2 because the reviewer prompt path was wrong; fixed, and working directories are now kept (`KEEP=1`).
 
-Recommendation recorded for the profile decision: DeepSeek-V4.1-Flash as the coder from round 1. See the profile ticket outcome in the session.
+Decision: `agents/profiles.yml` now sets the coder `model` to DeepSeek-V4.1-Flash for all rounds; `fix_model` stays unset (the 480B is not shown stronger, and an escalation model would need its own test). Revisit if real runs show it stuck in fix rounds.

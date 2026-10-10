@@ -5,7 +5,11 @@ provider:
 
 roles:
   coder:
-    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    # DeepSeek-V4.1-Flash over the 480B Qwen: on the replay of two real recorded tasks it was clean 6/6
+    # (the Qwen 0/6, each with real bugs) at 165 s vs 202 s and $0.03 vs $0.19 a run; smoke screen and
+    # replay results are in .wayfinder/coder-speed/tickets/14-*.md and 15-*.md. It missed one smoke task
+    # (distinct todo ids) 3/3, so if real runs show it stuck in fix rounds, try `fix_model` below.
+    model: deepseek-ai/DeepSeek-V4.1-Flash
     # Optional: a stronger model for every coder attempt after round 1 (fix rounds, pipeline fixes),
     # so round 1 can use a faster one. Unset, every attempt uses `model`.
     # fix_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
