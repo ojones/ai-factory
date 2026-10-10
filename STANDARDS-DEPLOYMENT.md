@@ -9,12 +9,12 @@ One container per Managed App — the backend serves the built frontend's static
 
 ## Registry
 
-GHCR, images tagged by git commit SHA (`ghcr.io/<org>/<app>:<sha>`), plus a floating `latest` tag for convenience. SHA tags are immutable, so the deploy step always references an unambiguous image.
+GHCR, images tagged by git commit SHA (`ghcr.io/<org>/<app>:<sha>`), plus a floating `latest` tag for convenience that moves only when a commit has passed both the Test Gate and the build. SHA tags are immutable, so the deploy step always references an unambiguous image.
 → [issues/12](.scratch/orchestrator-spec/issues/12-deployment-standards-content.md)
 
 ## Workflow split
 
-Two separate, chained GitHub Actions workflow files: `build.yml` (target-agnostic: checkout, build the image, tag by SHA, push to GHCR) and `deploy-fly.yml` (target-specific: `flyctl deploy`, driven by `fly.toml` + a thin provisioning script).
+Two separate GitHub Actions workflow files: `build.yml` (target-agnostic: checkout, build the image with a layer cache, tag by SHA, push to GHCR) and `deploy-fly.yml` (target-specific: `flyctl deploy`, driven by `fly.toml` + a thin provisioning script). `build.yml` runs in parallel with the Test Gate on every push to `main`, not after it; `deploy-fly.yml` starts when either finishes and proceeds only for the run that finds both green for the commit, so nothing deploys unless the Test Gate and the build both pass. The Test Gate installs, type-checks and tests; the image build does the real compile and bundle.
 
 **Swappability** is expressed structurally: the build workflow never changes across targets; moving a Managed App to a different host means replacing only `deploy-fly.yml` (and its referenced native config) with a new deploy workflow — a single, isolated file change by construction.
 → [issues/12](.scratch/orchestrator-spec/issues/12-deployment-standards-content.md)

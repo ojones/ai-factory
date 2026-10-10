@@ -1,18 +1,47 @@
 name: Deploy to Fly
 
+# Build and Test Gate run in parallel. Each completion triggers this workflow; the gate job lets
+# only the run that sees both green for the commit continue (a duplicate is serialized and harmless).
 on:
   workflow_run:
-    workflows: ["Build"]
+    workflows: ["Build", "Test Gate"]
     types: [completed]
 
 permissions:
   contents: read
-  packages: read
+  packages: write
   issues: write
+  actions: read
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  gate:
     if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.both.outputs.ready }}
+    steps:
+      - id: both
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          ready=true
+          for wf in "Build" "Test Gate"; do
+            c=$(gh run list --workflow "$wf" --limit 30 --json headSha,conclusion,databaseId \
+                --jq "map(select(.headSha==\"$SHA\")) | sort_by(.databaseId) | last | .conclusion")
+            echo "$wf: ${c:-none}"
+            [ "$c" = "success" ] || ready=false
+          done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
     runs-on: ubuntu-latest
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -58,6 +87,9 @@ jobs:
           docker pull "$src"
           docker tag "$src" "$dst"
           docker push "$dst"
+          # `latest` follows only commits that passed both Test Gate and Build.
+          docker tag "$src" "ghcr.io/${{ github.repository }}:latest"
+          docker push "ghcr.io/${{ github.repository }}:latest"
 
       - name: Deploy
         run: |

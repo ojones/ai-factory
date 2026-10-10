@@ -10,6 +10,10 @@
   "scripts": {
     "build": "npm run build --workspace frontend && npm run build --workspace backend",
     "test": "npm run test --workspace backend",
+    "check": "npm run check --workspaces",
+    "test:changed": "npm run test:changed --workspace backend",
+    "test:file": "npm run test --workspace backend --",
+    "verify": "npm run check && npm test",
     "dev:backend": "npm run dev --workspace backend",
     "dev:frontend": "npm run dev --workspace frontend",
     "start": "npm run start --workspace backend"

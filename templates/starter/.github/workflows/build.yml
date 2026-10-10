@@ -1,9 +1,10 @@
 name: Build
 
+# Runs in parallel with Test Gate on every push to main; Deploy waits for both to be green.
 on:
-  workflow_run:
-    workflows: ["Test Gate"]
-    types: [completed]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,12 +12,9 @@ permissions:
 
 jobs:
   build:
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -30,6 +28,8 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
-            ghcr.io/${{ github.repository }}:latest
+          # Reuse unchanged layers (notably the npm ci layer) from earlier builds.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # SHA tag only: `latest` moves in Deploy, once Test Gate has also passed.
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}

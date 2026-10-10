@@ -40,6 +40,12 @@ npm start                      # serves everything on one port (PORT, default 30
 
 ```bash
 npm test                       # runs the backend's vitest suite
+
+# Fast loop while editing (use these between changes, not the full build):
+npm run check                  # type-check both workspaces, no bundle, seconds
+npm run test:changed           # only tests affected by files changed since the last commit
+npm run test:file -- src/__tests__/health.test.ts   # one test file (path relative to backend/)
+npm run verify                 # check + full test, without the Vite bundle
 ```
 
 The test gate (per root STANDARDS-CODING.md) requires unit tests for
