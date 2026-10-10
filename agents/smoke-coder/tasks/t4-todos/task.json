@@ -1,0 +1,8 @@
+{
+  "build_kind": "first build",
+  "task": "Add an in-memory todo list API to the backend. `POST /api/todos` with JSON `{\"title\": string}` creates a todo and responds 201 with `{id, title, done: false}` (ids unique; the title is trimmed; a missing, non-string or blank title is 400 with `{error}`). `GET /api/todos` responds 200 with a JSON array of all todos in creation order. `GET /api/todos/:id` responds 200 with the todo or 404. `DELETE /api/todos/:id` responds 204, or 404 if it does not exist. Add tests.",
+  "solution_mount": {
+    "import": "import { todosRouter } from \"./routes/todos\";",
+    "use": "app.use(todosRouter);"
+  }
+}

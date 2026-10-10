@@ -1,4 +1,5 @@
 """Unit tests for the Build Run's deterministic logic. Run: python3 -m unittest discover orchestrator"""
+import json
 import os
 import subprocess
 import sys
@@ -37,6 +38,21 @@ class Verdicts(unittest.TestCase):
         clean, blocking, _ = b.derive_review(doc)
         self.assertFalse(clean)
         self.assertEqual(len(blocking), 1)
+
+    def test_a_blocking_finding_blocks_even_with_no_detail(self):
+        clean, blocking, _ = b.derive_review({"findings": [{"severity": "blocking", "summary": "x"}]})
+        self.assertFalse(clean)
+        self.assertEqual(len(blocking), 1)
+
+    def test_findings_reach_the_coder_with_whatever_detail_they_carry(self):
+        raw = {"file": "backend/src/app.ts", "line": "12", "repro": "curl -i /x", "suggested_fix": "", "requirement": None}
+        view = b.finding_view("reviewer", "no kill switch", "app.use(r)", raw)
+        self.assertEqual(view["file"], "backend/src/app.ts")
+        self.assertNotIn("suggested_fix", view)
+        text = b.describe_finding(view)
+        self.assertIn("Where: backend/src/app.ts:12", text)
+        self.assertIn("Repro: curl -i /x", text)
+        self.assertEqual(b.describe_finding(b.finding_view("tester", "a: b", "", {})), "- [tester] a: b")
 
     def test_minor_only_is_clean(self):
         self.assertTrue(b.derive_review({"findings": [{"severity": "minor"}]})[0])
@@ -110,8 +126,9 @@ class Prompts(unittest.TestCase):
         "coder": {"app_name", "round", "task", "findings_path", "build_kind"},
         "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind"},
         "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric", "build_kind"},
-        "tester": {"app_name", "app_url", "head_sha", "report_path", "build_kind"},
+        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
+        "postmortem": {"facts_path", "result_path", "categories"},
     }
 
     def test_placeholders(self):
@@ -204,16 +221,94 @@ class TokenUsage(unittest.TestCase):
 class SummaryRendering(unittest.TestCase):
     def test_summary_shows_usage_per_stage_and_the_run_peak(self):
         usage = lambda peak: {"calls": 3, "condenser_calls": 1, "peak_context": peak, "last_context": peak,
-                              "prompt_tokens": 90000, "completion_tokens": 500, "cache_read_tokens": 80000}
+                              "prompt_tokens": 90000, "completion_tokens": 500, "cache_read_tokens": 80000,
+                              "seconds": 125.4, "llm_seconds": 40.2}
         d = {"app": "x", "outcome": "released", "message": "ok", "cap_usd": 2.0, "spent_usd": 0.5, "review_passes": 1,
              "head_sha": "abc", "release": {"released": ["x.feature.a"]}, "blocking": [], "context_goal_tokens": 100000,
              "stages": [{"stage": "Coder", "agent": "coder", "round": "1", "cost_usd": 0.1, "verdict": "pushed", "usage": usage(54000)},
                         {"stage": "Review", "agent": "reviewer", "round": 1, "cost_usd": 0.1, "verdict": "clean", "usage": usage(120000)},
                         {"stage": "Release", "agent": "-", "round": "-", "cost_usd": 0, "verdict": "1 flag(s) released", "usage": None}]}
         out = b.render_summary(d)
-        self.assertIn("| 3 | 54,000 | 90,000 (80,000) | 500 | 1 |", out)
+        self.assertIn("| 125s (40s) | 3 | 54,000 | 90,000 (80,000) | 500 | 1 |", out)
         self.assertIn("120,000 :warning:", out)
         self.assertIn("Peak context this run**: 120,000 tokens (reviewer 1), over the goal of 100,000", out)
+
+
+class WaitForDeploy(unittest.TestCase):
+    def make(self, runs, skipped_ids):
+        from unittest import mock
+        run = object.__new__(b.BuildRun)
+        run.app_repo, run.lim = "o/app", {"pipeline_timeout_minutes": 1}
+        run.check_limits = lambda: None
+        run.gh = lambda args, check=True: mock.Mock(stdout=json.dumps(runs))
+        run.deploy_skipped = lambda rid: rid in skipped_ids
+        return run
+
+    def test_a_skipped_deploy_run_is_not_the_deploy(self):
+        from unittest import mock
+        done = lambda i, sha="s": {"databaseId": i, "headSha": sha, "status": "completed", "conclusion": "success", "url": ""}
+        run = self.make([done(1), {**done(2), "status": "in_progress", "conclusion": ""}], {1})
+        with mock.patch.object(b.time, "sleep", side_effect=RuntimeError("kept waiting")):
+            with self.assertRaises(RuntimeError):
+                run.wait_run("deploy-fly.yml", "s")
+        self.assertEqual(self.make([done(1), done(2)], {1}).wait_run("deploy-fly.yml", "s")["databaseId"], 2)
+
+    def test_other_workflows_are_not_filtered(self):
+        done = {"databaseId": 1, "headSha": "s", "status": "completed", "conclusion": "success", "url": ""}
+        self.assertEqual(self.make([done], {1}).wait_run("build.yml", "s")["databaseId"], 1)
+
+
+class PreviousReport(unittest.TestCase):
+    def test_round_one_has_none_and_later_rounds_point_at_the_last_report(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIn("none", str(b.previous_report(tmp, 1)))
+            self.assertIn("none", str(b.previous_report(tmp, 2)))  # no file yet
+            (Path(tmp) / "test-report-1.json").write_text("{}")
+            self.assertEqual(b.previous_report(tmp, 2), Path(tmp) / "test-report-1.json")
+
+
+class InstallDependencies(unittest.TestCase):
+    def run_in(self, tmp, with_lock):
+        run = object.__new__(b.BuildRun)
+        run.app_dir = Path(tmp)
+        if with_lock:
+            (Path(tmp) / "package-lock.json").write_text("{}")
+        return run
+
+    def test_no_lockfile_means_no_install(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(b, "sh") as sh:
+            self.run_in(tmp, False).install_dependencies()
+            sh.assert_not_called()
+
+    def test_install_runs_without_the_runners_secrets_and_a_failure_is_not_fatal(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(b, "sh") as sh, \
+                mock.patch.dict(b.os.environ, {"FLY_API_TOKEN": "secret", "PATH": "/bin"}):
+            sh.return_value.returncode = 1
+            self.run_in(tmp, True).install_dependencies()
+            env = sh.call_args.kwargs["env"]
+            self.assertNotIn("FLY_API_TOKEN", env)
+            self.assertEqual(sh.call_args.args[0][:2], ["npm", "ci"])
+
+
+class CoderModelPerRound(unittest.TestCase):
+    def run_for(self, profile):
+        run = object.__new__(b.BuildRun)
+        run.cfg = {"roles": {"coder": profile, "tester": {"model": "t"}}}
+        return run
+
+    def test_every_attempt_uses_model_unless_fix_model_is_set(self):
+        run = self.run_for({"model": "fast"})
+        self.assertEqual([run.model_for("coder", l) for l in ("1", "2", "fix1")], ["fast"] * 3)
+
+    def test_fix_model_takes_over_after_round_one_for_the_coder_only(self):
+        run = self.run_for({"model": "fast", "fix_model": "big"})
+        self.assertEqual([run.model_for("coder", l) for l in ("1", "2", "fix1")], ["fast", "big", "big"])
+        self.assertEqual(run.model_for("tester", "t2"), "t")
 
 
 class ParallelReviewAndTest(unittest.TestCase):

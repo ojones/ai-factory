@@ -9,4 +9,4 @@ Work through these steps in order and write what you find at each one into `anal
 
 {{rubric}}
 
-Reply with the JSON object only, with the keys in this order: `analysis` (your reasoning, written first), `findings` (each with `severity`, `summary`, `evidence` quoting the diff or a numbered file line), then `verdict` (`clean` when no finding is blocking, else `changes_requested`). The key order is deliberate: reason first, then conclude. Every blocking finding must cite a line.
+Reply with the JSON object only, with the keys in this order: `analysis` (your reasoning, written first), `findings` (each with `severity`, `summary`, `evidence` quoting the diff or a numbered file line, and `file`, `line`, `requirement` (the INTAKE.md line or standard it breaks), `suggested_fix` and `repro` (a command that shows the problem and should pass after the fix); give all you can and use an empty string for any that do not apply), then `verdict` (`clean` when no finding is blocking, else `changes_requested`). The key order is deliberate: reason first, then conclude. Every blocking finding must cite a line.

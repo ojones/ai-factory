@@ -1,0 +1,8 @@
+{
+  "build_kind": "update",
+  "task": "Add `GET /api/greeting` returning JSON `{\"message\": \"hello\"}`. Name its feature flag `greeting`. Add tests.",
+  "solution_mount": {
+    "import": "import { greetingRouter } from \"./routes/greeting\";",
+    "use": "app.use(greetingRouter);"
+  }
+}

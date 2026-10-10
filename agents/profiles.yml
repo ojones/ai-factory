@@ -6,6 +6,9 @@ provider:
 roles:
   coder:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    # Optional: a stronger model for every coder attempt after round 1 (fix rounds, pipeline fixes),
+    # so round 1 can use a faster one. Unset, every attempt uses `model`.
+    # fix_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     prompt: prompts/coder.md
   tester:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
@@ -24,9 +27,13 @@ roles:
   pipeline:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     prompt: prompts/pipeline.md
+  # After a Build Run that did not end clean: explains why and proposes a fix as a PR (orchestrator/postmortem.py).
+  postmortem:
+    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    prompt: prompts/postmortem.md
 
 limits:
-  review_rounds: 10
+  review_rounds: 4
   # Per-Build-Run LLM spend. The default applies when an Intake gives no
   # override; an Intake override may not exceed the ceiling. Starting values
   # to revise after the first real multi-agent run (issue #34).
@@ -36,6 +43,8 @@ limits:
   jwt_ttl_seconds: 21600
   # Wall-clock budget for the whole Build Run; the Actions job limit is 6 hours.
   time_limit_minutes: 330
+  # The post-mortem Agent after a stuck run; one run, outside the Build Run's cost cap.
+  postmortem_timeout_minutes: 15
   # Per Agent invocation; a hung Agent is killed and counts as a failed attempt.
   agent_timeout_minutes: 45
   # Waiting for Test Gate -> Build -> Deploy of one pushed commit.

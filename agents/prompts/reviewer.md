@@ -11,6 +11,6 @@ Keep the review short. CI has already built, tested and deployed this commit gre
 
 {{rubric}}
 
-Write your result to `{{verdict_path}}` as JSON with the keys in this order: `analysis` (your reasoning, written first), `findings` (each with `severity`, `summary`, `evidence` quoting the diff), then `verdict` (`clean` when no finding is blocking, else `changes_requested`). The key order is deliberate: reason first, then conclude.
+Write your result to `{{verdict_path}}` as JSON with the keys in this order: `analysis` (your reasoning, written first), `findings` (each with `severity`, `summary`, `evidence` quoting the diff, and `file`, `line`, `requirement` (the INTAKE.md line or standard it breaks), `suggested_fix` and `repro` (a command that shows the problem and should pass after the fix); give all you can and use an empty string for any that do not apply), then `verdict` (`clean` when no finding is blocking, else `changes_requested`). The key order is deliberate: reason first, then conclude.
 
 You are done when the file exists, parses as JSON, and every blocking finding cites a line from the diff.

@@ -1,0 +1,8 @@
+{
+  "build_kind": "first build",
+  "task": "Add `GET /api/reverse?text=<string>` to the backend. It responds 200 with JSON `{\"reversed\": \"<text reversed>\"}`. If `text` is missing, empty, or longer than 200 characters, respond 400 with JSON `{\"error\": \"<message>\"}`. Add tests for it.",
+  "solution_mount": {
+    "import": "import { reverseRouter } from \"./routes/reverse\";",
+    "use": "app.use(reverseRouter);"
+  }
+}

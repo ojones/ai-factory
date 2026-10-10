@@ -1,0 +1,4 @@
+{
+  "build_kind": "first build",
+  "task": "`median` in `backend/src/lib/stats.ts` is wrong. For an even number of values it must return the mean of the two middle values; for an empty array it must return `null`; and it must not modify the array it is given. Fix it and add tests covering those cases."
+}

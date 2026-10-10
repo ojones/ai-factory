@@ -87,9 +87,32 @@ def derive_review(doc):
     findings = doc.get("findings") if isinstance(doc, dict) else None
     if not isinstance(findings, list):
         raise ValueError("reviewer output has no findings list")
+    # Whatever the reviewer marks blocking blocks, however much detail it gives.
     blocking = [f for f in findings if isinstance(f, dict) and f.get("severity") == "blocking"]
     minor = [f for f in findings if isinstance(f, dict) and f.get("severity") != "blocking"]
     return not blocking, blocking, minor
+
+
+def finding_view(source, summary, evidence, raw):
+    """A finding as handed to the coder: summary, evidence, and any of the detail fields present."""
+    out = {"source": source, "summary": summary, "evidence": evidence}
+    out.update({k: raw[k] for k in DETAIL_FIELDS if str(raw.get(k) or "").strip()})
+    return out
+
+
+def describe_finding(f):
+    """One finding as an indented block for the coder's fix list."""
+    where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or ""
+    rows = [("Where", where), ("Evidence", f.get("evidence")), ("Requirement", f.get("requirement")),
+            ("Suggested fix", f.get("suggested_fix")), ("Repro", f.get("repro"))]
+    body = "".join(f"\n    {k}: {v}" for k, v in rows if v)
+    return f"- [{f['source']}] {f['summary']}{body}"
+
+
+def previous_report(work, rnd):
+    """The last round's tester report as a path, or a note that there is none (round 1)."""
+    path = Path(work) / f"test-report-{rnd - 1}.json"
+    return path if rnd > 1 and path.exists() else "none (this is the first test pass)"
 
 
 def derive_test(doc, expected_flags):
@@ -144,10 +167,12 @@ def summarize_token_usage(base_state):
     agent = (metrics.get("agent") or {}).get("token_usages") or []
     condenser = (metrics.get("condenser") or {}).get("token_usages") or []
     prompts = [u.get("prompt_tokens", 0) for u in agent]
+    latencies = (metrics.get("agent") or {}).get("response_latencies") or []
     return {"calls": len(agent), "condenser_calls": len(condenser),
             "peak_context": max(prompts, default=0), "last_context": prompts[-1] if prompts else 0,
             "prompt_tokens": sum(prompts), "completion_tokens": sum(u.get("completion_tokens", 0) for u in agent),
-            "cache_read_tokens": sum(u.get("cache_read_tokens", 0) for u in agent)}
+            "cache_read_tokens": sum(u.get("cache_read_tokens", 0) for u in agent),
+            "llm_seconds": round(sum(l.get("latency", 0) for l in latencies), 1), "seconds": 0.0}
 
 
 def merge_usage(a, b):
@@ -187,6 +212,9 @@ def render(template, values):
 REVIEW_CONTEXT_FILES = ("backend/src/app.ts", "backend/src/feature-flags.ts")
 SKIP_SUFFIXES = (".lock", "-lock.json", ".png", ".jpg", ".svg", ".ico", ".woff", ".woff2", ".map")
 
+# Detail a finding may carry so the coder can act without exploring; all best-effort, "" when not applicable.
+DETAIL_FIELDS = ("file", "line", "requirement", "suggested_fix", "repro")
+
 REVIEW_SCHEMA = {
     "type": "object",
     "properties": {
@@ -194,8 +222,9 @@ REVIEW_SCHEMA = {
         "findings": {"type": "array", "items": {
             "type": "object",
             "properties": {"severity": {"type": "string", "enum": ["blocking", "minor"]},
-                           "summary": {"type": "string"}, "evidence": {"type": "string"}},
-            "required": ["severity", "summary", "evidence"], "additionalProperties": False}},
+                           "summary": {"type": "string"}, "evidence": {"type": "string"},
+                           **{k: {"type": "string"} for k in DETAIL_FIELDS}},
+            "required": ["severity", "summary", "evidence", *DETAIL_FIELDS], "additionalProperties": False}},
         "verdict": {"type": "string", "enum": ["clean", "changes_requested"]},
     },
     "required": ["analysis", "findings", "verdict"],
@@ -451,6 +480,7 @@ class BuildRun:
         # and the coder (who runs in it) cannot push or read one.
         sh(["git", "-c", f"http.extraheader={self.auth_header}", "clone", "-q",
             f"https://github.com/{self.app_repo}.git", str(self.app_dir)])
+        self.install_dependencies()
         self.git("config", "user.name", "ai-factory-coder")
         self.git("config", "user.email", "coder@ai-factory.local")
         self.state.d["base_sha"] = self.head()
@@ -461,6 +491,21 @@ class BuildRun:
         self.state.d["build_kind"] = self.build_kind
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
+
+    def install_dependencies(self):
+        """Install once, here, so the coder starts with node_modules instead of spending agent turns on it.
+        Later rounds reuse the checkout, and restore_tree/clean leave ignored node_modules alone. Runs with
+        the coder's minimal environment, so the dependencies' install scripts never see the runner's secrets.
+        A failure is only logged: the coder can still install for itself."""
+        if not (self.app_dir / "package-lock.json").exists():
+            return
+        began = time.time()
+        env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
+        try:
+            code = sh(["npm", "ci", "--no-audit", "--no-fund"], cwd=self.app_dir, env=env, check=False, timeout=900).returncode
+        except (subprocess.TimeoutExpired, OSError):
+            code = "timeout"
+        log(f"npm ci {'ok' if code == 0 else f'failed ({code}); the coder will install for itself'} in {time.time() - began:.0f}s")
 
     def wait_for_capacity(self):
         cap = self.lim["max_simultaneous_build_runs"]
@@ -478,12 +523,19 @@ class BuildRun:
 
     # --- agents
 
-    def agent_env(self, role, jwt, extra=None, home=None):
+    def model_for(self, role, label):
+        """The role's model. The coder may name a stronger `fix_model` for every attempt after round 1."""
+        profile = self.cfg["roles"][role]
+        if role == "coder" and str(label) != "1" and profile.get("fix_model"):
+            return profile["fix_model"]
+        return profile["model"]
+
+    def agent_env(self, role, jwt, extra=None, home=None, model=None):
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
         if home:
             env["HOME"] = str(home)
         profile = self.cfg["roles"][role]
-        env.update({"LLM_MODEL": "openai/" + profile["model"], "LLM_BASE_URL": self.cfg["provider"]["base_url"],
+        env.update({"LLM_MODEL": "openai/" + (model or profile["model"]), "LLM_BASE_URL": self.cfg["provider"]["base_url"],
                     "LLM_API_KEY": jwt, "RUNTIME": "process"})
         env.update(extra or {})
         return env
@@ -493,23 +545,27 @@ class BuildRun:
         has its own `home` (OpenHands keeps its conversations there) and `cwd`.
         Returns (exit status, 'timeout' if killed; cost; token usage)."""
         self.check_limits()
+        model = self.model_for(role, label)
         prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, "build_kind": self.build_kind, **values})
         with self.lock:
             before = self.state.d["spent_usd"]
-            jwt = self.meter.mint(self.cfg["roles"][role]["model"], share)
+            jwt = self.meter.mint(model, share)
         if home:
             Path(home).mkdir(parents=True, exist_ok=True)
         jsonl = self.art / f"openhands-{role}-{label}.jsonl"
         known = self.conversation_dirs(home)
+        began = time.time()
         try:
             with jsonl.open("w") as f:
                 rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt],
-                                    cwd=cwd or self.app_dir, env=self.agent_env(role, jwt, extra_env, home), stdout=f,
+                                    cwd=cwd or self.app_dir, env=self.agent_env(role, jwt, extra_env, home, model), stdout=f,
                                     stderr=subprocess.STDOUT, timeout=self.lim["agent_timeout_minutes"] * 60).returncode
         except subprocess.TimeoutExpired:
             rc = "timeout"
         after = self.record_spend(jwt)
         usage = self.collect_usage(role, label, known, home)
+        if usage:
+            usage["seconds"] = round(time.time() - began, 1)  # wall time; minus llm_seconds is tool and wait time
         # Spend is read from the shared total, so with two Agents running its delta would include
         # the other's; the JWT's own spend is this invocation's exact cost.
         cost = self.meter.tokens[jwt]
@@ -517,7 +573,8 @@ class BuildRun:
                  f"{role} ({label}) exited {rc}; cost ${cost:.4f}; run total ${after:.4f} of ${self.cap:.2f}", "::endgroup::"]
         if usage:
             goal = self.lim.get("context_goal_tokens", 100000)
-            lines.insert(2, f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens"
+            lines.insert(2, f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens; "
+                         f"{usage['seconds']:.0f}s wall, {usage['llm_seconds']:.0f}s in the model"
                          + (f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""))
         with self.lock:  # one block, so parallel Agents' groups do not interleave
             for line in lines:
@@ -621,10 +678,23 @@ class BuildRun:
             out = self.gh(["run", "list", "--repo", self.app_repo, "--workflow", workflow, "--limit", "30",
                            "--json", "databaseId,headSha,status,conclusion,url"]).stdout
             runs = sorted((r for r in json.loads(out) if r["headSha"] == sha), key=lambda r: r["databaseId"])
+            # Test Gate and Build finish at different times and each starts a Deploy run; the first one
+            # finds the other not done and skips its deploy job. That run says "success" but deployed
+            # nothing, so it is not the run to wait for.
+            runs = [r for r in runs if not (workflow == "deploy-fly.yml" and r["status"] == "completed"
+                                            and self.deploy_skipped(r["databaseId"]))]
             if runs and runs[-1]["status"] == "completed":
                 return runs[-1]
             time.sleep(10)
         raise NeedsHuman("pipeline", f"{workflow} did not finish for {sha[:8]} within {self.lim['pipeline_timeout_minutes']} minutes")
+
+    def deploy_skipped(self, run_id):
+        out = self.gh(["run", "view", str(run_id), "--repo", self.app_repo, "--json", "jobs"], check=False).stdout
+        try:
+            jobs = json.loads(out).get("jobs", [])
+        except ValueError:
+            return False
+        return any(j.get("name") == "deploy" and j.get("conclusion") == "skipped" for j in jobs)
 
     def healthy(self):
         for _ in range(12):
@@ -749,7 +819,8 @@ class BuildRun:
             try:
                 return self.agent_json(
                     "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
-                                          "report_path": self.work / f"test-report-{rnd}.json"},
+                                          "report_path": self.work / f"test-report-{rnd}.json",
+                                          "previous_report": previous_report(self.work, rnd)},
                     self.work / f"test-report-{rnd}.json", {"PREVIEW_TOKEN": self.preview},
                     check=lambda doc: derive_test(doc, flags) and None,
                     cwd=tester_tree, home=self.work / f"home-tester-{rnd}", share=share)
@@ -779,14 +850,12 @@ class BuildRun:
         if errors:
             raise errors[0]
         all_blocking = (
-            [{"source": "reviewer", "summary": f.get("summary", ""), "evidence": f.get("evidence", "")} for f in blocking]
-            + [{"source": "tester", "summary": f"{r.get('flag')}: {r.get('check')}", "evidence": r.get("evidence", "")}
-               for r in test_failures])
+            [finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in blocking]
+            + [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in test_failures])
         self.state.d["blocking"] = all_blocking
         self.state.save()
         findings = {"round": rnd, "blocking": all_blocking,
-                    "minor": [{"source": "reviewer", "summary": f.get("summary", ""), "evidence": f.get("evidence", "")}
-                              for f in minor]}
+                    "minor": [finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in minor]}
         return clean, tpassed, flags, findings
 
     def gb(self, method, path, body=None):
@@ -831,6 +900,9 @@ class BuildRun:
                 head = self.pipeline(head)
                 self.state.d["head_sha"] = head
                 clean, tpassed, flags, findings = self.review_and_test(base, head, rnd)
+                # Kept on a clean pass too: the minor findings of a run that ships are what the post-mortem learns from.
+                findings_path = self.work / f"findings-{rnd}.json"
+                findings_path.write_text(json.dumps(findings, indent=2))
                 if release_gate(True, True, tpassed, clean, head, self.head()):
                     self.check_limits()
                     if flags:
@@ -843,9 +915,7 @@ class BuildRun:
                     return
                 if rnd == self.lim["review_rounds"]:
                     raise NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
-                findings_path = self.work / f"findings-{rnd}.json"
-                findings_path.write_text(json.dumps(findings, indent=2))
-                summary = "\n".join(f"- [{b['source']}] {b['summary']}" for b in findings["blocking"]) or "- (none; minor findings only)"
+                summary = "\n".join(describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
         except BudgetExhausted as e:
             self.state.d.update(outcome="budget_exhausted", message=str(e))
@@ -879,8 +949,8 @@ def render_summary(d):
              f"**Cost**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f} cap  ",
              f"**Review passes**: {d['review_passes']}  ", f"**Final commit**: `{d['head_sha'] or '-'}`  ",
              f"**App**: https://{d['app']}.fly.dev  ", f"**Fly log viewer**: https://fly.io/apps/{d['app']}/monitoring", "",
-             "| Stage | Agent | Round | Cost | Calls | Peak context | Tokens in (cached) | Tokens out | Condenser calls | Verdict |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             "| Stage | Agent | Round | Cost | Time (model) | Calls | Peak context | Tokens in (cached) | Tokens out | Condenser calls | Verdict |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     goal = d.get("context_goal_tokens", 100000)
     peaks = []
     for s in d["stages"]:
@@ -888,10 +958,10 @@ def render_summary(d):
         if u:
             peaks.append((u["peak_context"], f"{s['agent']} {s['round']}"))
             peak = f"{u['peak_context']:,}" + (" :warning:" if u["peak_context"] > goal else "")
-            cols = [str(u["calls"]), peak, f"{u['prompt_tokens']:,} ({u['cache_read_tokens']:,})",
+            cols = [f"{u.get('seconds', 0):.0f}s ({u.get('llm_seconds', 0):.0f}s)", str(u["calls"]), peak, f"{u['prompt_tokens']:,} ({u['cache_read_tokens']:,})",
                     f"{u['completion_tokens']:,}", str(u["condenser_calls"])]
         else:
-            cols = ["-"] * 5
+            cols = ["-"] * 6
         lines.append(f"| {s['stage']} | {s['agent']} | {s['round']} | ${s['cost_usd']:.4f} | {' | '.join(cols)} | {s['verdict']} |")
     if peaks:
         top, who = max(peaks)
