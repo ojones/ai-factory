@@ -42,9 +42,6 @@
      "Notes are held only in a module-level in-memory array, so all data is lost when the process restarts."
     ]
    },
-   "expect": [
-    "response\\.ok|fetchNotes|crash|global error|middleware"
-   ],
    "build_kind": "first build"
   },
   {

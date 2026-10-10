@@ -18,6 +18,12 @@ new file mode 100644
 +  }
 +  res.json(items);
 +});
+diff --git a/backend/src/app.ts b/backend/src/app.ts
+--- a/backend/src/app.ts
++++ b/backend/src/app.ts
+@@ -40,2 +40,4 @@ export function createApp(): Express {
+   app.use(killSwitch);
++  app.use(itemsRouter);
 diff --git a/flags.json b/flags.json
 --- a/flags.json
 +++ b/flags.json
