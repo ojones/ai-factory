@@ -1,0 +1,33 @@
+name: Update Intake — change an existing Managed App
+description: Ask the Factory to change a Managed App it already built.
+title: "my-app-name: what to change"
+labels: ["update-intake"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This changes an app the Factory already built. For a new app, use the Intake form instead.
+
+        Edit this issue freely until it is ready. When it is, add the **`proceed-with-change`** label. A Build Run starts immediately: it plans the change, then codes, tests and reviews it, and releases it behind a feature flag only when everything passes. If the plan has several parts, each becomes its own issue and runs in order. If something needs your answer or fails, the run comments here and removes the label; fix the issue and add the label again.
+  - type: input
+    id: app
+    attributes:
+      label: App name
+      description: The Managed App to change, exactly as its repo is named (for example `recipe-box`).
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What should change?
+      description: What the app should do differently. Say what you want to see, not how to build it. Mention anything that must not change.
+    validations:
+      required: true
+  - type: input
+    id: cost_cap
+    attributes:
+      label: Cost cap override (USD)
+      description: Optional. Leave blank for the standard per-Build-Run cap. May not exceed the configured ceiling.
+      placeholder: "2.00"
+    validations:
+      required: false

@@ -1,0 +1,34 @@
+diff --git a/backend/src/store.ts b/backend/src/store.ts
+--- a/backend/src/store.ts
++++ b/backend/src/store.ts
+@@ -1,9 +1,9 @@
+ import fs from "fs";
+ 
+ const FILE = process.env.DATA_FILE ?? "/data/items.json";
+ 
+-export type Item = { id: number; title: string };
++export type Item = { id: number; name: string };
+ 
+ export function loadItems(): Item[] {
+   return JSON.parse(fs.readFileSync(FILE, "utf8")) as Item[];
+ }
+diff --git a/backend/src/routes/items.ts b/backend/src/routes/items.ts
+--- a/backend/src/routes/items.ts
++++ b/backend/src/routes/items.ts
+@@ -4,5 +4,5 @@ import { isFeatureEnabled } from "../feature-flags";
+ 
+ itemsRouter.get("/api/items", async (_req, res) => {
+   if (await isFeatureEnabled(res, "item-names")) {
+-    res.json(loadItems().map((i) => ({ id: i.id, title: i.title })));
++    res.json(loadItems().map((i) => ({ id: i.id, title: i.name })));
+     return;
+   }
+ }
+diff --git a/flags.json b/flags.json
+--- a/flags.json
++++ b/flags.json
+@@ -1 +1,3 @@
+-[]
++[
++  { "slug": "item-names", "description": "Rename item title to name" }
++]

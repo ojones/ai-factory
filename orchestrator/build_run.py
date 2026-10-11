@@ -28,6 +28,12 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import appstate
+import audit
+import planner
+import update_intake
+from update_intake import form_section  # noqa: F401 - the Issue Form parser lives with Update Intake
+
 FACTORY_DIR = Path(__file__).resolve().parent.parent
 DEEPINFRA = "https://api.deepinfra.com"
 GROWTHBOOK_API = os.environ.get("GROWTHBOOK_API_HOST", "https://ai-factory-growthbook.fly.dev:3100") + "/api/v1"
@@ -36,6 +42,8 @@ PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to 
 # token, and the flag wrapper is the release gate's other half.
 PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# How a Build Run can end well. `planned`: an update Intake was split into child issues, each its own Build Run.
+OK_OUTCOMES = ("released", "nothing_to_release", "planned")
 
 
 class BudgetExhausted(Exception):
@@ -43,7 +51,7 @@ class BudgetExhausted(Exception):
 
 
 class NeedsHuman(Exception):
-    """kind: round_limit | time_limit | pipeline | other"""
+    """kind: round_limit | time_limit | stuck | pipeline | other"""
 
     def __init__(self, kind, message):
         super().__init__(message)
@@ -53,23 +61,11 @@ class NeedsHuman(Exception):
 # --- pure logic (unit-tested) -------------------------------------------------
 
 
-def form_section(body, heading):
-    """Text under `### <heading>` in an Issue Form body, surrounding blanks trimmed."""
-    out, on = [], False
-    for line in body.replace("\r", "").split("\n"):
-        if line == f"### {heading}":
-            on = True
-        elif line.startswith("### "):
-            on = False
-        elif on:
-            out.append(line)
-    return "\n".join(out).strip()
-
-
 def parse_intake(body, default_cap, ceiling):
-    task = form_section(body, "What should be built?")
+    # A new app's Intake asks "What should be built?"; an update Intake asks "What should change?".
+    task = form_section(body, "What should be built?") or form_section(body, "What should change?")
     if not task or task == "_No response_":
-        raise NeedsHuman("other", "The Intake's \"What should be built?\" field is empty.")
+        raise NeedsHuman("other", "The Intake's request field (\"What should be built?\" or \"What should change?\") is empty.")
     raw = form_section(body, "Cost cap override (USD)").lstrip("$")
     if not raw or raw == "_No response_":
         return task, float(default_cap)
@@ -80,6 +76,26 @@ def parse_intake(body, default_cap, ceiling):
     if not 0 < cap <= float(ceiling):
         raise NeedsHuman("other", f"Cost cap override ${cap} must be > 0 and <= the ${ceiling} ceiling.")
     return task, cap
+
+
+def identify_intake(issue, app, number):
+    """(is an Update Intake, its plan metadata) for the issue a Build Run was dispatched with, or NeedsHuman if the issue
+    does not belong to `app`. A new app's Intake is titled with the app's name. An Update Intake has a free title,
+    names the app in its form, and carries the `app:<slug>` label that Update Intake adds after checking the repo."""
+    labels = {l["name"] for l in issue.get("labels", [])}
+    body = issue.get("body") or ""
+    if update_intake.FORM_LABEL not in labels:
+        if issue["title"].strip() != app:
+            raise NeedsHuman("other", f"Intake #{number} is titled {issue['title']!r}, not {app!r}.")
+        return False, {}
+    try:
+        named = update_intake.app_name(body)
+    except ValueError as e:
+        raise NeedsHuman("other", f"Update Intake #{number}: {e}.")
+    if named != app or f"app:{app}" not in labels:
+        raise NeedsHuman("other", f"Update Intake #{number} names {named!r} and is labelled "
+                                  f"{sorted(l for l in labels if l.startswith('app:'))}, not {app!r}.")
+    return True, update_intake.plan_meta(body)
 
 
 def derive_review(doc):
@@ -115,22 +131,105 @@ def previous_report(work, rnd):
     return path if rnd > 1 and path.exists() else "none (this is the first test pass)"
 
 
+CHECK_STATES = ("passed", "failed", "blocked", "not_run")
+
+
+def check_state(r):
+    """One tester result's state. `status` is one of CHECK_STATES; a report that only has the older
+    boolean `passed` is read as passed or failed. Anything unrecognised counts as failed."""
+    if not isinstance(r, dict):
+        return "failed"
+    if r.get("status") in CHECK_STATES:
+        return r["status"]
+    return "passed" if r.get("passed") is True else "failed"
+
+
 def derive_test(doc, expected_flags):
     """(passed, failures). passed is derived from the results, and every new flag needs a result.
-    With no new flags (a first build) the results test the Intake's requirements, and there must
-    be at least one."""
+    Only a check in the `passed` state passes: `failed`, `blocked` (something outside the app stopped
+    the check) and `not_run` all keep the change from releasing. With no new flags (a first build)
+    the results test the Intake's requirements, and there must be at least one."""
     results = doc.get("results") if isinstance(doc, dict) else None
     if not isinstance(results, list):
         raise ValueError("tester output has no results list")
     if not results and not expected_flags:
         raise ValueError("tester recorded no results")
-    failures = [r for r in results if not (isinstance(r, dict) and r.get("passed") is True)]
+    failures = [r for r in results if check_state(r) != "passed"]
     covered = {r.get("flag") for r in results if isinstance(r, dict)}
     for slug in expected_flags:
         if slug not in covered:
-            failures.append({"flag": slug, "check": "coverage", "passed": False,
+            failures.append({"flag": slug, "check": "coverage", "passed": False, "status": "not_run",
                              "evidence": "the tester recorded no result for this flag"})
     return not failures, failures
+
+
+def verification_record(doc, expected_flags):
+    """What was verified, as a compact record for the Report and Summary: a count per state, each
+    check's state, and the limitations the tester reported (what it could not test or clean up)."""
+    results = [r for r in (doc.get("results") if isinstance(doc, dict) else None) or [] if isinstance(r, dict)]
+    counts = {state: 0 for state in CHECK_STATES}
+    checks = []
+    for r in results:
+        state = check_state(r)
+        counts[state] += 1
+        checks.append({"flag": r.get("flag") or "", "check": r.get("check") or "", "status": state})
+    covered = {r.get("flag") for r in results}
+    for slug in expected_flags:
+        if slug not in covered:
+            counts["not_run"] += 1
+            checks.append({"flag": slug, "check": "coverage", "status": "not_run"})
+    limits = doc.get("limitations") if isinstance(doc, dict) else None
+    limitations = [str(x) for x in limits if str(x).strip()] if isinstance(limits, list) else []
+    return {"counts": counts, "checks": checks, "limitations": limitations}
+
+
+def check_key(c):
+    return f"{c['flag']}: {c['check']}" if c.get("flag") else c["check"]
+
+
+def scoreboard_entry(rnd, sha, record, blocking):
+    """One round of the run's scoreboard: every check's state at this commit and the blocking
+    findings that were open. Written by the Orchestrator, never by an Agent."""
+    return {"round": rnd, "sha": sha, "counts": record["counts"],
+            "checks": {check_key(c): c["status"] for c in record["checks"]},
+            "blocking": sorted({" ".join(str(b.get("summary", "")).lower().split()) for b in blocking})}
+
+
+def open_items(entry):
+    """What is still wrong in a round: the checks not passed plus the blocking findings."""
+    return {f"check:{k}={v}" for k, v in entry["checks"].items() if v != "passed"} | {f"finding:{b}" for b in entry["blocking"]}
+
+
+def stalled(entries, n):
+    """True when the last `n` rounds each left exactly the same non-empty set of open items: the
+    fix attempts in between changed nothing the checks can see. 0 or 1 disables it."""
+    if n < 2 or len(entries) < n:
+        return False
+    last = [open_items(e) for e in entries[-n:]]
+    return bool(last[0]) and all(x == last[0] for x in last)
+
+
+ERROR_LOG_RE = re.compile(r'"level"\s*:\s*"(?:error|fatal)"', re.I)
+
+
+def count_errors(log_text):
+    """Error-level lines in a Managed App's structured (JSON) logs (STANDARDS-VISIBILITY.md)."""
+    return len(ERROR_LOG_RE.findall(log_text or ""))
+
+
+def watchdog_trip(samples, baseline_errors, max_failures, max_new_errors):
+    """The reason to switch a just-released flag off, or None. `samples` are in time order, each
+    {"healthy": bool, "errors": int}. Trips on `max_failures` health failures in a row, or on the
+    error count rising `max_new_errors` above what the app logged before the release."""
+    streak = 0
+    for sample in samples:
+        streak = 0 if sample["healthy"] else streak + 1
+        if streak >= max_failures:
+            return f"the health check failed {streak} times in a row after the release"
+    if samples and max(sample["errors"] for sample in samples) - baseline_errors >= max_new_errors:
+        return (f"error-level log lines rose from {baseline_errors} to {max(s['errors'] for s in samples)} "
+                f"after the release (limit: {max_new_errors} new)")
+    return None
 
 
 def new_flag_slugs(base_json, head_json):
@@ -145,6 +244,27 @@ def new_flag_slugs(base_json, head_json):
 
 def protected_violations(changed_files):
     return [f for f in changed_files if f.startswith(PROTECTED) or f in PROTECTED]
+
+
+LEDGER_LABEL = "factory-ledger"
+LEDGER_RE = re.compile(r"^ledger (\d{4}-\d{2}-\d{2}) (\S+) (\d+(?:\.\d+)?) run:(\S+)\s*$")
+
+
+def ledger_line(day, app, usd, run_id):
+    """The comment a finished Build Run adds to the spend ledger issue."""
+    return f"ledger {day} {app} {usd:.4f} run:{run_id}"
+
+
+def ledger_total(comment_bodies, day):
+    """USD recorded in the ledger for `day` (UTC date string). A line that is not a ledger line, or is for
+    another day, counts for nothing; a run id seen twice counts once."""
+    seen, total = set(), 0.0
+    for body in comment_bodies:
+        m = LEDGER_RE.match((body or "").strip())
+        if m and m.group(1) == day and m.group(4) not in seen:
+            seen.add(m.group(4))
+            total += float(m.group(3))
+    return round(total, 4)
 
 
 def release_gate(ci_green, deploy_healthy, tester_passed, reviewer_clean, reviewed_sha, head_sha):
@@ -244,7 +364,7 @@ def numbered(text):
     return "\n".join(f"{i}: {line}" for i, line in enumerate(text.split("\n"), 1))
 
 
-def build_review_context(git, base, head, max_chars):
+def build_review_context(git, base, head, max_chars, spec=None):
     """Everything the reviewer would otherwise go and look up, in one message.
 
     `git(*args)` returns a git command's stdout ('' when it fails), run in the app checkout.
@@ -254,7 +374,9 @@ def build_review_context(git, base, head, max_chars):
     changed = [c for c in git("diff", "--name-only", "--diff-filter=d", base, head).split("\n") if c]
     shown = [c for c in changed if not c.endswith(SKIP_SUFFIXES)]
     extra = [f for f in REVIEW_CONTEXT_FILES if f not in shown]
-    parts = [f"# INTAKE.md\n{git('show', f'{head}:INTAKE.md')}",
+    # The spec is the original INTAKE.md for a first build; for an update it is the change being made now
+    # (INTAKE.md describes the app as first built, not this change).
+    parts = [f"# Change request (the spec for this change)\n{spec}" if spec else f"# INTAKE.md\n{git('show', f'{head}:INTAKE.md')}",
              f"# flags.json\n{git('show', f'{head}:flags.json')}",
              f"# Diff {base[:8]}..{head[:8]}\n{git('diff', base, head, '--', ':(exclude)*lock*')}"]
     for path in shown + [f for f in extra if git("show", f"{head}:{f}")]:
@@ -382,7 +504,7 @@ class State:
         self.path = Path(path)
         self.d = {"app": app, "issue_number": issue, "run_url": run_url, "outcome": "running", "message": "",
                   "cap_usd": None, "spent_usd": 0.0, "base_sha": None, "head_sha": None, "review_passes": 0,
-                  "commits": [], "stages": [], "release": None, "blocking": [],
+                  "commits": [], "stages": [], "release": None, "blocking": [], "verification": None, "scoreboard": [],
                   "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
     def save(self):
@@ -462,16 +584,18 @@ class BuildRun:
     # --- setup
 
     def setup(self):
-        out = self.gh(["issue", "view", self.issue, "--repo", self.factory_repo, "--json", "title,body"],
+        out = self.gh(["issue", "view", self.issue, "--repo", self.factory_repo, "--json", "title,body,labels"],
                       token=self.factory_token).stdout
         issue = json.loads(out)
-        if issue["title"].strip() != self.app:
-            raise NeedsHuman("other", f"Intake #{self.issue} is titled {issue['title']!r}, not {self.app!r}.")
+        self.update_intake, self.plan_meta = identify_intake(issue, self.app, self.issue)
+        self.state.d["intake_kind"] = "update" if self.update_intake else "new"
         self.task, self.cap = parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
                                            self.lim["cost_cap_usd_ceiling"])
+        self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
         self.state.d["cap_usd"] = self.cap
         self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
         self.state.save()
+        self.check_daily_cap()
         self.wait_for_capacity()
         self.meter = Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
         self.preview = preview_token(os.environ["PREVIEW_MASTER_SECRET"], self.app)
@@ -506,6 +630,31 @@ class BuildRun:
         except (subprocess.TimeoutExpired, OSError):
             code = "timeout"
         log(f"npm ci {'ok' if code == 0 else f'failed ({code}); the coder will install for itself'} in {time.time() - began:.0f}s")
+
+    def ledger_issue(self):
+        """The number of the open spend-ledger issue in ai-factory, or None before the first run has made one."""
+        out = self.gh(["issue", "list", "--repo", self.factory_repo, "--label", LEDGER_LABEL, "--state", "open",
+                       "--json", "number"], token=self.factory_token, check=False).stdout
+        found = json.loads(out or "[]")
+        return found[0]["number"] if found else None
+
+    def check_daily_cap(self):
+        """Refuse to start a Build Run once today's finished runs have spent `daily_cost_cap_usd`. Runs still
+        in flight are not counted until they finish, so concurrent runs can overshoot by their own caps."""
+        cap = float(self.lim.get("daily_cost_cap_usd", 0) or 0)
+        if cap <= 0:
+            return
+        number = self.ledger_issue()
+        if not number:
+            return
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        out = self.gh(["api", f"repos/{self.factory_repo}/issues/{number}/comments?per_page=100&since={day}T00:00:00Z",
+                       "--paginate", "--jq", ".[].body"], token=self.factory_token, check=False).stdout
+        total = ledger_total(out.split("\n"), day)
+        self.state.d["daily_spent_usd"] = total
+        if total >= cap:
+            raise NeedsHuman("other", f"today's Build Runs have already spent ${total:.2f} of the ${cap:.2f} daily cap; "
+                                      "try again tomorrow or raise `limits.daily_cost_cap_usd`")
 
     def wait_for_capacity(self):
         cap = self.lim["max_simultaneous_build_runs"]
@@ -546,7 +695,8 @@ class BuildRun:
         Returns (exit status, 'timeout' if killed; cost; token usage)."""
         self.check_limits()
         model = self.model_for(role, label)
-        prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, "build_kind": self.build_kind, **values})
+        prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, "build_kind": self.build_kind,
+                                                                         "spec": getattr(self, "spec", None) or getattr(self, "task", ""), **values})
         with self.lock:
             before = self.state.d["spent_usd"]
             jwt = self.meter.mint(model, share)
@@ -767,7 +917,8 @@ class BuildRun:
         self.check_limits()
         role = self.cfg["roles"]["reviewer"]
         context = build_review_context(lambda *a: self.git(*a, check=False).stdout, base, head,
-                                       self.lim.get("review_context_max_chars", 200000))
+                                       self.lim.get("review_context_max_chars", 200000),
+                                       spec=self.spec if getattr(self, "update_intake", False) else None)
         system = render(load_prompt(role["fast_prompt"]), {"app_name": self.app, "build_kind": self.build_kind, "base_sha": base[:8], "head_sha": head[:8]})
         with self.lock:
             jwt = self.meter.mint(role["model"], share)
@@ -844,6 +995,7 @@ class BuildRun:
         try:
             tdoc, cost, usage = test_job.result()
             tpassed, test_failures = derive_test(tdoc, flags)
+            self.state.d["verification"] = {"round": rnd, "sha": head, **verification_record(tdoc, flags)}
             self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", usage)
         except Exception as e:  # noqa: BLE001
             errors.append(e)
@@ -886,11 +1038,112 @@ class BuildRun:
         self.state.d["release"] = {"released": released, "kept": kept}
         self.state.stage("Release", "-", "-", 0, f"{len(released)} flag(s) released")
 
+    def record_round(self, rnd, head, blocking):
+        """Add this round to the scoreboard (state.json, so it reaches the Report, and artifacts/progress.json)."""
+        record = self.state.d.get("verification")
+        if not record or record.get("round") != rnd:
+            record = {"round": rnd, "sha": head, "counts": {s: 0 for s in CHECK_STATES}, "checks": [], "limitations": []}
+        self.state.d["scoreboard"].append(scoreboard_entry(rnd, head, record, blocking))
+        self.state.save()
+        (self.art / "progress.json").write_text(json.dumps(self.state.d["scoreboard"], indent=2))
+
+    def app_error_count(self):
+        try:
+            p = sh(["flyctl", "logs", "--no-tail", "--app", self.app],
+                   env={**os.environ, "FLY_API_TOKEN": os.environ.get("FLY_API_TOKEN", "")}, check=False, timeout=120)
+            return count_errors(p.stdout or "")
+        except (OSError, subprocess.TimeoutExpired):
+            return 0
+
+    def disable_flags(self, keys):
+        """Switch flags off in production and read each back. Returns the keys that are still on."""
+        still_on = []
+        for key in keys:
+            self.gb("POST", f"/features/{key}", {"environments": {"production": {"enabled": False, "rules": []}}})
+            status, r = self.gb("GET", f"/features/{key}")
+            env = ((r.get("feature") or r) if isinstance(r, dict) else {}).get("environments", {}).get("production", {})
+            if status != 200 or env.get("enabled") is not False:
+                still_on.append(key)
+        return still_on
+
+    def watch_release(self):
+        """After a release, watch the app for `watchdog_minutes`. A run of failed health checks, or a
+        rise in error-level log lines, switches the flags this run released off by itself (never one
+        that already existed, which the owner controls) and ends the run as `watchdog_disabled` so
+        finalize opens the Issue. The flag is the rollback lever, and the release step never turns
+        it back on. 0 minutes disables the watch."""
+        keys = list((self.state.d.get("release") or {}).get("released") or [])
+        minutes = float(self.lim.get("watchdog_minutes", 0))
+        if minutes <= 0 or not keys:
+            return
+        interval = float(self.lim.get("watchdog_interval_seconds", 30))
+        end = min(time.time() + minutes * 60, self.deadline)
+        baseline = self.app_error_count()
+        samples = []
+        log(f"watching {self.app} for {minutes:g} minutes after the release")
+        while time.time() < end:
+            time.sleep(interval)
+            status, _ = http("GET", f"https://{self.app}.fly.dev/api/health", timeout=20)
+            samples.append({"healthy": status == 200, "errors": self.app_error_count()})
+            reason = watchdog_trip(samples, baseline, int(self.lim.get("watchdog_max_failures", 3)),
+                                   int(self.lim.get("watchdog_max_errors", 5)))
+            if reason:
+                still_on = self.disable_flags(keys)
+                note = f" Could not confirm these are off: {', '.join(still_on)}; turn them off in GrowthBook now." if still_on else ""
+                self.state.d.update(outcome="watchdog_disabled", message=(
+                    f"Released {len(keys)} flag(s), then switched them off: {reason}.{note}"))
+                self.state.stage("Watchdog", "-", "-", 0, "flags switched off")
+                return
+        self.state.stage("Watchdog", "-", "-", 0, f"clean for {minutes:g} min")
+
+    def plan_change(self):
+        """Plan an Update Intake with the planner Agent, then check the plan deterministically. Returns True when
+        the request was split into several change sets and filed as child issues (this run is then finished), False
+        when there is one change set, which becomes this run's task. A plan that fails the check, or that has a
+        blocking question, stops the run for a person."""
+        path = self.work / "plan.json"
+        limit = int(self.lim.get("planner_max_change_sets", planner.MAX_CHANGE_SETS))
+        problems = []
+
+        def check(doc):
+            found, _ = planner.validate_plan(doc, self.build_kind, limit)
+            problems[:] = found
+            if found:
+                raise ValueError("; ".join(found))
+
+        try:
+            doc, cost, usage = self.agent_json("planner", "1", {"task": self.task, "plan_path": path}, path, check=check)
+        except NeedsHuman:
+            if problems:
+                raise NeedsHuman("other", "the planner's plan was rejected: " + "; ".join(problems))
+            raise
+        _, questions = planner.validate_plan(doc, self.build_kind, limit)
+        sets = doc["change_sets"]
+        self.state.d["plan"] = {"change_sets": [{"id": c["id"], "title": c["title"], "flag": c.get("flag")} for c in sets],
+                                "assumptions": doc.get("assumptions") or []}
+        self.state.stage("Plan", "planner", "1", cost, f"{len(sets)} change set(s)" + (", needs an answer" if questions else ""), usage)
+        (self.art / "plan.json").write_text(json.dumps(doc, indent=2))
+        if questions:
+            raise NeedsHuman("other", "the plan needs a person to answer first: " + " | ".join(questions)
+                             + ". Put the answers in the Update Intake issue, then add `proceed-with-change` again.")
+        if len(sets) == 1:
+            self.task = update_intake.render_change_set_task(sets[0], request=self.task)
+            self.spec = self.task
+            return False
+        made = update_intake.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
+                                           planner.topological_order(sets), self.task)
+        self.state.d.update(outcome="planned", message="Planned as %d change sets, each now its own Update Intake and Build Run, in order: %s."
+                            % (len(made), ", ".join(f"{cs} (#{n})" for cs, n in made)))
+        return True
+
     # --- the run
 
     def run(self):
         try:
             self.setup()
+            if self.update_intake and not self.plan_meta and self.lim.get("planner_enabled", True):
+                if self.plan_change():
+                    return
             base = self.state.d["base_sha"]
             findings_path = self.work / "findings-0.json"
             findings_path.write_text(json.dumps({"blocking": [], "minor": []}))
@@ -903,11 +1156,13 @@ class BuildRun:
                 # Kept on a clean pass too: the minor findings of a run that ships are what the post-mortem learns from.
                 findings_path = self.work / f"findings-{rnd}.json"
                 findings_path.write_text(json.dumps(findings, indent=2))
+                self.record_round(rnd, head, findings["blocking"])
                 if release_gate(True, True, tpassed, clean, head, self.head()):
                     self.check_limits()
                     if flags:
                         self.release(flags, head)
                         self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
+                        self.watch_release()
                     else:
                         self.state.d.update(outcome="nothing_to_release", message=(
                             "First build deployed and live; it has no flags to release." if self.build_kind == "first build"
@@ -915,12 +1170,15 @@ class BuildRun:
                     return
                 if rnd == self.lim["review_rounds"]:
                     raise NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
+                if stalled(self.state.d["scoreboard"], int(self.lim.get("stuck_rounds", 0))):
+                    raise NeedsHuman("stuck", f"the last {self.lim['stuck_rounds']} rounds left the same checks failing and the "
+                                              "same findings open; more fix rounds are not changing anything")
                 summary = "\n".join(describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
         except BudgetExhausted as e:
             self.state.d.update(outcome="budget_exhausted", message=str(e))
         except NeedsHuman as e:
-            self.state.d.update(outcome={"time_limit": "time_limit", "round_limit": "round_limit"}.get(e.kind, "needs_human"),
+            self.state.d.update(outcome={"time_limit": "time_limit", "round_limit": "round_limit", "stuck": "stuck"}.get(e.kind, "needs_human"),
                                 message=str(e))
         except Exception as e:  # noqa: BLE001 - any crash must still reach finalize
             traceback.print_exc()
@@ -936,6 +1194,8 @@ OUTCOME_TITLES = {
     "budget_exhausted": "Build Run: budget exhausted",
     "round_limit": "Build Run: needs human (review round limit reached)",
     "time_limit": "Build Run: needs human (time limit reached)",
+    "stuck": "Build Run: needs human (no progress across rounds)",
+    "watchdog_disabled": "Build Run: release switched off by the watchdog",
     "needs_human": "Build Run: needs human",
     "crash": "Build Run: crash",
     "running": "Build Run: crash (it ended without finishing)",
@@ -943,7 +1203,7 @@ OUTCOME_TITLES = {
 
 
 def render_summary(d):
-    icon = {"released": ":white_check_mark:", "nothing_to_release": ":white_check_mark:"}.get(d["outcome"], ":x:")
+    icon = ":white_check_mark:" if d["outcome"] in OK_OUTCOMES else ":x:"
     lines = [f"## Build Run Summary: {d['app']}", "",
              f"**Status**: {icon} `{d['outcome']}`  ", f"**Message**: {d['message'] or '-'}  ",
              f"**Cost**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f} cap  ",
@@ -968,11 +1228,100 @@ def render_summary(d):
         verdict = "over the goal" if top > goal else "under the goal"
         lines += ["", f"**Peak context this run**: {top:,} tokens ({who}), {verdict} of {goal:,}. "
                   "A peak is the largest prompt in a single LLM call, i.e. how big one Agent's context got."]
+    ver = d.get("verification")
+    if ver:
+        c = ver["counts"]
+        lines += ["", f"**Verification** (round {ver['round']}, `{str(ver['sha'])[:8]}`): {c['passed']} passed, {c['failed']} failed, "
+                  f"{c['blocked']} blocked, {c['not_run']} not run."]
+        if ver.get("limitations"):
+            lines += ["", "**Not tested or not cleaned up (limitations)**:"] + [f"- {x}" for x in ver["limitations"]]
+    if d.get("audit"):
+        lines += audit.render_audit(d["audit"]).rstrip("\n").split("\n")
+    board = d.get("scoreboard") or []
+    if len(board) > 1:
+        lines += ["", "**Scoreboard** (checks passed / failed / blocked / not run, blocking findings open):"]
+        lines += [f"- round {e['round']}: {e['counts']['passed']} / {e['counts']['failed']} / {e['counts']['blocked']} / "
+                  f"{e['counts']['not_run']}, {len(e['blocking'])} open" for e in board]
     rel = d.get("release")
     lines += ["", "**Release**: " + (f"released {', '.join(rel['released']) or 'nothing new'}" if rel else "not released")]
-    if d["blocking"] and d["outcome"] not in ("released", "nothing_to_release"):
+    if d["blocking"] and d["outcome"] not in OK_OUTCOMES:
         lines += ["", "**Open blocking findings at the end**:"] + [f"- [{b['source']}] {b['summary']}" for b in d["blocking"]]
     return "\n".join(lines) + "\n"
+
+
+def record_spend_in_ledger(d, repo, run_id, token):
+    """Add this run's spend to the ledger issue (best effort: a failure here never changes the run's outcome)."""
+    try:
+        if not d.get("spent_usd"):
+            return
+        env = {**os.environ, "GH_TOKEN": token}
+        out = sh(["gh", "issue", "list", "--repo", repo, "--label", LEDGER_LABEL, "--state", "open", "--json", "number"],
+                 env=env, check=False).stdout
+        found = json.loads(out or "[]")
+        if not found:
+            sh(["gh", "label", "create", LEDGER_LABEL, "--repo", repo, "--color", "ededed",
+                "--description", "One comment per Build Run with what it spent"], env=env, check=False)
+            made = sh(["gh", "issue", "create", "--repo", repo, "--label", LEDGER_LABEL, "--title", "Factory spend ledger", "--body",
+                       "One comment per finished Build Run (`ledger <date> <app> <usd> run:<id>`). The Orchestrator adds the day's "
+                       "lines to check `limits.daily_cost_cap_usd`. Do not edit or close this issue."], env=env, check=False).stdout
+            m = re.search(r"/issues/(\d+)", made)
+            found = [{"number": int(m.group(1))}] if m else []
+        if found:
+            sh(["gh", "issue", "comment", str(found[0]["number"]), "--repo", repo, "--body",
+                ledger_line(time.strftime("%Y-%m-%d", time.gmtime()), d["app"], d["spent_usd"], run_id)], env=env, check=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"could not record spend in the ledger: {type(e).__name__}", flush=True)
+
+
+def update_state_issues(d, factory_repo, pat, factory_token):
+    """Rewrite the app's State issue and ai-factory's registry issue after a run (best effort)."""
+    import tempfile
+    try:
+        owner, app = factory_repo.split("/")[0], d["app"]
+        app_repo = f"{owner}/{app}"
+
+        def gh(args, token):
+            return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=False).stdout
+
+        def upsert(repo, token, label, title, color, render):
+            found = json.loads(gh(["issue", "list", "--repo", repo, "--label", label, "--state", "open",
+                                   "--json", "number,body,url"], token) or "[]")
+            prev = found[0]["body"] if found else ""
+            body = render(prev)
+            if found:
+                number, url = found[0]["number"], found[0]["url"]
+                with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+                    f.write(body)
+                gh(["issue", "edit", str(number), "--repo", repo, "--body-file", f.name], token)
+                return url
+            gh(["label", "create", label, "--repo", repo, "--color", color, "--description", "Maintained by the Orchestrator"], token)
+            with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+                f.write(body)
+            made = gh(["issue", "create", "--repo", repo, "--label", label, "--title", title, "--body-file", f.name], token)
+            m = re.search(r"https://\S+/issues/(\d+)", made)
+            if m:
+                gh(["issue", "pin", m.group(1), "--repo", repo], token)  # best effort; not every plan allows it
+            return m.group(0) if m else ""
+
+        state_url = upsert(app_repo, pat, appstate.STATE_LABEL, "Factory: app state", "5319e7", lambda prev: appstate.render_state(prev, d))
+        upsert(factory_repo, factory_token, appstate.REGISTRY_LABEL, "Factory: Managed Apps", "5319e7",
+               lambda prev: appstate.render_registry(prev, d, state_url))
+    except Exception as e:  # noqa: BLE001
+        print(f"could not update the state issues: {type(e).__name__}", flush=True)
+
+
+def finish_update_intake(ok, repo, number, pat):
+    """An Update Intake that finished is closed and starts the change sets waiting on it; one that stopped loses
+    `proceed-with-change`, so adding the label again retries it (a label that is still there cannot fire again)."""
+    try:
+        env = {**os.environ, "GH_TOKEN": pat}
+        if ok:
+            sh(["gh", "issue", "close", str(number), "--repo", repo, "--reason", "completed"], env=env, check=False)
+            update_intake.advance(repo, pat, number)
+        else:
+            sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", update_intake.GO], env=env, check=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"could not finish the Update Intake: {type(e).__name__}", flush=True)
 
 
 def finalize():
@@ -989,21 +1338,28 @@ def finalize():
     elif d["outcome"] == "running":
         d["message"] = d["message"] or "the Build Run process ended without recording an outcome (cancelled or killed)"
     d["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    d["audit"] = audit.audit_report(d)
     summary = render_summary(d)
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
     (work / "artifacts" / "build-run-report.json").write_text(json.dumps(d, indent=2))
     with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
         f.write(summary)
-    ok = d["outcome"] in ("released", "nothing_to_release")
+    ok = d["outcome"] in OK_OUTCOMES
+    record_spend_in_ledger(d, os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_RUN_ID", "0"), os.environ["FACTORY_GH_TOKEN"])
     pat, ftoken = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
+    update_state_issues(d, os.environ["GITHUB_REPOSITORY"], pat, ftoken)
     if not ok:
         body = f"{d['message']}\n\n**Build Run**: {run_url}\n**Spent**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f}\n\n" + summary
         (work / "issue-body.md").write_text(body)
         sh(["gh", "issue", "create", "--repo", f"{owner}/{app}", "--title", OUTCOME_TITLES.get(d["outcome"], "Build Run: crash"),
             "--body-file", str(work / "issue-body.md")], env={**os.environ, "GH_TOKEN": pat}, check=False)
+    retry = ("" if ok or d.get("intake_kind") != "update"
+             else f"\n\nEdit this issue if the request needs to change, then add `{update_intake.GO}` again to retry.")
     sh(["gh", "issue", "comment", d["issue_number"], "--repo", os.environ["GITHUB_REPOSITORY"], "--body",
-        f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url}))"],
+        f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],
        env={**os.environ, "GH_TOKEN": ftoken}, check=False)
+    if d.get("intake_kind") == "update":
+        finish_update_intake(ok, os.environ["GITHUB_REPOSITORY"], d["issue_number"], pat)
     return 0 if ok else 1
 
 

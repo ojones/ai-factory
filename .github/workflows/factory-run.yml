@@ -1,0 +1,40 @@
+name: Factory Run
+
+# Analyse one lesson on demand (orchestrator/postmortem.py lesson <issue>): adding the label
+# `ready-for-factory-run` to a `factory-learning` issue runs the post-mortem Agent over that lesson and opens
+# a learning PR (or comments that it found nothing to change). Lessons from a Build Run are handled by the
+# Build Run workflow itself; this is for older lessons, ones marked fix-ineffective, and re-tries.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: factory-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.event.label.name == 'ready-for-factory-run' && contains(github.event.issue.labels.*.name, 'factory-learning')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install "openhands==$(cat agents/openhands-version.txt)" pyyaml
+      - name: Analyse the lesson
+        env:
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+        run: python orchestrator/postmortem.py lesson "${{ github.event.issue.number }}"

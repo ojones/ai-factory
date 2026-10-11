@@ -1,0 +1,63 @@
+name: Dashboard
+
+# Once a day (and on demand): collect the Reports of Build Runs it has not seen, keep the history on the
+# `factory-data` branch (history.json and a static index.html, which GitHub Pages can serve if Pages is
+# enabled for that branch), and write a short digest into this run's summary. No server, no database.
+# orchestrator/dashboard.py does the work.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+  issues: read
+
+concurrency:
+  group: dashboard
+  cancel-in-progress: false
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: factory
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the history branch, or start it
+        run: |
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::${auth##* }"
+          url="https://github.com/${GITHUB_REPOSITORY}.git"
+          if git -c http.extraheader="$auth" ls-remote --exit-code --heads "$url" factory-data >/dev/null 2>&1; then
+            git -c http.extraheader="$auth" clone -q --branch factory-data --depth 1 "$url" data
+          else
+            git init -q -b factory-data data
+            git -C data remote add origin "$url"
+          fi
+
+      - name: Update history and dashboard, write the digest
+        run: python factory/orchestrator/dashboard.py data
+
+      - name: Publish to the history branch
+        run: |
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          cd data
+          git config user.name "ai-factory-dashboard"
+          git config user.email "dashboard@ai-factory.local"
+          git add history.json index.html
+          if git diff --cached --quiet; then
+            echo "Nothing new."
+          else
+            git commit -q -m "Dashboard update $(date -u +%F)"
+            git -c http.extraheader="$auth" push -q origin factory-data
+          fi

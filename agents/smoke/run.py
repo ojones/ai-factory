@@ -142,7 +142,9 @@ def load_fixture(p):
     prefix = f"Contents of INTAKE.md:\n{intake.read_text()}\n\n" if intake.exists() else ""
     return prefix + p.read_text()
 
-fixtures = {p.stem: load_fixture(p) for p in sorted((HERE / "fixtures").glob("*.diff"))}
+# FIXTURES=name,name limits the T5 run to those fixtures (to repeat a flaky one).
+ONLY = {n for n in os.environ.get("FIXTURES", "").split(",") if n}
+fixtures = {p.stem: load_fixture(p) for p in sorted((HERE / "fixtures").glob("*.diff")) if not ONLY or p.stem in ONLY}
 expected = json.loads((HERE / "expected.json").read_text())
 
 def review(diff, extra=None, kind="update"):

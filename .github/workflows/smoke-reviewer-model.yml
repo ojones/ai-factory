@@ -53,7 +53,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install OpenHands
-        run: pip install openhands
+        run: pip install "openhands==$(cat agents/openhands-version.txt)"
       - name: Build a throwaway repo containing a known off-by-one
         run: |
           set -e

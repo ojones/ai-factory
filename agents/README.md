@@ -19,6 +19,7 @@ The Build Run replaces `{{name}}` placeholders before invoking OpenHands.
 | reviewer | `app_name`, `base_sha`, `head_sha`, `verdict_path` |
 | tester | `app_name`, `app_url`, `head_sha`, `report_path`, `previous_report`; env `PREVIEW_TOKEN` |
 | pipeline | `app_name`, `head_sha`, `failure_run_url`, `diagnosis_path`, `context_dir` |
+| planner | `app_name`, `build_kind`, `task`, `plan_path` (first stage of a Build Run for an Update Intake; `orchestrator/planner.py` checks its output) |
 | postmortem | `facts_path`, `result_path`, `categories` (run by `orchestrator/postmortem.py`, not the Build Run) |
 
 ## Output contracts
@@ -26,7 +27,12 @@ The Build Run replaces `{{name}}` placeholders before invoking OpenHands.
 Each non-coder role writes JSON the Orchestrator parses; the Orchestrator never trusts a role's own conclusion field over the evidence.
 
 - **reviewer** (`verdict_path`): `analysis`, `findings[{severity: blocking|minor, summary, evidence, file, line, requirement, suggested_fix, repro}]` (the last five are best-effort; empty when not applicable), `verdict`, in that key order. The Orchestrator derives the verdict from the findings.
-- **tester** (`report_path`): `passed`, `results[{flag, check, passed, evidence, repro}]` (`repro` is best-effort). The Orchestrator derives `passed` from `results`.
+- **tester** (`report_path`): `passed`, `results[{flag, check, status, passed, evidence, repro}]` (`repro` is best-effort), `limitations[]`. `status` is `passed`, `failed`, `blocked` or `not_run`; only `passed` passes, and the Orchestrator derives the top-level `passed` from the statuses (the boolean alone still works for an older report). `limitations` lists what could not be tested or cleaned up, and is shown in the Summary. The Orchestrator keeps a per-round scoreboard of check states and open findings (`artifacts/progress.json`, and `scoreboard` in the Report).
+- **planner** (`plan_path`): `requirements[{id, text}]`, `assumptions[]`, `open_questions[{id, text, blocking}]`, `change_sets[{id, title, requirements, depends_on, criteria, verification, flag, internal_only, out_of_scope}]`. `orchestrator/planner.py` rejects a plan with uncovered requirements, a dependency cycle, a change set without criteria or verification, an update change set without its own flag, or more than 8 change sets, and reports blocking questions as needing a person.
 - **pipeline** (`diagnosis_path`): `category: code|workflow|infra|flaky`, `summary`, `fix_request` (string or null), `retry_recommended`.
 
 `agents/smoke/` holds fixtures that replay known-buggy diffs through the reviewer; rerun it after changing the reviewer prompt or model.
+
+## Unattended-run limits
+
+`limits.stuck_rounds` ends a run early (`stuck`, a needs-human Issue) when that many rounds in a row leave exactly the same checks failing and the same findings open. `limits.watchdog_*` control the watch after a release: for `watchdog_minutes` the Orchestrator polls the app's health and counts error-level log lines, and on `watchdog_max_failures` failures in a row or `watchdog_max_errors` new error lines it switches off the flags that run released (never a flag that already existed) and ends the run as `watchdog_disabled`. Both are in `profiles.yml`; setting either to 0 turns it off.

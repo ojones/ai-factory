@@ -36,7 +36,7 @@ jobs:
           python-version: "3.12"
       - run: pip install pyyaml
       - if: ${{ inputs.mode == 'agent' }}
-        run: pip install openhands
+        run: pip install "openhands==$(cat agents/openhands-version.txt)"
       - name: Replay
         env:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}

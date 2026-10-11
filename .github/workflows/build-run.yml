@@ -53,7 +53,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Install OpenHands and the orchestrator's dependencies
-        run: pip install openhands pyyaml
+        run: pip install "openhands==$(cat factory/agents/openhands-version.txt)" pyyaml
 
       - name: Unit-test the orchestrator's deterministic logic
         run: python -m unittest discover factory/orchestrator

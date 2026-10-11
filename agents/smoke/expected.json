@@ -46,5 +46,13 @@
     "match": "",
     "build_kind": "first build",
     "no_finding_match": "flag"
+  },
+  "vacuous-test": {
+    "verdict": "changes_requested",
+    "match": "test|assert|toBeDefined|cannot fail|vacuous|behaviou?r"
+  },
+  "rename-field": {
+    "verdict": "changes_requested",
+    "match": "rename|additive|old|existing|migrat|title|persist|stored"
   }
 }

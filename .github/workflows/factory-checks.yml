@@ -1,0 +1,96 @@
+name: Factory checks
+
+# Checks on every pull request to ai-factory, including the learning PRs the post-mortem Agent opens
+# (orchestrator/postmortem.py). A learning PR labelled `auto-merge-candidate` merges itself at the end,
+# but only if the diff is again an additive lint or formatter change (recomputed here, the label is not
+# trusted) and every check above passed. Everything else waits for a human to merge.
+#
+# To make these checks block human merges too, require "unit", "starter" and "reviewer-smoke" in branch
+# protection for main (a repository setting, not something this file can turn on).
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Unit-test the orchestrator
+        run: python -m unittest discover orchestrator
+
+  starter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: templates/starter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: The Starter Template still installs, type-checks and passes its tests
+        run: |
+          npm ci
+          npm run check
+          npm test
+
+  # Re-run the reviewer's seeded-bug fixtures when a prompt or a fixture changed. Spends a few cents.
+  reviewer-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changed
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE '^(agents/prompts/|agents/smoke/|agents/profiles\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.changed.outputs.run == 'true'
+        name: Reviewer smoke fixtures
+        env:
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          TRIALS: "3"
+        run: |
+          pip install pyyaml
+          export MODEL="$(python -c "import yaml; print(yaml.safe_load(open('agents/profiles.yml'))['roles']['reviewer']['model'])")"
+          python agents/smoke/run.py
+
+  auto-merge:
+    needs: [unit, starter, reviewer-smoke]
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'learning/') &&
+      contains(github.event.pull_request.labels.*.name, 'auto-merge-candidate')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Is the diff still an additive lint or formatter change?
+        run: python orchestrator/postmortem.py auto-merge-check "origin/${{ github.base_ref }}" HEAD
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --squash --delete-branch

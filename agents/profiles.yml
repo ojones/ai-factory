@@ -18,7 +18,8 @@ roles:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     prompt: prompts/tester.md
   reviewer:
-    # Deliberately a different lab than the coder, so they don't share blind spots.
+    # Intended to be a different lab than the coder so they don't share blind spots, but the coder is
+    # now DeepSeek-V4.1-Flash too, so today they share a model (known deviation; see ARCHITECTURE.md).
     # Pro (deepseek-ai/DeepSeek-V4-Pro-0813, the #25 pick) spent 7-20 minutes per review in real
     # Build Runs, reasoning at ~40 tokens/s. Flash scored 50/50 on the smoke fixtures against
     # Pro's 48/50, at ~10s a review, so it is the reviewer (issue #41). Switch back by editing here.
@@ -31,6 +32,11 @@ roles:
   pipeline:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     prompt: prompts/pipeline.md
+  # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planner.py checks the
+  # plan). Runs first in a Build Run for an Update Intake. The model is a first guess, unmeasured.
+  planner:
+    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    prompt: prompts/planner.md
   # After a Build Run that did not end clean: explains why and proposes a fix as a PR (orchestrator/postmortem.py).
   postmortem:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
@@ -49,6 +55,10 @@ limits:
   time_limit_minutes: 330
   # The post-mortem Agent after a stuck run; one run, outside the Build Run's cost cap.
   postmortem_timeout_minutes: 15
+  # The post-mortem Agent gets its own single-model credential limited to this much per analysis (it never
+  # holds the parent key), and no more than this many learning PRs may be open at once.
+  postmortem_cost_cap_usd: 0.50
+  max_open_learning_prs: 3
   # Per Agent invocation; a hung Agent is killed and counts as a failed attempt.
   agent_timeout_minutes: 45
   # Waiting for Test Gate -> Build -> Deploy of one pushed commit.
@@ -57,10 +67,26 @@ limits:
   pipeline_retries: 2
   # Coder fixes triggered by Pipeline Agent diagnoses (separate from review_rounds).
   pipeline_fix_attempts: 5
+  # Refuse to start a Build Run once the Build Runs that finished today (UTC) have spent this much in total,
+  # read from the spend-ledger issue in ai-factory. 0 disables it. Runs in flight count when they finish.
+  daily_cost_cap_usd: 10.00
   # Build Runs allowed in flight across all Managed Apps (v1 stages one at a time).
   max_simultaneous_build_runs: 1
   # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to
   # stay under, so Agents work in the model's reliable range. Over-goal stages are flagged.
   context_goal_tokens: 100000
+  # An Update Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
+  # for one Intake. Set planner_enabled false to run an Update Intake's request straight through as one change.
+  planner_enabled: true
+  planner_max_change_sets: 8
+  # Stop early when this many rounds in a row leave exactly the same checks failing and the same
+  # findings open (the fix attempts are changing nothing the checks can see). 0 disables it.
+  stuck_rounds: 3
+  # After a release the Orchestrator watches the app this long and switches the flags it released
+  # off by itself on a run of failed health checks or a rise in error-level log lines. 0 disables it.
+  watchdog_minutes: 10
+  watchdog_interval_seconds: 30
+  watchdog_max_failures: 3
+  watchdog_max_errors: 5
   # Largest single-call review prompt, in characters (about 4 per token); bigger changes use the exploring reviewer.
   review_context_max_chars: 200000

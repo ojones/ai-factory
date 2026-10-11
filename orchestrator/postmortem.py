@@ -14,6 +14,13 @@ workflow step after `build_run.py finalize`, and never fails the run:
 4. Pull request: the Orchestrator, not the Agent, validates the changed paths, runs the unit tests,
    commits to a branch and opens a PR for a human to review. The Agent never holds a credential.
 
+Beyond stuck runs, a run that finishes can still teach the Factory, so `lessons_from` also records: a
+release the watchdog switched off, a run that needed many review rounds, a first test pass the coder had to
+fix, a run that spent most of its budget, and a stage that ran very long. Each is a `factory-learning` issue
+with a fingerprint. A lesson that was closed (its fix merged) and comes back is reopened as `fix-ineffective`,
+so a change that did not work is visible. `lesson <issue>` (the Factory Run workflow) runs the same Agent and
+PR path for an older lesson on demand.
+
 Minor findings still open at the end of a run (clean or not) also become: a suggestion issue in the
 Managed App's own repo (its backlog), and a `factory-learning` issue in ai-factory per distinct finding,
 which the Agent considers for a generalizing prompt or template change straight away (no threshold:
@@ -39,6 +46,16 @@ CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "spec_ambiguity"
 # Template's protected files, or anything outside the Factory's own prompts, template, orchestrator and docs.
 ALLOWED_PREFIXES = ("agents/", "templates/starter/", "orchestrator/", "STANDARDS", "ARCHITECTURE.md", "GLOSSARY.md")
 DENIED_PREFIXES = (".github/", "templates/starter/.github/", "templates/starter/fly/", "templates/starter/fly.toml")
+MAX_LESSONS = 3  # signals recorded per run, so one noisy run cannot flood the tracker
+EXTRA_ROUND_PASSES = 3  # review passes at or above which a clean run is still a lesson (two fix rounds)
+BUDGET_SHARE = 0.7
+SLOW_STAGE_SECONDS = 900
+# Auto-merge is limited to additive changes to lint and formatter config in the Starter Template: they
+# only add or tighten a deterministic check, and the Starter Template's own checks run on the PR first.
+AUTO_MERGE_RE = re.compile(r"^templates/starter/(\.eslintrc[^/]*|eslint\.config\.[cm]?[jt]s|\.prettierrc[^/]*|"
+                           r"prettier\.config\.[cm]?[jt]s|\.editorconfig)$")
+# A lesson's change should come with something that would have caught it: a smoke or replay case, a test.
+FIXTURE_RE = re.compile(r"^(agents/(smoke|smoke-coder|replay)/|orchestrator/test_|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
 STOP_WORDS = {"the", "a", "an", "is", "are", "was", "to", "of", "in", "on", "for", "and", "not", "no", "it", "this"}
 
 
@@ -60,7 +77,8 @@ def collect_facts(work, d):
         if not doc.get("blocking") and not doc.get("round") and not doc.get("minor"):
             continue
         final_minor = doc.get("minor") or []
-        entry = {"round": doc.get("round"), "blocking": [f.get("summary", "") for f in doc.get("blocking", [])]}
+        entry = {"round": doc.get("round"), "blocking": [f.get("summary", "") for f in doc.get("blocking", [])],
+                 "tester_blocking": [f.get("summary", "") for f in doc.get("blocking", []) if f.get("source") == "tester"]}
         rounds.append(entry)
         for s in entry["blocking"]:
             seen.setdefault(normalize(s), []).append(entry["round"])
@@ -70,7 +88,8 @@ def collect_facts(work, d):
               for s in d.get("stages", [])]
     return {"app": d.get("app"), "outcome": d.get("outcome"), "message": d.get("message"),
             "run_url": d.get("run_url"), "issue_number": d.get("issue_number"), "spent_usd": d.get("spent_usd"),
-            "commits": d.get("commits", []), "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
+            "commits": d.get("commits", []), "cap_usd": d.get("cap_usd"), "review_passes": d.get("review_passes") or 0,
+            "audit": d.get("audit") or [], "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
             "rounds": rounds, "recurring_findings": recurring, "stages": stages,
             "final_minor": [{k: f.get(k, "") for k in ("summary", "evidence", "file", "line")} for f in final_minor]}
 
@@ -79,6 +98,70 @@ def fingerprint(facts):
     """Stable across runs of the same failure: outcome plus the recurring (else final) findings."""
     basis = facts["recurring_findings"] or sorted(normalize(s) for s in facts["final_blocking"])
     return hashlib.sha1(json.dumps([facts["outcome"], basis]).encode()).hexdigest()[:8]
+
+
+def lesson_fingerprint(kind, basis):
+    return hashlib.sha1(json.dumps([kind, basis]).encode()).hexdigest()[:8]
+
+
+def lessons_from(facts):
+    """Things a run taught the Factory beyond being stuck. Each is {kind, title, severe, detail}; at most
+    MAX_LESSONS, the severe ones first. A stuck run is recorded separately by record_issue."""
+    outcome, ok = facts["outcome"], facts["outcome"] in b.OK_OUTCOMES
+    found = []
+
+    def add(kind, basis, detail, severe=False):
+        found.append({"kind": kind, "severe": severe, "detail": detail,
+                      "title": f"Lesson [{kind}] {lesson_fingerprint(kind, basis)}"})
+
+    if facts.get("audit"):
+        add("audit_violation", sorted(a["rule"] for a in facts["audit"]),
+            "The run broke a design invariant: " + "; ".join(f"{a['rule']}: {a['detail']}" for a in facts["audit"]), severe=True)
+    if outcome == "watchdog_disabled":
+        add("watchdog_disabled", [], f"The watchdog switched a release off: {facts['message']}", severe=True)
+    if ok and facts.get("review_passes", 0) >= EXTRA_ROUND_PASSES:
+        basis = facts["recurring_findings"] or sorted({normalize(s) for r in facts["rounds"] for s in r["blocking"]})
+        add("many_rounds", basis, f"It needed {facts['review_passes']} review passes. Blocking findings across the rounds: "
+            + "; ".join(sorted({s for r in facts["rounds"] for s in r["blocking"]}) or ["none recorded"]))
+    first_test = facts["rounds"][0]["tester_blocking"] if facts["rounds"] else []
+    if ok and first_test:
+        add("first_pass_test_failure", sorted(normalize(s) for s in first_test),
+            "The first test pass failed and the coder had to fix: " + "; ".join(first_test))
+    if ok and facts.get("cap_usd") and (facts.get("spent_usd") or 0) >= BUDGET_SHARE * facts["cap_usd"]:
+        add("budget_high", [], f"It spent ${facts['spent_usd']:.2f} of its ${facts['cap_usd']:.2f} cap.")
+    for st in facts["stages"]:
+        if (st.get("seconds") or 0) > SLOW_STAGE_SECONDS:
+            add("slow_stage", [st["stage"]], f"The {st['stage']} stage (round {st['round']}) took {st['seconds']:.0f}s.")
+            break
+    found.sort(key=lambda x: not x["severe"])
+    return found[:MAX_LESSONS]
+
+
+def pick_existing(issues, title):
+    """(open issue number, closed issue number) among issues whose title matches exactly."""
+    open_n = next((i["number"] for i in issues if i["title"] == title and i.get("state", "OPEN").upper() == "OPEN"), None)
+    closed_n = next((i["number"] for i in issues if i["title"] == title and i.get("state", "").upper() == "CLOSED"), None)
+    return open_n, closed_n
+
+
+def lesson_has_fixture(paths):
+    """True when a change set includes a test, smoke case or replay case alongside the fix."""
+    return any(FIXTURE_RE.match(p) for p in paths)
+
+
+def auto_merge_eligible(numstat):
+    """`git diff --numstat` lines -> True only if every changed file is lint/formatter config in the
+    Starter Template and nothing was deleted (the change can only add or tighten a check)."""
+    rows = [line.split("\t") for line in numstat.splitlines() if line.strip()]
+    if not rows:
+        return False
+    for row in rows:
+        if len(row) != 3:
+            return False
+        added, deleted, path = row
+        if not AUTO_MERGE_RE.match(path) or deleted != "0" or added == "-":
+            return False
+    return True
 
 
 def render_facts(facts):
@@ -119,6 +202,30 @@ def record_issue(repo, token, facts):
               render_facts(facts) + "\n_A post-mortem analysis and, if one is possible, a proposed fix PR follow._"], token).stdout
     m = re.search(r"/issues/(\d+)", out)
     return int(m.group(1)) if m else None
+
+
+def record_lesson(repo, token, lesson, facts):
+    """Create or update the `factory-learning` issue for a lesson. Returns (number, status) with status
+    `new`, `again` (an open one exists) or `reopened` (a closed one came back: the fix did not work)."""
+    gh(["label", "create", LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
+    gh(["label", "create", "fix-ineffective", "--repo", repo, "--color", "b60205", "--description", "A lesson came back after its fix merged"], token)
+    found = gh(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "all", "--search", f"{lesson['title']} in:title",
+                "--json", "number,title,state"], token).stdout
+    open_n, closed_n = pick_existing(json.loads(found or "[]"), lesson["title"])
+    seen = f"{lesson['detail']}\n\nApp `{facts['app']}`, run: {facts['run_url']}"
+    if open_n:
+        gh(["issue", "comment", str(open_n), "--repo", repo, "--body", "Seen again.\n\n" + seen], token)
+        return open_n, "again"
+    if closed_n:
+        gh(["issue", "reopen", str(closed_n), "--repo", repo], token)
+        gh(["issue", "edit", str(closed_n), "--repo", repo, "--add-label", "fix-ineffective"], token)
+        gh(["issue", "comment", str(closed_n), "--repo", repo, "--body",
+            "**Fix ineffective:** this lesson was closed, and it happened again. The change that closed it did not stop it; "
+            "consider reverting that change.\n\n" + seen], token)
+        return closed_n, "reopened"
+    out = gh(["issue", "create", "--repo", repo, "--label", LABEL, "--title", lesson["title"], "--body", seen], token).stdout
+    m = re.search(r"/issues/(\d+)", out)
+    return (int(m.group(1)) if m else None), "new"
 
 
 MAX_MINORS = 5  # per run, so one noisy review cannot flood the trackers
@@ -164,6 +271,18 @@ def record_minors(repo, token, app_repo, pat, facts):
     return recorded
 
 
+def mint_agent_key(cfg, parent_key):
+    """A single-model DeepInfra credential limited to `postmortem_cost_cap_usd`, so the Agent never holds the
+    parent key and one analysis cannot spend more than the cap. Returns None if one cannot be minted."""
+    try:
+        limits = cfg["limits"]
+        budget = b.Budget(parent_key, float(limits.get("postmortem_cost_cap_usd", 0.5)), int(limits["jwt_ttl_seconds"]))
+        return budget.mint(cfg["roles"]["postmortem"]["model"])
+    except Exception as e:  # noqa: BLE001 - never fail the run
+        b.log(f"could not mint a scoped credential for the post-mortem Agent: {type(e).__name__}")
+        return None
+
+
 def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
     prompt = b.render(b.load_prompt(cfg["roles"]["postmortem"]["prompt"]), {
         "app_name": "-", "build_kind": "-", "facts_path": facts_path, "result_path": result_path,
@@ -179,8 +298,15 @@ def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
         b.log("post-mortem agent timed out")
 
 
-def open_pr(factory, repo, pat, issue_no, result, run_id):
-    """Validate what the Agent changed, test it, and open a PR. Returns the PR URL or None."""
+def open_learning_prs(repo, token):
+    out = gh(["pr", "list", "--repo", repo, "--state", "open", "--json", "headRefName"], token).stdout
+    return sum(1 for p in json.loads(out or "[]") if p["headRefName"].startswith("learning/"))
+
+
+def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
+    """Validate what the Agent changed, test it, and open a PR. Returns the PR URL or None.
+    The PR is labelled `auto-merge-candidate` only for an additive lint/formatter change; the PR checks
+    workflow recomputes that and merges after its checks pass. Everything else waits for a human."""
     changed = [l[3:].strip() for l in b.sh(["git", "status", "--porcelain"], cwd=factory).stdout.splitlines() if l]
     bad = [c for c in changed if not allowed_path(c)]
     for c in bad:  # drop anything outside the allowed paths rather than refusing the whole proposal
@@ -188,6 +314,9 @@ def open_pr(factory, repo, pat, issue_no, result, run_id):
         b.sh(["git", "clean", "-fdq", "--", c], cwd=factory, check=False)
     keep = [c for c in changed if c not in bad]
     if not keep:
+        return None
+    if open_learning_prs(repo, pat) >= max_open:
+        b.log(f"{max_open} learning PRs are already open; not opening another")
         return None
     if b.sh([sys.executable, "-m", "unittest", "discover", "orchestrator"], cwd=factory, check=False).returncode != 0:
         b.log("post-mortem proposal breaks the orchestrator tests; not opening a PR")
@@ -199,12 +328,61 @@ def open_pr(factory, repo, pat, issue_no, result, run_id):
         b.sh(cmd, cwd=factory)
     auth = "AUTHORIZATION: basic " + __import__("base64").b64encode(f"x-access-token:{pat}".encode()).decode()
     b.sh(["git", "-c", f"http.extraheader={auth}", "push", "-q", "origin", branch], cwd=factory)
+    numstat = b.sh(["git", "diff", "--numstat", "HEAD~1", "HEAD"], cwd=factory).stdout
+    fixture = lesson_has_fixture(keep)
+    reason = (result.get("no_fixture_reason") or "").strip()
+    auto = auto_merge_eligible(numstat)
     body = (f"Proposed by the post-mortem Agent for #{issue_no}.\n\n**Category**: {result.get('category')}\n\n"
             f"**Root cause**: {result.get('root_cause')}\n\n**Change**: {result.get('change_summary')}\n\n"
-            "Review before merging: this edits shared prompts, the Starter Template or the orchestrator.")
+            f"**Regression fixture**: {'included' if fixture else ('the lint rule is itself the check' if auto else ('none: ' + reason if reason else 'NONE, and no reason given'))}\n\n"
+            + ("**Auto-merge candidate**: an additive lint or formatter change. It merges itself once the PR checks pass.\n\n" if auto
+               else "Review before merging: this edits shared prompts, the Starter Template, the orchestrator or the Standards.\n\n"))
+    label = []
+    if auto:  # the label must exist, and be on the PR from the start: the checks workflow reads it from the opened event
+        gh(["label", "create", "auto-merge-candidate", "--repo", repo, "--color", "0e8a16", "--description", "Merges itself after the PR checks pass"], pat)
+        label = ["--label", "auto-merge-candidate"]
     out = gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title",
-              f"Post-mortem fix for #{issue_no}", "--body", body], pat).stdout
-    return out.strip() or None
+              f"Post-mortem fix for #{issue_no}", "--body", body, *label], pat).stdout.strip()
+    return out or None
+
+
+def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path, targets, run_id):
+    """Run the Agent once for these lesson issues, comment its analysis on each, and open the PR."""
+    key = mint_agent_key(cfg, parent_key)
+    if not key:
+        return
+    result_path.unlink(missing_ok=True)
+    run_agent(factory, cfg, key, facts_path, result_path, int(cfg["limits"].get("postmortem_timeout_minutes", 15)))
+    result = b.load_json(result_path) or {}
+    if result.get("category") not in CATEGORIES:
+        for n in targets:
+            gh(["issue", "comment", str(n), "--repo", repo, "--body", "The post-mortem Agent produced no usable analysis."], token)
+        return
+    pr = open_pr(factory, repo, pat, targets[0], result, run_id, int(cfg["limits"].get("max_open_learning_prs", 3)))
+    for n in targets:
+        gh(["issue", "comment", str(n), "--repo", repo, "--body",
+            f"**Post-mortem** ({result['category']}): {result.get('root_cause', '')}\n\n"
+            f"**Proposed change**: {result.get('change_summary', 'none')}\n\n"
+            + (f"**PR**: {pr}" if pr else "No change was proposed, it did not pass validation, or too many learning PRs are open.")], token)
+
+
+def lesson_main(number):
+    """The Factory Run: analyse one existing lesson issue (label `ready-for-factory-run`) on demand."""
+    repo = os.environ["GITHUB_REPOSITORY"]
+    pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
+    issue = json.loads(gh(["issue", "view", str(number), "--repo", repo, "--json", "title,body,comments,labels"], token).stdout)
+    if LABEL not in [l["name"] for l in issue.get("labels", [])]:
+        b.log(f"#{number} is not a {LABEL} issue; nothing to do")
+        return 0
+    work = Path(tempfile.mkdtemp(prefix="factory-run-"))
+    facts_path, result_path = work / "lesson.json", work / "result.json"
+    facts_path.write_text(json.dumps({"lesson_issue": number, "title": issue["title"], "body": issue["body"],
+                                      "comments": [c["body"] for c in issue.get("comments", [])][-10:]}, indent=2))
+    cfg, key = b.load_config(), os.environ.get("DEEPINFRA_API_KEY")
+    if not key or "postmortem" not in cfg.get("roles", {}):
+        return 0
+    propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, [number], os.environ.get("GITHUB_RUN_ID", "0"))
+    return 0
 
 
 def main():
@@ -212,11 +390,13 @@ def main():
     d = b.load_json(work / "state.json")
     if not d:
         return 0
-    stuck = d.get("outcome") not in ("released", "nothing_to_release")
+    stuck = d.get("outcome") not in b.OK_OUTCOMES
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     facts = collect_facts(work, d)
-    if not stuck and not facts["final_minor"]:
+    lessons = lessons_from(facts)
+    facts["signals"] = [{"kind": x["kind"], "detail": x["detail"]} for x in lessons]
+    if not stuck and not facts["final_minor"] and not lessons:
         return 0
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
     facts_path, result_path = work / "artifacts" / "postmortem-facts.json", work / "postmortem-result.json"
@@ -224,29 +404,36 @@ def main():
     stuck_issue = record_issue(repo, token, facts) if stuck else None
     minors = record_minors(repo, token, f"{repo.split('/')[0]}/{d['app']}", pat, facts)
     new_minors = [n for n, proposed in minors if not proposed]
-    targets = ([stuck_issue] if stuck_issue else []) + new_minors
+    recorded = [record_lesson(repo, token, x, facts) for x in lessons]
+    # The Agent looks at a lesson that is new or came back after its fix, or has no PR proposed yet.
+    new_lessons = [n for n, status in recorded if n and (status in ("new", "reopened") or not already_proposed(repo, token, n))]
+    targets = ([stuck_issue] if stuck_issue else []) + new_minors + new_lessons
     cfg, key = b.load_config(), os.environ.get("DEEPINFRA_API_KEY")
     if not targets or not key or "postmortem" not in cfg.get("roles", {}):
         return 0
-    factory = b.FACTORY_DIR
-    result_path.unlink(missing_ok=True)
-    run_agent(factory, cfg, key, facts_path, result_path, int(cfg["limits"].get("postmortem_timeout_minutes", 15)))
-    result = b.load_json(result_path) or {}
-    if result.get("category") not in CATEGORIES:
-        for n in targets:
-            gh(["issue", "comment", str(n), "--repo", repo, "--body", "The post-mortem Agent produced no usable analysis."], token)
-        return 0
-    pr = open_pr(factory, repo, pat, targets[0], result, os.environ.get("GITHUB_RUN_ID", "0"))
-    for n in targets:
-        gh(["issue", "comment", str(n), "--repo", repo, "--body",
-            f"**Post-mortem** ({result['category']}): {result.get('root_cause', '')}\n\n"
-            f"**Proposed change**: {result.get('change_summary', 'none')}\n\n"
-            + (f"**PR**: {pr}" if pr else "No change was proposed or it did not pass validation.")], token)
+    propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, targets, os.environ.get("GITHUB_RUN_ID", "0"))
     return 0
+
+
+def auto_merge_check(base, head):
+    """Exit 0 only if the diff base...head is an additive lint/formatter change. The PR checks workflow
+    calls this before merging a PR labelled `auto-merge-candidate`; it does not trust the label."""
+    numstat = b.sh(["git", "diff", "--numstat", f"{base}...{head}"], cwd=b.FACTORY_DIR).stdout
+    ok = auto_merge_eligible(numstat)
+    print("auto-merge eligible" if ok else "not eligible for auto-merge (a human merges this)")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
     try:
+        if len(sys.argv) > 2 and sys.argv[1] == "lesson":
+            sys.exit(lesson_main(int(sys.argv[2])))
+        if len(sys.argv) > 3 and sys.argv[1] == "auto-merge-check":
+            try:
+                sys.exit(auto_merge_check(sys.argv[2], sys.argv[3]))
+            except Exception as e:  # noqa: BLE001 - any doubt means a human merges it
+                print(f"auto-merge check failed ({type(e).__name__}); a human merges this", flush=True)
+                sys.exit(1)
         sys.exit(main())
     except Exception as e:  # noqa: BLE001 - the post-mortem must never fail the run
         print(f"post-mortem failed: {type(e).__name__}: {e}", flush=True)

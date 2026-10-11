@@ -86,16 +86,37 @@ else
   COST_CAP="$CAP_INPUT"; CAP_SOURCE="override"
 fi
 
-# --- 2. one Managed App at a time ----------------------------------------------
+# --- 2. how many Managed Apps at a time ---------------------------------------------
+# `max_simultaneous_build_runs` in agents/profiles.yml (default and fallback 1: one app through
+# Intake -> App Staging -> Build Run at a time). Raising it lets that many apps be in flight, as long as
+# no two Intakes ask for the same app.
 
-others="$(gh issue list --repo "$FACTORY_REPO" --state open --label intake --label ready-for-staging \
-  --json number --jq "[.[].number | select(. != $ISSUE_NUMBER)] | map(\"#\\(.)\") | join(\", \")")"
-[ -z "$others" ] || refuse "Intake issue(s) $others are already past \`ready-for-staging\`. v1 runs one Managed App through Intake → App Staging → Build Run at a time."
+MAX_APPS="$(sed -n 's/^ *max_simultaneous_build_runs: *//p' agents/profiles.yml | head -1)"
+[[ "$MAX_APPS" =~ ^[0-9]+$ ]] && [ "$MAX_APPS" -ge 1 ] || MAX_APPS=1
 
+same="$(gh issue list --repo "$FACTORY_REPO" --state open --label intake --label ready-for-staging --search "\"$SLUG\" in:title" \
+  --json number,title --jq "[.[] | select(.number != $ISSUE_NUMBER and .title == \"$SLUG\") | \"#\\(.number)\"] | join(\", \")")"
+[ -z "$same" ] || refuse "Intake issue(s) $same for the same app are already past \`ready-for-staging\`."
+
+others_n="$(gh issue list --repo "$FACTORY_REPO" --state open --label intake --label ready-for-staging \
+  --json number --jq "[.[] | select(.number != $ISSUE_NUMBER)] | length")"
+if [ "$others_n" -ge "$MAX_APPS" ]; then
+  others="$(gh issue list --repo "$FACTORY_REPO" --state open --label intake --label ready-for-staging \
+    --json number --jq "[.[].number | select(. != $ISSUE_NUMBER)] | map(\"#\\(.)\") | join(\", \")")"
+  refuse "Intake issue(s) $others are already past \`ready-for-staging\`; the limit is $MAX_APPS Managed App(s) through Intake → App Staging → Build Run at a time (\`max_simultaneous_build_runs\` in agents/profiles.yml)."
+fi
+
+running_n=0
 for status in queued in_progress; do
-  running="$(gh run list --repo "$FACTORY_REPO" --workflow build-run.yml --status "$status" --json url --jq '.[0].url // empty')"
-  [ -z "$running" ] || refuse "A Build Run is in flight ($running). v1 runs one Managed App at a time."
+  n="$(gh run list --repo "$FACTORY_REPO" --workflow build-run.yml --status "$status" --json url --jq 'length')"
+  running_n=$((running_n + n))
 done
+[ "$running_n" -lt "$MAX_APPS" ] ||
+  refuse "$running_n Build Run(s) are in flight; the limit is $MAX_APPS at a time (\`max_simultaneous_build_runs\` in agents/profiles.yml)."
+
+# Label the Intake so every issue about this app can be found: app:<slug>.
+gh label create "app:$SLUG" --repo "$FACTORY_REPO" --color 1d76db --description "Issues about the Managed App $SLUG" >/dev/null 2>&1 || true
+gh issue edit "$ISSUE_NUMBER" --repo "$FACTORY_REPO" --add-label "app:$SLUG" >/dev/null || true
 
 # --- 3. the Fly app name: Fly app names are global across all of Fly -----------------
 # 200 = ours (a rerun or a Managed App already deployed), 404 = free, 403 = taken by

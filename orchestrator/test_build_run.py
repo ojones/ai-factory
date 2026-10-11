@@ -124,9 +124,10 @@ class Prompts(unittest.TestCase):
     """Every role prompt's placeholders are exactly the ones the orchestrator supplies."""
     SUPPLIED = {
         "coder": {"app_name", "round", "task", "findings_path", "build_kind"},
-        "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind"},
+        "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind", "spec"},
         "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric", "build_kind"},
-        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind"},
+        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec"},
+        "planner": {"app_name", "build_kind", "task", "plan_path", "spec"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
         "postmortem": {"facts_path", "result_path", "categories"},
     }
@@ -437,6 +438,186 @@ class BudgetAccounting(unittest.TestCase):
         self.assertAlmostEqual(bud.refresh(j2), 1.05)
         with self.assertRaises(b.BudgetExhausted):
             bud.mint("m1")
+
+
+class VerificationStates(unittest.TestCase):
+    def test_only_a_passed_check_passes(self):
+        for state in ("failed", "blocked", "not_run"):
+            doc = {"results": [{"flag": "a", "check": "x", "status": state}]}
+            self.assertFalse(b.derive_test(doc, ["a"])[0], state)
+        self.assertTrue(b.derive_test({"results": [{"flag": "a", "check": "x", "status": "passed"}]}, ["a"])[0])
+
+    def test_status_wins_over_a_contradicting_boolean(self):
+        doc = {"results": [{"flag": "a", "status": "blocked", "passed": True}]}
+        self.assertFalse(b.derive_test(doc, ["a"])[0])
+
+    def test_the_older_boolean_report_still_works_and_garbage_fails(self):
+        self.assertEqual(b.check_state({"passed": True}), "passed")
+        self.assertEqual(b.check_state({"passed": False}), "failed")
+        self.assertEqual(b.check_state({"status": "great"}), "failed")
+        self.assertEqual(b.check_state("passed"), "failed")
+
+    def test_a_flag_with_no_result_is_not_run(self):
+        record = b.verification_record({"results": [{"flag": "a", "check": "x", "status": "passed"}]}, ["a", "b"])
+        self.assertEqual(record["counts"], {"passed": 1, "failed": 0, "blocked": 0, "not_run": 1})
+        self.assertEqual(record["checks"][-1], {"flag": "b", "check": "coverage", "status": "not_run"})
+
+    def test_limitations_are_kept_and_blank_ones_dropped(self):
+        doc = {"results": [], "limitations": ["could not delete note 4", " ", "no browser"]}
+        self.assertEqual(b.verification_record(doc, [])["limitations"], ["could not delete note 4", "no browser"])
+        self.assertEqual(b.verification_record({"results": []}, [])["limitations"], [])
+
+    def test_summary_shows_verification_limitations_and_scoreboard(self):
+        d = {"app": "x", "outcome": "stuck", "message": "m", "cap_usd": 2.0, "spent_usd": 0.5, "review_passes": 2,
+             "head_sha": "abc", "release": None, "blocking": [], "stages": [],
+             "verification": {"round": 2, "sha": "abcdef123", "limitations": ["note 4 left behind"],
+                              "counts": {"passed": 3, "failed": 1, "blocked": 1, "not_run": 0}, "checks": []},
+             "scoreboard": [{"round": 1, "counts": {"passed": 2, "failed": 2, "blocked": 1, "not_run": 0}, "blocking": ["a"]},
+                            {"round": 2, "counts": {"passed": 3, "failed": 1, "blocked": 1, "not_run": 0}, "blocking": []}]}
+        out = b.render_summary(d)
+        self.assertIn("3 passed, 1 failed, 1 blocked, 0 not run", out)
+        self.assertIn("- note 4 left behind", out)
+        self.assertIn("- round 1: 2 / 2 / 1 / 0, 1 open", out)
+        self.assertNotIn("Verification", b.render_summary({**d, "verification": None, "scoreboard": []}))
+
+
+class Scoreboard(unittest.TestCase):
+    def entry(self, rnd, checks, blocking=()):
+        record = {"counts": {s: 0 for s in b.CHECK_STATES},
+                  "checks": [{"flag": "a", "check": c, "status": st} for c, st in checks.items()]}
+        return b.scoreboard_entry(rnd, "sha", record, [{"summary": x} for x in blocking])
+
+    def test_entry_keys_checks_by_flag_and_normalises_findings(self):
+        e = self.entry(1, {"x": "failed"}, ["  Missing   Flag "])
+        self.assertEqual(e["checks"], {"a: x": "failed"})
+        self.assertEqual(e["blocking"], ["missing flag"])
+
+    def test_identical_open_items_for_n_rounds_is_stalled(self):
+        same = [self.entry(i, {"x": "failed", "y": "passed"}, ["no kill switch"]) for i in (1, 2, 3)]
+        self.assertTrue(b.stalled(same, 3))
+        self.assertFalse(b.stalled(same[:2], 3))
+
+    def test_any_change_between_rounds_is_progress(self):
+        a, c = self.entry(1, {"x": "failed"}), self.entry(2, {"x": "passed"}, ["new finding"])
+        self.assertFalse(b.stalled([a, a, c], 3))
+        self.assertFalse(b.stalled([a, c, c], 3))
+
+    def test_nothing_open_is_never_stalled_and_small_n_disables_it(self):
+        clean = [self.entry(i, {"x": "passed"}) for i in (1, 2, 3)]
+        self.assertFalse(b.stalled(clean, 3))
+        failing = [self.entry(i, {"x": "failed"}) for i in (1, 2, 3)]
+        self.assertFalse(b.stalled(failing, 0))
+        self.assertFalse(b.stalled(failing, 1))
+
+
+class Watchdog(unittest.TestCase):
+    ok, bad = {"healthy": True, "errors": 0}, {"healthy": False, "errors": 0}
+
+    def test_counts_only_error_level_json_lines(self):
+        log = '{"level":"info"}\n{"level": "error","msg":"x"}\n{"level":"FATAL"}\nplain error text\n'
+        self.assertEqual(b.count_errors(log), 2)
+        self.assertEqual(b.count_errors(None), 0)
+
+    def test_consecutive_health_failures_trip_it(self):
+        self.assertIsNotNone(b.watchdog_trip([self.ok, self.bad, self.bad, self.bad], 0, 3, 5))
+
+    def test_failures_that_recover_do_not(self):
+        self.assertIsNone(b.watchdog_trip([self.bad, self.bad, self.ok, self.bad, self.bad], 0, 3, 5))
+
+    def test_a_rise_in_errors_over_the_baseline_trips_it(self):
+        self.assertIsNotNone(b.watchdog_trip([{"healthy": True, "errors": 9}], 3, 3, 5))
+        self.assertIsNone(b.watchdog_trip([{"healthy": True, "errors": 7}], 3, 3, 5))
+
+    def test_errors_that_were_already_there_do_not(self):
+        self.assertIsNone(b.watchdog_trip([{"healthy": True, "errors": 40}] * 4, 40, 3, 5))
+
+    def test_no_samples_no_trip(self):
+        self.assertIsNone(b.watchdog_trip([], 0, 3, 5))
+
+    def make(self, minutes, released):
+        run = object.__new__(b.BuildRun)
+        run.lim = {"watchdog_minutes": minutes, "watchdog_interval_seconds": 0, "watchdog_max_failures": 2, "watchdog_max_errors": 5}
+        run.app, run.deadline = "x", float("inf")
+        run.state = b.State("/tmp/unused-state.json", "x", "1", "u")
+        run.state.save = lambda: None
+        run.state.d["release"] = {"released": released, "kept": ["x.feature.old"]}
+        run.app_error_count = lambda: 0
+        return run
+
+    def test_a_tripped_watchdog_switches_off_only_what_this_run_released(self):
+        from unittest import mock
+        run = self.make(0.05, ["x.feature.new"])
+        run.disable_flags = mock.Mock(return_value=[])
+        with mock.patch.object(b, "http", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
+            run.watch_release()
+        run.disable_flags.assert_called_once_with(["x.feature.new"])
+        self.assertEqual(run.state.d["outcome"], "watchdog_disabled")
+        self.assertIn("health check failed", run.state.d["message"])
+
+    def test_a_flag_that_will_not_turn_off_is_called_out(self):
+        from unittest import mock
+        run = self.make(0.05, ["x.feature.new"])
+        run.disable_flags = mock.Mock(return_value=["x.feature.new"])
+        with mock.patch.object(b, "http", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
+            run.watch_release()
+        self.assertIn("turn them off in GrowthBook now", run.state.d["message"])
+
+    def test_a_healthy_app_is_left_alone(self):
+        from unittest import mock
+        run = self.make(0.0005, ["x.feature.new"])
+        run.disable_flags = mock.Mock()
+        with mock.patch.object(b, "http", return_value=(200, {})), mock.patch.object(b.time, "sleep"):
+            run.watch_release()
+        run.disable_flags.assert_not_called()
+        self.assertNotEqual(run.state.d["outcome"], "watchdog_disabled")
+
+    def test_zero_minutes_or_nothing_released_skips_the_watch(self):
+        from unittest import mock
+        for minutes, released in ((0, ["x.feature.new"]), (5, [])):
+            run = self.make(minutes, released)
+            run.disable_flags = mock.Mock()
+            with mock.patch.object(b, "http") as http:
+                run.watch_release()
+            http.assert_not_called()
+
+
+class SpendLedger(unittest.TestCase):
+    def test_line_round_trips_and_only_todays_lines_count(self):
+        line = b.ledger_line("2026-10-10", "notes", 0.5, "42")
+        self.assertEqual(line, "ledger 2026-10-10 notes 0.5000 run:42")
+        comments = [line, b.ledger_line("2026-10-10", "todo", 1.25, "43"), b.ledger_line("2026-10-09", "todo", 9.0, "40"),
+                    "a human comment", "ledger 2026-10-10 notes lots run:44", ""]
+        self.assertEqual(b.ledger_total(comments, "2026-10-10"), 1.75)
+
+    def test_a_run_id_seen_twice_counts_once(self):
+        line = b.ledger_line("2026-10-10", "notes", 0.5, "42")
+        self.assertEqual(b.ledger_total([line, line], "2026-10-10"), 0.5)
+
+    def make(self, cap, comments, issue=7):
+        from unittest import mock
+        run = object.__new__(b.BuildRun)
+        run.lim, run.factory_repo, run.factory_token = {"daily_cost_cap_usd": cap}, "o/f", "t"
+        run.state = b.State("/tmp/unused-state.json", "x", "1", "u")
+        run.ledger_issue = lambda: issue
+        run.gh = mock.Mock(return_value=mock.Mock(stdout="\n".join(comments)))
+        return run
+
+    def today_line(self, usd, run_id):
+        return b.ledger_line(b.time.strftime("%Y-%m-%d", b.time.gmtime()), "a", usd, run_id)
+
+    def test_the_cap_stops_a_new_run_and_records_what_was_spent(self):
+        run = self.make(5.0, [self.today_line(3.0, "1"), self.today_line(2.5, "2")])
+        with self.assertRaises(b.NeedsHuman) as cm:
+            run.check_daily_cap()
+        self.assertIn("$5.50", str(cm.exception))
+        self.assertEqual(run.state.d["daily_spent_usd"], 5.5)
+
+    def test_under_the_cap_zero_cap_and_no_ledger_yet_all_let_it_run(self):
+        self.make(5.0, [self.today_line(3.0, "1")]).check_daily_cap()
+        run = self.make(0, [self.today_line(99.0, "1")])
+        run.check_daily_cap()
+        run.gh.assert_not_called()
+        self.make(5.0, [], issue=None).check_daily_cap()
 
 
 if __name__ == "__main__":
