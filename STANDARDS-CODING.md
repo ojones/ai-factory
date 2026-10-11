@@ -34,6 +34,10 @@ Purely mechanical — an auto-formatter is the entire style guide. No prose conv
 Only the coder Agent pushes, and it pushes directly to `main` — no branches, no PRs. Review happens after the push, on `main`, while the new feature is still dark behind its feature flag ([STANDARDS-FEATURE-FLAGS.md](STANDARDS-FEATURE-FLAGS.md#release-and-retirement)). The flag is the gate for going public, the test gate is the gate for a healthy build, and a self-merged PR would add a step without adding safety.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
+## Data and migrations
+
+A feature flag hides code, not data. A deploy applies any change to stored data to every user at once, while the feature is still dark, and switching the flag off cannot undo it. So a change that touches how data is stored is **additive**: add a new field, table or index and keep writing and reading the old shape until the new code has been released and is permanent. Never drop, rename or retype something the previous version still reads in the same change; do that in a later, separate update (expand, then contract) once nothing reads the old shape. A migration must be safe to run twice and must leave the previous version of the app working. The reviewer treats a non-additive change to stored data as blocking.
+
 ## Secrets and configuration
 
 All runtime config/secrets via env vars only, documented via a committed `.env.example`. Zero hardcoded values.
