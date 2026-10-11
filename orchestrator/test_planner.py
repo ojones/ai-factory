@@ -91,6 +91,16 @@ class Plan(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertEqual(questions, ["Q-1: Should photos be public?"])
 
+    def test_a_change_set_that_is_only_tests_is_a_problem(self):
+        for title in ("Add comprehensive tests for PATCH endpoint", "Write unit tests for the store", "Add test coverage", "Create integration tests"):
+            plan = good()
+            plan["change_sets"][1]["title"] = title
+            self.assertTrue(any("only tests" in x for x in check(plan)[0]), title)
+        for title in ("Add a test-mode banner", "Filter sightings by species", "Show test results on the dashboard", "Save a sighting and validate it"):
+            plan = good()
+            plan["change_sets"][1]["title"] = title
+            self.assertFalse(any("only tests" in x for x in check(plan)[0]), title)
+
     def test_garbage_is_reported_not_raised(self):
         self.assertEqual(check([])[0], ["the plan is not a JSON object"])
         problems = check({})[0]

@@ -592,6 +592,9 @@ class BuildRun:
         self.task, self.cap = parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
                                            self.lim["cost_cap_usd_ceiling"])
         self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
+        # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
+        raw_cap = form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
+        self.cap_override = raw_cap if raw_cap and raw_cap != "_No response_" else None
         self.state.d["cap_usd"] = self.cap
         self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
         self.state.save()
@@ -1072,6 +1075,9 @@ class BuildRun:
         that already existed, which the owner controls) and ends the run as `watchdog_disabled` so
         finalize opens the Issue. The flag is the rollback lever, and the release step never turns
         it back on. 0 minutes disables the watch."""
+        # The outcome was set just before this call and is not on disk yet. Save it now: the watch below can take
+        # minutes, and a run cancelled during it must still report `released`, not look like a crash.
+        self.state.save()
         keys = list((self.state.d.get("release") or {}).get("released") or [])
         minutes = float(self.lim.get("watchdog_minutes", 0))
         if minutes <= 0 or not keys:
@@ -1131,7 +1137,7 @@ class BuildRun:
             self.spec = self.task
             return False
         made = update_intake.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
-                                           planner.topological_order(sets), self.task)
+                                           planner.topological_order(sets), self.task, cap=self.cap_override)
         self.state.d.update(outcome="planned", message="Planned as %d change sets, each now its own Update Intake and Build Run, in order: %s."
                             % (len(made), ", ".join(f"{cs} (#{n})" for cs, n in made)))
         return True

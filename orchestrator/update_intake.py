@@ -96,12 +96,12 @@ def render_change_set_task(cs, request=None, parent=None):
     return "\n".join(lines).strip()
 
 
-def child_body(app, task, parent, cs_id, depends_on):
+def child_body(app, task, parent, cs_id, depends_on, cap=None):
     """A child issue's body: the Update Intake form fields plus hidden plan metadata."""
     meta = {"parent": parent, "cs": cs_id, "depends_on": depends_on}
     # The metadata goes first: text after the last "### " heading would be read as part of that field.
     return (f"<!-- factory-plan:{json.dumps(meta, separators=(',', ':'))} -->\n\n"
-            f"### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n_No response_\n")
+            f"### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n{cap if cap else '_No response_'}\n")
 
 
 def ready_to_start(children):
@@ -132,7 +132,7 @@ def ensure_label(repo, name, token, color="0e8a16", description=""):
     gh(["label", "create", name, "--repo", repo, "--color", color, "--description", description], token)
 
 
-def file_children(repo, pat, app, parent, change_sets, order, request):
+def file_children(repo, pat, app, parent, change_sets, order, request, cap=None):
     """Create one issue per change set, dependencies first, and start those with nothing to wait for.
     Returns [(change set id, issue number)]."""
     for name, color, desc in ((FORM_LABEL, "1d76db", "A change request for an existing Managed App"),
@@ -146,7 +146,7 @@ def file_children(repo, pat, app, parent, change_sets, order, request):
         cs = by_id[cs_id]
         deps = [numbers[d] for d in cs.get("depends_on") or []]
         task = render_change_set_task(cs, parent=parent)
-        out = gh(["issue", "create", "--repo", repo, "--title", f"{app}: {one_line(cs['title'])}", "--body", child_body(app, task, parent, cs_id, deps),
+        out = gh(["issue", "create", "--repo", repo, "--title", f"{app}: {one_line(cs['title'])}", "--body", child_body(app, task, parent, cs_id, deps, cap),
                   "--label", f"{FORM_LABEL},app:{app},plan:{parent},{WAIT}"], pat, check=True).stdout
         m = re.search(r"/issues/(\d+)", out)
         numbers[cs_id] = int(m.group(1))

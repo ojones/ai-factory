@@ -25,6 +25,8 @@ import re
 import sys
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# A change set that exists only to add tests. Every change set includes its own tests, so this one has no outcome of its own.
+TESTS_ONLY_RE = re.compile(r"^\s*(add|write|create|update|improve|expand|implement)\b[^.]*\b(unit |integration |comprehensive |more |additional |extra )*(tests?|test coverage|test suite)(?![\w-])", re.I)
 MAX_CHANGE_SETS = 8
 
 
@@ -72,6 +74,8 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS):
         name = cs.get("id") or "(no id)"
         if not str(cs.get("title", "")).strip():
             problems.append(f"{name} has no title")
+        elif TESTS_ONLY_RE.match(str(cs["title"])):
+            problems.append(f"{name} ({cs['title']!r}) is only tests: every change set includes its own tests, so fold them into the change set they test")
         criteria = cs.get("criteria")
         if not isinstance(criteria, list) or not [c for c in criteria if str(c).strip()]:
             problems.append(f"{name} has no acceptance criteria")

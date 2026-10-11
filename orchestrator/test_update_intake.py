@@ -60,6 +60,10 @@ class ChangeSets(unittest.TestCase):
         for none in ("", None, "no marker", "<!-- factory-plan:{broken -->", "<!-- factory-plan:[1] -->"):
             self.assertEqual(u.plan_meta(none), {})
 
+    def test_children_keep_the_parents_cost_cap(self):
+        self.assertEqual(b.parse_intake(u.child_body("notes", "t", 7, "CS-1", [], "1.00"), 2.0, 10.0)[1], 1.0)
+        self.assertEqual(b.parse_intake(u.child_body("notes", "t", 7, "CS-1", []), 2.0, 10.0)[1], 2.0)
+
     def test_titles_are_one_short_line(self):
         self.assertEqual(u.one_line("a\n  b\tc"), "a b c")
         self.assertEqual(len(u.one_line("x" * 500)), 80)
@@ -213,6 +217,7 @@ class Planning(unittest.TestCase):
         run.lim, run.build_kind, run.app, run.issue = {}, kind, "notes", "9"
         run.factory_repo, run.pat = "o/f", "pat"
         run.task = run.spec = "Record sightings and filter them"
+        run.cap_override = "1.00"
         run.state = b.State("/tmp/unused-state.json", "notes", "9", "u")
         run.state.save = lambda: None
         run.agent_json = mock.Mock(side_effect=lambda role, label, values, path, check=None, **kw: (check(doc) if check else None, doc, 0.1, None)[1:])
@@ -240,6 +245,7 @@ class Planning(unittest.TestCase):
             self.assertTrue(run.plan_change())
         args = filed.call_args[0]
         self.assertEqual((args[0], args[2], args[3], args[5]), ("o/f", "notes", 9, ["CS-1", "CS-2", "CS-3"]))
+        self.assertEqual(filed.call_args[1]["cap"], "1.00")
         self.assertEqual(run.state.d["outcome"], "planned")
         self.assertIn("CS-2 (#12)", run.state.d["message"])
         self.assertEqual(len(run.state.d["plan"]["change_sets"]), 3)

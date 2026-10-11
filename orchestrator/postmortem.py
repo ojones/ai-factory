@@ -41,7 +41,7 @@ from pathlib import Path
 import build_run as b
 
 LABEL = "factory-learning"
-CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
+CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
 # Where the post-mortem Agent may propose changes. Never workflows (they hold the secrets), the Starter
 # Template's protected files, or anything outside the Factory's own prompts, template, orchestrator and docs.
 ALLOWED_PREFIXES = ("agents/", "templates/starter/", "orchestrator/", "STANDARDS", "ARCHITECTURE.md", "GLOSSARY.md")
@@ -55,7 +55,9 @@ SLOW_STAGE_SECONDS = 900
 AUTO_MERGE_RE = re.compile(r"^templates/starter/(\.eslintrc[^/]*|eslint\.config\.[cm]?[jt]s|\.prettierrc[^/]*|"
                            r"prettier\.config\.[cm]?[jt]s|\.editorconfig)$")
 # A lesson's change should come with something that would have caught it: a smoke or replay case, a test.
-FIXTURE_RE = re.compile(r"^(agents/(smoke|smoke-coder|replay)/|orchestrator/test_|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
+FIXTURE_RE = re.compile(r"^(agents/replay/cases\.json|agents/smoke-coder/tasks/|orchestrator/test_|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
+SMOKE_DIFF_RE = re.compile(r"^agents/smoke/fixtures/[^/]+\.diff$")
+SMOKE_EXPECTED = "agents/smoke/expected.json"
 STOP_WORDS = {"the", "a", "an", "is", "are", "was", "to", "of", "in", "on", "for", "and", "not", "no", "it", "this"}
 
 
@@ -89,7 +91,7 @@ def collect_facts(work, d):
     return {"app": d.get("app"), "outcome": d.get("outcome"), "message": d.get("message"),
             "run_url": d.get("run_url"), "issue_number": d.get("issue_number"), "spent_usd": d.get("spent_usd"),
             "commits": d.get("commits", []), "cap_usd": d.get("cap_usd"), "review_passes": d.get("review_passes") or 0,
-            "audit": d.get("audit") or [], "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
+            "audit": d.get("audit") or [], "plan": d.get("plan"), "intake_kind": d.get("intake_kind"), "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
             "rounds": rounds, "recurring_findings": recurring, "stages": stages,
             "final_minor": [{k: f.get(k, "") for k in ("summary", "evidence", "file", "line")} for f in final_minor]}
 
@@ -146,6 +148,10 @@ def pick_existing(issues, title):
 
 def lesson_has_fixture(paths):
     """True when a change set includes a test, smoke case or replay case alongside the fix."""
+    # A reviewer smoke fixture only counts as a pair: the diff the reviewer is shown and its expected.json entry. The
+    # harness runs every fixtures/*.diff, so stray files in that folder would exercise nothing.
+    if any(SMOKE_DIFF_RE.match(p) for p in paths) and SMOKE_EXPECTED in paths:
+        return True
     return any(FIXTURE_RE.match(p) for p in paths)
 
 

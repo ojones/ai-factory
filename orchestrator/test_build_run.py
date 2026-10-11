@@ -571,6 +571,18 @@ class Watchdog(unittest.TestCase):
         run.disable_flags.assert_not_called()
         self.assertNotEqual(run.state.d["outcome"], "watchdog_disabled")
 
+    def test_the_outcome_is_saved_before_the_watch_starts_so_a_cancel_cannot_look_like_a_crash(self):
+        from unittest import mock
+        run = self.make(5, ["x.feature.new"])
+        saves = []
+        run.state.save = lambda: saves.append(run.state.d["outcome"])
+        run.state.d["outcome"] = "released"
+        run.disable_flags = mock.Mock()
+        with mock.patch.object(b, "http", side_effect=KeyboardInterrupt), mock.patch.object(b.time, "sleep"):
+            with self.assertRaises(KeyboardInterrupt):
+                run.watch_release()
+        self.assertEqual(saves[:1], ["released"])
+
     def test_zero_minutes_or_nothing_released_skips_the_watch(self):
         from unittest import mock
         for minutes, released in ((0, ["x.feature.new"]), (5, [])):

@@ -148,10 +148,17 @@ class MergePolicy(unittest.TestCase):
         self.assertFalse(pm.auto_merge_eligible(""))
 
     def test_a_fixture_is_a_smoke_replay_or_test_file(self):
-        for ok in ("agents/smoke/fixtures/x.diff", "agents/replay/cases.json", "orchestrator/test_build_run.py",
-                   "templates/starter/backend/src/app.test.ts"):
+        for ok in ("agents/replay/cases.json", "orchestrator/test_build_run.py", "templates/starter/backend/src/app.test.ts"):
             self.assertTrue(pm.lesson_has_fixture([ok]), ok)
+        self.assertTrue(pm.lesson_has_fixture(["agents/smoke/fixtures/x.diff", "agents/smoke/expected.json"]))
         self.assertFalse(pm.lesson_has_fixture(["agents/prompts/coder.md", "templates/starter/AGENTS.md"]))
+
+    def test_a_smoke_fixture_must_be_a_diff_with_an_expected_entry(self):
+        # What the first learning PR did: files in the fixtures folder that the harness never runs.
+        stray = ["agents/smoke/fixtures/missing-feature-flag.expected.json", "agents/smoke/fixtures/missing-feature-flag.intake.md"]
+        self.assertFalse(pm.lesson_has_fixture(stray))
+        self.assertFalse(pm.lesson_has_fixture(["agents/smoke/fixtures/x.diff"]))
+        self.assertFalse(pm.lesson_has_fixture(["agents/smoke/expected.json"]))
 
 
 class AgentCredential(unittest.TestCase):
