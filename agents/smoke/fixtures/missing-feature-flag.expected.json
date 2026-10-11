@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {
+      "summary": "The new endpoint change is not behind the required `update-todo-store` feature flag; no `isFeatureEnabled(res, slug)` call gates it anywhere.",
+      "severity": "blocking"
+    }
+  ]
+}
