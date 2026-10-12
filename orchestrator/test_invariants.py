@@ -295,6 +295,20 @@ class Invariants(unittest.TestCase):
         self.assertEqual(b.check_state({"status": "passed", "evidence": "Status: 200"}), "passed")
         self.assertEqual(b.check_state({"status": "passed", "evidence": "Cannot see logs, but npm run test:file shows 1 passed"}), "passed")
 
+    def test_inv29_a_provider_with_no_balance_stops_the_run_and_retries_nothing(self):
+        import fixrequest as fr, postmortem as pm
+        event = '{"code": "LLMBadRequestError", "detail": "OpenAIException - You need positive balance to do inference", "kind": "ConversationErrorEvent"}'
+        self.assertTrue(b.provider_blocked_text(event))
+        self.assertFalse(b.provider_blocked_text("the spec mentions a positive balance"))
+        with mock.patch.object(b, "http", return_value=(402, {})):
+            with self.assertRaises(b.ProviderBlocked):
+                b.provider_check("https://x/v1", "k", "m")
+            with self.assertRaises(b.ProviderBlocked):
+                b.Budget("admin", 1.0, 60).mint("m")
+        self.assertFalse(pm.wants_fix_request({"outcome": "provider_blocked"}, {}))  # no self-starting retry
+        self.assertFalse(pm.records_stuck_issue("provider_blocked"))
+        self.assertNotIn("provider_blocked", b.OK_OUTCOMES)
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

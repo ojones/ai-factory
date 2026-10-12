@@ -173,13 +173,13 @@ def bad_fixture_reason(fixture_diffs):
 
 def wants_fix_request(d, limits):
     """A fix request is filed for every Build Run that did not end well (`planned` and the good endings do not)."""
-    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in b.OK_OUTCOMES
+    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in b.OK_OUTCOMES and d.get("outcome") != "provider_blocked"
 
 
 def records_stuck_issue(outcome):
     """Whether a run's ending gets the generic `Stuck run` lesson. A release the watchdog switched off is already a
     specific, severe lesson (`watchdog_disabled`); recording it twice made two issues and two analyses for one event."""
-    return outcome not in b.OK_OUTCOMES and outcome != "watchdog_disabled"
+    return outcome not in b.OK_OUTCOMES and outcome not in ("watchdog_disabled", "provider_blocked")
 
 
 def lesson_has_fixture(paths):
@@ -458,6 +458,13 @@ def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     facts = collect_facts(work, d)
+    if d.get("outcome") == "provider_blocked":
+        # Not a lesson and not a fix request: nothing the Factory can change helps, and the Agent could not run anyway.
+        try:
+            b.log(f"provider alert: {fixrequest.file_provider_alert(repo, token, facts)}")
+        except Exception as e:  # noqa: BLE001 - the post-mortem never fails the run
+            b.log(f"could not file the provider alert: {type(e).__name__}: {e}")
+        return 0
     lessons = lessons_from(facts)
     facts["signals"] = [{"kind": x["kind"], "detail": x["detail"]} for x in lessons]
     if not stuck and not facts["final_minor"] and not lessons:

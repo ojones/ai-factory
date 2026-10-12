@@ -50,6 +50,11 @@ class BudgetExhausted(Exception):
     pass
 
 
+class ProviderBlocked(Exception):
+    """The model provider refuses every request because the account has no balance (HTTP 402). Nothing a retry, a fix request
+    or a post-mortem Agent does can help until someone tops it up, and each of them would fail the same way."""
+
+
 class NeedsHuman(Exception):
     """kind: round_limit | time_limit | stuck | pipeline | other"""
 
@@ -425,6 +430,8 @@ def single_call_review(base_url, key, model, system, user, timeout=300, attempts
                 last = f"unusable reply: {e}"
         else:
             last = f"HTTP {status}: {str(r)[:200]}"
+            if status == 402:
+                raise ProviderBlocked(BLOCKED_MESSAGE)
         if attempt < attempts and (status in (0, 429) or status >= 500 or status == 200):
             time.sleep(5 * attempt)
         else:
@@ -521,6 +528,8 @@ class Budget:
             raise BudgetExhausted(f"${self.spent_known():.4f} spent against a ${self.cap:.2f} cap")
         status, r = http("POST", f"{DEEPINFRA}/v1/scoped-jwt", self.admin_key,
                          {"api_key_name": "auto", "models": [model], "expires_delta": self.ttl, "spending_limit": remaining})
+        if status == 402:
+            raise ProviderBlocked(BLOCKED_MESSAGE)
         if status != 200 or "token" not in r:
             raise RuntimeError(f"could not mint scoped JWT: HTTP {status} {r}")
         print(f"::add-mask::{r['token']}", flush=True)
@@ -641,6 +650,7 @@ class BuildRun:
         self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
         self.state.save()
         self.check_daily_cap()
+        provider_check(self.cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"], self.cfg["roles"]["coder"]["model"])
         self.wait_for_capacity()
         self.meter = Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
         self.preview = preview_token(os.environ["PREVIEW_MASTER_SECRET"], self.app)
@@ -761,6 +771,11 @@ class BuildRun:
         except subprocess.TimeoutExpired:
             rc = "timeout"
         after = self.record_spend(jwt)
+        blocked = scan_for_provider_block(jsonl)
+        if blocked:  # the account ran dry (possibly mid-run): stop everything, do not count it as the Agent's failure
+            with self.lock:
+                log(f"{role} ({label}): {blocked}")
+            raise ProviderBlocked(blocked)
         usage = self.collect_usage(role, label, known, home)
         if usage:
             usage["seconds"] = round(time.time() - began, 1)  # wall time; minus llm_seconds is tool and wait time
@@ -1244,6 +1259,8 @@ class BuildRun:
                                               "same findings open; more fix rounds are not changing anything")
                 summary = "\n".join(describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
+        except ProviderBlocked as e:
+            self.state.d.update(outcome="provider_blocked", message=str(e))
         except BudgetExhausted as e:
             self.state.d.update(outcome="budget_exhausted", message=str(e))
         except NeedsHuman as e:
@@ -1263,6 +1280,7 @@ OUTCOME_TITLES = {
     "budget_exhausted": "Build Run: budget exhausted",
     "round_limit": "Build Run: needs human (review round limit reached)",
     "time_limit": "Build Run: needs human (time limit reached)",
+    "provider_blocked": "Build Run: model provider blocked (account has no balance)",
     "stuck": "Build Run: needs human (no progress across rounds)",
     "watchdog_disabled": "Build Run: release switched off by the watchdog",
     "needs_human": "Build Run: needs human",
@@ -1384,6 +1402,42 @@ def update_state_issues(d, factory_repo, pat, factory_token):
 
 
 NEAR_CAP = 0.9  # an Agent is given only a share of what is left, so a run runs dry a little before the cap itself
+
+
+BLOCKED_MESSAGE = ("The model provider refused the request because the account has no balance (HTTP 402, \"You need positive balance to "
+                   "do inference\"). Add balance (or turn on auto top-up) in the provider's dashboard, then add `proceed-with-change` "
+                   "again to retry.")
+BLOCKED_LINE_RE = re.compile(r"positive balance|insufficient (funds|balance|credits?)|payment required", re.I)
+BLOCKED_EVENT_RE = re.compile(r"BadRequestError|ConversationErrorEvent|LLMError|\b402\b")
+
+
+def provider_blocked_text(text):
+    """True if some line of an Agent's output is an error from the provider saying the account has no balance. Both parts
+    are needed on one line (an error event and the billing wording), so a prompt or a log that merely mentions balances
+    does not trip it."""
+    return any(BLOCKED_LINE_RE.search(line) and BLOCKED_EVENT_RE.search(line) for line in (text or "").splitlines())
+
+
+def scan_for_provider_block(path, tail_bytes=300_000):
+    """BLOCKED_MESSAGE if the end of an Agent's JSONL output shows the provider refusing for lack of balance, else None."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - tail_bytes))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return None
+    return BLOCKED_MESSAGE if provider_blocked_text(text) else None
+
+
+def provider_check(base_url, key, model):
+    """A one-token request before a Build Run does any work: raises ProviderBlocked if the account has no balance, so a run
+    cannot spend a clone, a checkout and a planner call to find out. Any other answer (including an outage) is not this
+    condition and is left for the run to deal with."""
+    status, r = http("POST", f"{base_url}/chat/completions", key,
+                     {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}, timeout=30)
+    if status == 402 or (status == 400 and provider_blocked_text(f"BadRequestError {r}")):
+        raise ProviderBlocked(BLOCKED_MESSAGE)
 
 
 def ending_for(kind, message, spent, cap):
@@ -1534,7 +1588,8 @@ def finalize():
         (work / "issue-body.md").write_text(body)
         sh(["gh", "issue", "create", "--repo", f"{owner}/{app}", "--title", OUTCOME_TITLES.get(d["outcome"], "Build Run: crash"),
             "--body-file", str(work / "issue-body.md")], env={**os.environ, "GH_TOKEN": pat}, check=False)
-    retry = ("" if ok or d.get("intake_kind") != "update"
+    retry = ("" if ok or d.get("intake_kind") != "update" else
+             f"\n\nOnce the provider balance is topped up, add `{update_intake.GO}` again to retry." if d["outcome"] == "provider_blocked"
              else f"\n\nEdit this issue if the request needs to change, then add `{update_intake.GO}` again to retry.")
     sh(["gh", "issue", "comment", d["issue_number"], "--repo", os.environ["GITHUB_REPOSITORY"], "--body",
         f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],

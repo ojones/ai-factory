@@ -66,6 +66,15 @@ class Finalize(unittest.TestCase):
         self.assertIn("add `proceed-with-change` again", comment[comment.index("--body") + 1])
         self.assertTrue(any(c[:3] == ["gh", "issue", "edit"] and "--remove-label" in c for c in gh_calls))
 
+    def test_a_provider_block_says_to_top_up_and_still_takes_pushed_commits_back(self):
+        r = Repo()
+        code, report, saved, summary, gh_calls = self.run_finalize(r, "provider_blocked")
+        self.assertEqual(code, 1)
+        self.assertEqual(report["revert"]["status"], "reverted")  # half-tested commits do not stay live
+        comment = next(c for c in gh_calls if c[:3] == ["gh", "issue", "comment"])
+        self.assertIn("topped up", comment[comment.index("--body") + 1])
+        self.assertEqual(b.OUTCOME_TITLES["provider_blocked"], "Build Run: model provider blocked (account has no balance)")
+
     def test_a_good_ending_and_a_contained_one_are_not_reverted(self):
         for outcome, extra in (("released", {"release": {"released": ["demo.feature.x"]}}), ("watchdog_disabled", {})):
             r = Repo()
