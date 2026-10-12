@@ -611,6 +611,9 @@ class BuildRun:
                       token=self.factory_token).stdout
         issue = json.loads(out)
         self.update_intake, self.plan_meta = identify_intake(issue, self.app, self.issue)
+        self.fix_meta = update_intake.fix_meta(issue["body"] or "")
+        if self.fix_meta:
+            self.state.d["fix"] = self.fix_meta
         self.state.d["intake_kind"] = "update" if self.update_intake else "new"
         self.task, self.cap = parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
                                            self.lim["cost_cap_usd_ceiling"])
@@ -1151,6 +1154,12 @@ class BuildRun:
                 raise NeedsHuman("other", "the planner's plan was rejected: " + "; ".join(problems))
             raise
         _, questions = planner.validate_plan(doc, self.build_kind, limit)
+        if questions and getattr(self, "fix_meta", None):
+            # An automatic retry has no person to answer. Take the most conservative reading and say so, in the plan comment.
+            doc["assumptions"] = list(doc.get("assumptions") or []) + [
+                f"Decided without asking (this retry runs with no person reviewing it): {q} Taking the most conservative reading: "
+                "keep existing data and behaviour, and keep the change behind its flag." for q in questions]
+            questions = []
         sets = doc["change_sets"]
         self.state.d["plan"] = {"change_sets": [{"id": c["id"], "title": c["title"], "flag": c.get("flag")} for c in sets],
                                 "assumptions": doc.get("assumptions") or []}
@@ -1272,6 +1281,10 @@ def render_summary(d):
         verdict = "over the goal" if top > goal else "under the goal"
         lines += ["", f"**Peak context this run**: {top:,} tokens ({who}), {verdict} of {goal:,}. "
                   "A peak is the largest prompt in a single LLM call, i.e. how big one Agent's context got."]
+    rev = d.get("revert")
+    if rev and rev.get("status") != "skipped":
+        lines += ["", "**Revert**: " + (f"`main` restored to `{str(rev.get('restored', ''))[:8]}` in `{str(rev.get('sha', ''))[:8]}`; deploy {rev.get('deploy', 'not checked')}."
+                                      if rev["status"] == "reverted" else f"{rev['status']}: {rev.get('reason', '')}")]
     ver = d.get("verification")
     if ver:
         c = ver["counts"]
@@ -1354,6 +1367,93 @@ def update_state_issues(d, factory_repo, pat, factory_token):
         print(f"could not update the state issues: {type(e).__name__}", flush=True)
 
 
+def revert_decision(d, mode, flags_added=()):
+    """(revert, reason). A Build Run that ends badly leaves the commits it pushed on `main`, and every push deploys.
+    Flagged commits are dark, but unflagged ones (a retirement, a refactor, a first build) are live. So a bad ending
+    puts `main` back where the run found it. `mode` is `all`, `unflagged` (only runs that added no flag) or `off`."""
+    outcome, commits = d.get("outcome"), d.get("commits") or []
+    if mode == "off":
+        return False, "reverting failed runs is switched off"
+    if outcome in OK_OUTCOMES:
+        return False, "the run ended well"
+    if outcome == "watchdog_disabled" or (d.get("release") or {}).get("released"):
+        return False, "contained: the flags it released are switched off, or it released and its state was not saved"
+    if not commits:
+        return False, "the run pushed nothing"
+    if not d.get("base_sha") or not d.get("head_sha") or d["base_sha"] == d["head_sha"]:
+        return False, "there is no earlier state to return to"
+    if mode == "unflagged" and flags_added:
+        return False, "flagged: its code is dark until released"
+    return True, ""
+
+
+def revert_main_to_base(d, app_dir, git_auth=(), run_id="0"):
+    """Put `main` back to the run's starting tree with one new commit on top (history is kept, so there are no conflicts to
+    resolve and nothing is force-pushed). Skips, and says why, if `main` has moved on since the run's last push: someone
+    else's commit is there and is not ours to overwrite. Returns {"status": reverted|skipped|failed, ...}."""
+    base, head = d["base_sha"], d["head_sha"]
+    git = lambda *a, check=True: sh(["git", *git_auth, *a], cwd=app_dir, check=check)
+    try:
+        git("fetch", "-q", "origin", "main")
+        remote = git("rev-parse", "origin/main").stdout.strip()
+        if remote != head:
+            return {"status": "skipped", "reason": f"main is at {remote[:8]}, not at the run's last push {head[:8]}; not reverting over it"}
+        git("reset", "-q", "--hard")
+        git("clean", "-fdq")
+        git("checkout", "-q", "-B", f"revert-{run_id}", "origin/main")
+        git("read-tree", "--reset", "-u", base)
+        if git("diff", "--cached", "--quiet", "HEAD", check=False).returncode == 0:
+            return {"status": "skipped", "reason": "main already has the starting tree"}
+        git("-c", "user.name=ai-factory-orchestrator", "-c", "user.email=orchestrator@ai-factory.local", "commit", "-q", "-m",
+            f"Revert Build Run {run_id} ({d.get('outcome')}): restore {base[:8]}\n\n{d.get('message') or ''}\n\n"
+            f"The run pushed {len(d.get('commits') or [])} commit(s) and did not reach a clean pass, so its changes were taken back out. "
+            "They remain in the history.")
+        git("push", "-q", "origin", "HEAD:main")
+        return {"status": "reverted", "sha": git("rev-parse", "HEAD").stdout.strip(), "restored": base}
+    except Exception as e:  # noqa: BLE001 - reported, never raised: finalize must still write its Report
+        return {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[:300]}"}
+
+
+def wait_for_revert_deploy(app, app_repo, sha, pat, minutes):
+    """After a revert push: wait for the app's deploy of that commit and for /api/health. 'healthy', 'deploy_failed' or 'timeout'."""
+    env = {**os.environ, "GH_TOKEN": pat}
+    end = time.time() + minutes * 60
+    while time.time() < end:
+        out = sh(["gh", "run", "list", "--repo", app_repo, "--workflow", "deploy-fly.yml", "--limit", "10", "--json",
+                  "headSha,status,conclusion"], env=env, check=False).stdout
+        runs = [r for r in json.loads(out or "[]") if r.get("headSha") == sha and r.get("status") == "completed"]
+        if any(r.get("conclusion") == "success" for r in runs):
+            status, _ = http("GET", f"https://{app}.fly.dev/api/health", timeout=20)
+            if status == 200:
+                return "healthy"
+        elif runs:
+            return "deploy_failed"
+        time.sleep(20)
+    return "timeout"
+
+
+def revert_failed_run(d, app_dir, pat, lim):
+    """The finalize step: decide, revert, wait for the deploy, and record the outcome in the Report as d["revert"]."""
+    mode = str(lim.get("revert_failed_runs", "all"))
+    flags_added = []
+    if d.get("base_sha") and d.get("head_sha") and Path(app_dir).is_dir():
+        git = lambda *a: sh(["git", *a], cwd=app_dir, check=False).stdout
+        flags_added = new_flag_slugs(git("show", f"{d['base_sha']}:flags.json"), git("show", f"{d['head_sha']}:flags.json"))
+    go, why = revert_decision(d, mode, flags_added)
+    if not go:
+        d["revert"] = {"status": "skipped", "reason": why, "mode": mode}
+        return
+    if not Path(app_dir).is_dir():
+        d["revert"] = {"status": "failed", "reason": "the app checkout is not there", "mode": mode}
+        return
+    auth = ["-c", "http.extraheader=Authorization: Basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode()]
+    d["revert"] = {**revert_main_to_base(d, app_dir, auth, os.environ.get("GITHUB_RUN_ID", "0")), "mode": mode}
+    if d["revert"]["status"] == "reverted":
+        owner = os.environ["GITHUB_REPOSITORY"].split("/")[0]
+        d["revert"]["deploy"] = wait_for_revert_deploy(d["app"], f"{owner}/{d['app']}", d["revert"]["sha"], pat,
+                                                       float(lim.get("revert_deploy_timeout_minutes", 15)))
+
+
 def finish_update_intake(ok, repo, number, pat):
     """An Update Intake that finished is closed and starts the change sets waiting on it; one that stopped loses
     `proceed-with-change`, so adding the label again retries it (a label that is still there cannot fire again)."""
@@ -1382,7 +1482,13 @@ def finalize():
     elif d["outcome"] == "running":
         d["message"] = d["message"] or "the Build Run process ended without recording an outcome (cancelled or killed)"
     d["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        revert_failed_run(d, os.environ.get("APP_DIR", ""), os.environ["FACTORY_PAT"], load_config()["limits"])
+    except Exception as e:  # noqa: BLE001
+        d["revert"] = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[:300]}"}
     d["audit"] = audit.audit_report(d)
+    # The post-mortem reads state.json, so the final state (audit, revert) has to be saved there too.
+    (work / "state.json").write_text(json.dumps(d, indent=2))
     summary = render_summary(d)
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
     (work / "artifacts" / "build-run-report.json").write_text(json.dumps(d, indent=2))

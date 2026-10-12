@@ -235,6 +235,59 @@ class Invariants(unittest.TestCase):
         self.assertEqual(set(b.OK_OUTCOMES), set(audit.OK_OUTCOMES) & set(appstate.OK) & set(dashboard.OK))
         self.assertIn("planned", b.OK_OUTCOMES)
 
+    def test_inv25_a_failed_run_leaves_main_as_it_found_it(self):
+        from test_revert import Repo, git
+        r = Repo()
+        self.assertEqual(b.revert_main_to_base(r.d, r.work)["status"], "reverted")
+        self.assertEqual(git(r.origin, "diff", "--stat", r.base, "main"), "")
+        self.assertEqual(git(r.origin, "rev-list", "--count", "main"), "3")  # history kept, nothing rewritten
+        moved = Repo()
+        moved.other_pushes("someone else\n")
+        self.assertEqual(b.revert_main_to_base(moved.d, moved.work)["status"], "skipped")  # never over someone else's commit
+        d = {"commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
+        for outcome in ("released", "nothing_to_release", "planned", "watchdog_disabled"):
+            self.assertFalse(b.revert_decision(dict(d, outcome=outcome), "all")[0], outcome)
+        self.assertTrue(b.revert_decision(dict(d, outcome="round_limit"), "all")[0])
+        import audit
+        self.assertTrue(audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "failed", "reason": "x"})))
+
+    def test_inv26_a_bad_ending_gets_one_fix_request_per_intake(self):
+        import fixrequest as fr, postmortem as pm
+        for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
+            self.assertTrue(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
+        for outcome in ("released", "nothing_to_release", "planned"):
+            self.assertFalse(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
+        self.assertEqual((fr.route("plan_gap"), fr.route("spec_ambiguity"), fr.route("infra"), fr.route(None)), ("factory", "app", "info", "info"))
+        self.assertEqual(fr.fingerprint("a", "1", "app"), fr.fingerprint("a", "1", "app"))
+        self.assertNotEqual(fr.fingerprint("a", "1", "app"), fr.fingerprint("a", "2", "app"))
+
+    def test_inv27_self_correction_starts_itself_but_is_bounded(self):
+        import fixrequest as fr
+        lim = {"fix_request_max_attempts": 2}
+        self.assertEqual([fr.should_autostart("app", n, lim) for n in (1, 2, 3, 4)], [True, True, False, False])
+        self.assertFalse(fr.should_autostart("factory", 1, lim))  # a Factory fix is a PR a person merges
+        self.assertEqual(PROFILES["limits"]["fix_request_max_attempts"], 2)
+        self.assertTrue(PROFILES["limits"]["fix_request_autostart"])
+        body = fr.update_intake.with_fix_meta({"origin": 1, "attempt": 2})
+        self.assertEqual(fr.attempt_info(body, "9")[:2], (1, 3))  # a failed retry files the next attempt, counting up
+        import update_intake as u
+        calls = []
+
+        def fake(args, token, check=False):
+            calls.append((args, token))
+            if args[:2] == ["issue", "create"]:
+                return mock.Mock(stdout="https://github.com/o/f/issues/80\n")
+            if args[:2] == ["issue", "view"]:
+                return mock.Mock(stdout='{"body": "### App name\\n\\ndemo\\n\\n### What should change?\\n\\nx\\n"}')
+            return mock.Mock(stdout="[]")
+
+        facts = {"app": "demo", "outcome": "round_limit", "message": "m", "run_url": "u", "issue_number": "7"}
+        with mock.patch.object(fr, "gh", fake), mock.patch.object(u, "gh", fake):
+            out = fr.file_fix_request("o/f", "actions", "the-pat", facts, {"category": "spec_ambiguity"}, None, lim)
+        self.assertTrue(out["started"])
+        starts = [(a, t) for a, t in calls if a[:2] == ["issue", "edit"] and u.GO in a]
+        self.assertEqual([t for _, t in starts], ["the-pat"])  # the PAT, so the label event starts the workflow
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

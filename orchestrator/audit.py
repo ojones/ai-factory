@@ -63,6 +63,13 @@ def audit_report(d, overshoot=COST_OVERSHOOT_USD):
     if outcome in OK_OUTCOMES and outcome != "planned" and d.get("build_kind") == "update" and not commits:
         bad("A-05 an update changes something", "an update finished OK with no coder commit")
 
+    if (outcome not in OK_OUTCOMES and outcome != "watchdog_disabled" and d.get("commits") and not released):
+        rev = d.get("revert")
+        if rev is None:
+            bad("A-07 a failed run leaves main as it found it", "the run pushed commits and ended badly, but no revert was attempted or recorded")
+        elif rev.get("status") == "failed":
+            bad("A-07 a failed run leaves main as it found it", f"the revert failed ({rev.get('reason')}); main still has the failed run's commits")
+
     if outcome == "planned" and len(((d.get("plan") or {}).get("change_sets")) or []) < 2:
         bad("A-06 a planned run has a plan to hand on", "outcome `planned` without two or more change sets in the plan")
 

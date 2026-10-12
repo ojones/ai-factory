@@ -83,6 +83,10 @@ _Avoid_: feature flag (as a name for the gate itself; it is the underlying mecha
 A `factory-learning` issue in ai-factory recording something a Build Run taught the Factory (a stuck run, a recurring minor finding), from which the post-mortem Agent may propose a change to prompts, the Starter Template or the Orchestrator as a PR.
 _Avoid_: post-mortem (that is the step and Agent that analyse it)
 
+**Fix request**:
+The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (the revert), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (a PR for a person to merge), to the app as an Update Intake that starts itself, or kept as information.
+_Avoid_: bug report, incident
+
 **Scoreboard**:
 The Orchestrator's per-round record of every check's state (`passed`, `failed`, `blocked`, `not_run`) and the blocking findings still open, written to the Build Run Report and `artifacts/progress.json`. It, not an Agent's say-so, is how the run knows whether it is making progress; a run that leaves the same items open for `stuck_rounds` rounds stops.
 

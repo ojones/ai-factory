@@ -29,6 +29,8 @@ FORM_LABEL = "update-intake"
 WAIT = "waiting-on-plan"
 APP_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 META_RE = re.compile(r"<!-- factory-plan:(.*?) -->", re.S)
+FIX_RE = re.compile(r"<!-- factory-fix:(.*?) -->", re.S)
+AUTO_FIX = "auto-fix"
 
 
 # --- pure logic (unit-tested) -------------------------------------------------
@@ -72,6 +74,23 @@ def plan_meta(body):
         return meta if isinstance(meta, dict) else {}
     except ValueError:
         return {}
+
+
+def fix_meta(body):
+    """The retry metadata hidden in an automatic fix request ({} for any other issue): which Intake it came from (`origin`),
+    which automatic attempt it is (`attempt`, 1 for the first) and what earlier attempts found (`history`)."""
+    m = FIX_RE.search(body or "")
+    if not m:
+        return {}
+    try:
+        meta = json.loads(m.group(1))
+        return meta if isinstance(meta, dict) else {}
+    except ValueError:
+        return {}
+
+
+def with_fix_meta(meta):
+    return f"<!-- factory-fix:{json.dumps(meta, separators=(',', ':')).replace('--', chr(92) + 'u002d' + chr(92) + 'u002d')} -->"
 
 
 def one_line(text, limit=80):

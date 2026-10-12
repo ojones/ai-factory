@@ -39,6 +39,7 @@ import tempfile
 from pathlib import Path
 
 import build_run as b
+import fixrequest
 
 LABEL = "factory-learning"
 CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
@@ -94,7 +95,7 @@ def collect_facts(work, d):
     return {"app": d.get("app"), "outcome": d.get("outcome"), "message": d.get("message"),
             "run_url": d.get("run_url"), "issue_number": d.get("issue_number"), "spent_usd": d.get("spent_usd"),
             "commits": d.get("commits", []), "cap_usd": d.get("cap_usd"), "review_passes": d.get("review_passes") or 0,
-            "audit": d.get("audit") or [], "plan": d.get("plan"), "intake_kind": d.get("intake_kind"), "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
+            "audit": d.get("audit") or [], "revert": d.get("revert"), "plan": d.get("plan"), "intake_kind": d.get("intake_kind"), "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
             "rounds": rounds, "recurring_findings": recurring, "stages": stages,
             "final_minor": [{k: f.get(k, "") for k in ("summary", "evidence", "file", "line")} for f in final_minor]}
 
@@ -168,6 +169,11 @@ def bad_fixture_reason(fixture_diffs):
         if not APP_PATH_RE.search(text):
             return f"{path} is not a diff of Managed App code (it must change files under backend/ or frontend/)"
     return None
+
+
+def wants_fix_request(d, limits):
+    """A fix request is filed for every Build Run that did not end well (`planned` and the good endings do not)."""
+    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in b.OK_OUTCOMES
 
 
 def records_stuck_issue(outcome):
@@ -407,20 +413,21 @@ def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path,
     """Run the Agent once for these lesson issues, comment its analysis on each, and open the PR."""
     key = mint_agent_key(cfg, parent_key)
     if not key:
-        return
+        return None
     result_path.unlink(missing_ok=True)
     run_agent(factory, cfg, key, facts_path, result_path, int(cfg["limits"].get("postmortem_timeout_minutes", 15)))
     result = b.load_json(result_path) or {}
     if result.get("category") not in CATEGORIES:
         for n in targets:
             gh(["issue", "comment", str(n), "--repo", repo, "--body", "The post-mortem Agent produced no usable analysis."], token)
-        return
+        return None
     pr = open_pr(factory, repo, pat, targets[0], result, run_id, int(cfg["limits"].get("max_open_learning_prs", 3)))
     for n in targets:
         gh(["issue", "comment", str(n), "--repo", repo, "--body",
             f"**Post-mortem** ({result['category']}): {result.get('root_cause', '')}\n\n"
             f"**Proposed change**: {result.get('change_summary', 'none')}\n\n"
             + (f"**PR**: {pr}" if pr else "No change was proposed, it did not pass validation, or too many learning PRs are open.")], token)
+    return result
 
 
 def lesson_main(number):
@@ -428,8 +435,8 @@ def lesson_main(number):
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     issue = json.loads(gh(["issue", "view", str(number), "--repo", repo, "--json", "title,body,comments,labels"], token).stdout)
-    if LABEL not in [l["name"] for l in issue.get("labels", [])]:
-        b.log(f"#{number} is not a {LABEL} issue; nothing to do")
+    if not {LABEL, fixrequest.FACTORY_LABEL} & {l["name"] for l in issue.get("labels", [])}:
+        b.log(f"#{number} is not a {LABEL} or {fixrequest.FACTORY_LABEL} issue; nothing to do")
         return 0
     work = Path(tempfile.mkdtemp(prefix="factory-run-"))
     facts_path, result_path = work / "lesson.json", work / "result.json"
@@ -466,9 +473,15 @@ def main():
     new_lessons = [n for n, status in recorded if n and (status in ("new", "reopened") or not already_proposed(repo, token, n))]
     targets = ([stuck_issue] if stuck_issue else []) + new_minors + new_lessons
     cfg, key = b.load_config(), os.environ.get("DEEPINFRA_API_KEY")
-    if not targets or not key or "postmortem" not in cfg.get("roles", {}):
-        return 0
-    propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, targets, os.environ.get("GITHUB_RUN_ID", "0"))
+    result = None
+    if targets and key and "postmortem" in cfg.get("roles", {}):
+        result = propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, targets, os.environ.get("GITHUB_RUN_ID", "0"))
+    if wants_fix_request(d, cfg.get("limits", {})):
+        try:
+            filed = fixrequest.file_fix_request(repo, token, pat, facts, result, d.get("revert"), cfg.get("limits", {}))
+            b.log(f"fix request ({filed['target']}, {'started' if filed['started'] else 'not started'}): {filed['url']}")
+        except Exception as e:  # noqa: BLE001 - the post-mortem never fails the run
+            b.log(f"could not file the fix request: {type(e).__name__}: {e}")
     return 0
 
 

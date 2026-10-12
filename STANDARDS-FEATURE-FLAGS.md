@@ -49,5 +49,5 @@ Every Managed App's flag wrapper honors a **Preview Token** so the tester can ex
 
 **Retirement** — deleting a flag and its code path — happens only on an explicit request from the owner. Agents never retire a flag on their own initiative. A released flag simply stays on, doubling as a rollback lever.
 
-Unflagged changes (bug fixes, refactors, dependency bumps) go live on deploy with the Test Gate as their only pre-live gate; the reviewer checks them after the fact. On an update, a user-facing change with no flag around it is a blocking finding; on a first build it is not.
+Unflagged changes (bug fixes, refactors, dependency bumps, retiring a flag) go live on deploy with the Test Gate as their only pre-live gate; the reviewer checks them after the fact. If the Build Run that pushed them ends without a clean pass, the Orchestrator takes them back out (see ARCHITECTURE.md: Revert on failure). On an update, a user-facing change with no flag around it is a blocking finding; on a first build it is not.
 → [issue #24](https://github.com/ojones/ai-factory/issues/24)

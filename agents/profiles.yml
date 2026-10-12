@@ -79,6 +79,18 @@ limits:
   # for one Intake. Set planner_enabled false to run an Update Intake's request straight through as one change.
   planner_enabled: true
   planner_max_change_sets: 8
+  # A Build Run that ends badly (round limit, needs a person, budget, stuck, crash) took commits to `main`, and every push
+  # deploys. `all` puts `main` back to where the run started with one new commit; `unflagged` does so only for runs that added
+  # no flag (flagged code is dark); `off` leaves it. A run the watchdog switched off is never reverted (it is contained).
+  revert_failed_runs: all
+  revert_deploy_timeout_minutes: 15
+  # File a fix request issue for every run that ends badly: what happened, what was done, and numbered requirements, routed
+  # to the Factory (a prompt, planner, template or orchestrator cause) or to the app (an Update Intake for you to start).
+  fix_requests: true
+  # A fix request routed to the app (the request was ambiguous or too big) is an Update Intake that starts itself: no person
+  # reviews it. A chain stops after this many automatic retries of one Intake and waits for a person.
+  fix_request_autostart: true
+  fix_request_max_attempts: 2
   # Stop early when this many rounds in a row leave exactly the same checks failing and the same
   # findings open (the fix attempts are changing nothing the checks can see). 0 disables it.
   stuck_rounds: 3

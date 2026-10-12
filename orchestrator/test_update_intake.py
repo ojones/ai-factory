@@ -279,6 +279,24 @@ class Planning(unittest.TestCase):
         self.assertIn("Should photos be public?", str(cm.exception))
         self.assertIn("proceed-with-change", str(cm.exception))
 
+    def test_an_automatic_retry_does_not_stop_to_ask_it_takes_the_conservative_reading(self):
+        run = self.make(self.plan(1, questions=["Should photos be public?"]))
+        run.fix_meta = {"origin": 66, "attempt": 1}
+        run.factory_token = "t"
+        run.gh = mock.Mock()
+        self.assertFalse(run.plan_change())  # no NeedsHuman
+        self.assertIn("Decided without asking", run.state.d["plan"]["assumptions"][-1])
+        self.assertIn("Should photos be public?", run.state.d["plan"]["assumptions"][-1])
+        self.assertIn("most conservative reading", run.state.d["plan"]["assumptions"][-1])
+        posted = run.gh.call_args[0][0]
+        self.assertIn("Decided without asking", posted[posted.index("--body") + 1])  # visible on the issue
+
+    def test_a_person_filed_request_still_stops_for_a_blocking_question(self):
+        run = self.make(self.plan(1, questions=["Should photos be public?"]))
+        run.fix_meta = {}
+        with self.assertRaises(b.NeedsHuman):
+            run.plan_change()
+
     def test_a_plan_that_fails_the_check_is_rejected_with_the_reasons(self):
         bad = self.plan(2)
         bad["change_sets"][1]["depends_on"] = ["CS-9"]
