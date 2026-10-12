@@ -54,5 +54,9 @@
   "rename-field": {
     "verdict": "changes_requested",
     "match": "rename|additive|old|existing|migrat|title|persist|stored"
+  },
+  "tester-no-output": {
+    "verdict": "changes_requested",
+    "match": "output|MUST write|ACTION REQUIRED|{{report_path}}"
   }
 }

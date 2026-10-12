@@ -27,4 +27,14 @@ Give every check one `status`: `passed` (you saw the expected result), `failed` 
 
 You are done when every new flag has a recorded result for each check above, or, with no flags, every requirement has one.
 
-Write `{{report_path}}` as JSON: `{"passed": bool, "results": [{"flag": slug, "check": "...", "status": "passed|failed|blocked|not_run", "passed": bool, "evidence": "request, status, relevant response excerpt", "repro": "the curl command that shows the failure"}], "limitations": ["what you could not test, or could not clean up"]}` (`limitations` is an empty list when there are none). `passed` is true only when every result's status is `passed`; the Orchestrator derives it from the statuses. Report failures with their evidence and leave fixing to the coder.
+**CRITICAL**: You MUST write your test results to the file `{{report_path}}` as JSON in this exact format:
+`{"passed": bool, "results": [{"flag": slug, "check": "...", "status": "passed|failed|blocked|not_run", "passed": bool, "evidence": "request, status, relevant response excerpt", "repro": "the curl command that shows the failure"}], "limitations": ["what you could not test, or could not clean up"]}`
+
+**ACTION REQUIRED**: Before finishing, execute this command to ensure your report is written:
+```bash
+echo '{"passed": true/false, "results": [...], "limitations": [...]}' > {{report_path}}
+```
+
+Replace the placeholder values with your actual test results. The `passed` field should be `true` only when every result's status is `passed`. If any test failed, set `passed` to `false`.
+
+Double-check that the file was written successfully before you finish your task.
