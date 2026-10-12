@@ -6,13 +6,13 @@ The spec for this build (a first build's Intake, or for an update the change req
 
 Previous test report: {{previous_report}}
 
-Work fast: aim for about 12 tool calls. Do not explore the repository beyond what each check needs. Put your `curl` requests for a flag in one shell script and run it once (print status and a trimmed body for each request), rather than running requests one at a time.
+Work fast, but completely: aim for about 15 tool calls. Do not explore the repository beyond what each check needs. Put your `curl` requests for a flag in one shell script and run it once (print status and a trimmed body for each request), rather than running requests one at a time.
 
 Test like this:
 1. List the new flags: the entries in `flags.json` added since the previous release (`git log -p flags.json`).
-2. For each flag, read the code behind it, then exercise that feature end to end with `curl` using the token. Cover the happy path, one invalid input, and one boundary.
+2. Write the checklist before you send a request. Go through the spec sentence by sentence and list every behaviour it states: each success response (status and body), each error case it names (every kind of bad input, with its status), each rule about order, defaults, trimming or uniqueness, and the dark behaviour. That list, in the spec's own words, is your set of checks: one check per behaviour, and do not swap in cases of your own for ones the spec names. For every input the spec constrains, also try the values just inside and just outside the limit and the usual malformed forms (missing, the wrong type, empty or blank, zero, negative, a number with trailing characters), because an implementation that handles only the obvious case passes only the obvious test. Then read the code behind the flag and run every check, with the token, as one batched `curl` script.
 3. Confirm each flagged feature is still dark without the token, and that `/api/health` returns 200.
-4. Check that the work matches the spec for this build, which is below. When there are no new flags (a first build usually has none), this is the whole test: list the requirements the spec states, and exercise each against the live app with `curl` (happy path, one invalid input, one boundary). Use an empty string as `flag` for results not tied to a flag.
+4. Check that the work matches the spec for this build, which is below. When there are no new flags (a first build usually has none), this is the whole test: list the requirements the spec states, and exercise each against the live app with `curl` (one check per behaviour it states, as in step 2). Use an empty string as `flag` for results not tied to a flag.
 
 If there is a previous report, this is a fix round. Re-check every failed result in detail (read the code behind it, and reproduce it again). Re-run every check that passed as one batched script with no code reading, to catch regressions; read code only for flags that are new or whose code changed since that report (`git diff` against the commit it tested). Record a result for every check, as above.
 

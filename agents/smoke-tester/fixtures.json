@@ -1,0 +1,150 @@
+{
+  "spec": "Add a notes API behind the feature flag `notes-api`.\n\n- POST /api/notes with a JSON body {\"text\": string} creates a note and answers 201 with {\"id\": number, \"text\": string}. The text is trimmed. A missing, non-string or blank text answers 400 with {\"error\": string}.\n- GET /api/notes answers 200 with a JSON array of every note, in the order they were created.\n- GET /api/notes/:id answers 200 with the note, 404 if there is no such note, and 400 if the id is not a positive whole number.\n- While the flag is off (no preview token) every one of these answers 404 with {\"error\": \"not found\"}.",
+  "spec_unobservable": "\n- Every note that is created must also be written to the server's audit log, as one info-level line.",
+  "flag": "notes-api",
+  "fixtures": [
+    {
+      "id": "good",
+      "expect": "pass",
+      "describe": "the correct feature: the tester must not raise a false alarm",
+      "edits": []
+    },
+    {
+      "id": "wrong-status",
+      "expect": "fail",
+      "describe": "POST answers 200 where the spec says 201",
+      "edits": [
+        [
+          "res.status(201).json(note);",
+          "res.status(200).json(note);"
+        ]
+      ],
+      "oracle_fails": [
+        "create answers 201"
+      ],
+      "match": "\\b201\\b|status code|expected 20"
+    },
+    {
+      "id": "no-blank-check",
+      "expect": "fail",
+      "describe": "a blank text is accepted where the spec says 400",
+      "edits": [
+        [
+          "if (typeof text !== \"string\" || text.trim() === \"\") {",
+          "if (typeof text !== \"string\") {"
+        ]
+      ],
+      "oracle_fails": [
+        "blank text answers 400"
+      ],
+      "match": "blank|whitespace|empty text|only spaces"
+    },
+    {
+      "id": "flag-leak",
+      "expect": "fail",
+      "describe": "the flag gate is missing: the feature is live for everyone",
+      "edits": [
+        [
+          "if (!(await isFeatureEnabled(res, \"notes-api\"))) {",
+          "if (false) {"
+        ]
+      ],
+      "oracle_fails": [
+        "dark without the token"
+      ],
+      "match": "without (the )?(preview )?token|flag is off|dark|should (be )?404|returns? 404"
+    },
+    {
+      "id": "wrong-order",
+      "expect": "fail",
+      "describe": "the list comes back newest first where the spec says creation order",
+      "edits": [
+        [
+          "res.json(notes);",
+          "res.json([...notes].reverse());"
+        ]
+      ],
+      "oracle_fails": [
+        "list is in creation order"
+      ],
+      "match": "order|reverse|newest|oldest|creation"
+    },
+    {
+      "id": "id-zero",
+      "expect": "fail",
+      "describe": "id 0 answers 404 where the spec says 400 (a boundary)",
+      "edits": [
+        [
+          "if (!Number.isInteger(id) || id < 1) {",
+          "if (!Number.isInteger(id) || id < 0) {"
+        ]
+      ],
+      "oracle_fails": [
+        "id 0 answers 400"
+      ],
+      "match": "\\bid\\W{0,3}0\\b|/0\\b|\\bzero\\b|non-positive"
+    },
+    {
+      "id": "lenient-id",
+      "expect": "fail",
+      "hard": true,
+      "describe": "'1abc' is read as id 1 where the spec says 400 (subtle: 'abc' still answers 400)",
+      "edits": [
+        [
+          "const id = Number(req.params.id);",
+          "const id = parseInt(req.params.id, 10);"
+        ]
+      ],
+      "oracle_fails": [
+        "id 1abc answers 400"
+      ],
+      "match": "1abc|1\\.5|trailing|decimal|lenient|parseInt"
+    },
+    {
+      "id": "no-trim",
+      "expect": "fail",
+      "heldout": true,
+      "describe": "the text is stored untrimmed where the spec says it is trimmed (held out: the prompt was not written against it)",
+      "edits": [
+        [
+          "const note = { id: nextId++, text: text.trim() };",
+          "const note = { id: nextId++, text };"
+        ]
+      ],
+      "oracle_fails": [
+        "create trims and returns id and text"
+      ],
+      "match": "trim|whitespace|leading|surrounding space"
+    },
+    {
+      "id": "dup-ids",
+      "expect": "fail",
+      "heldout": true,
+      "describe": "every note gets the same id (held out)",
+      "edits": [
+        [
+          "const note = { id: nextId++, text: text.trim() };",
+          "const note = { id: nextId, text: text.trim() };"
+        ]
+      ],
+      "oracle_fails": [
+        "ids are unique"
+      ],
+      "match": "unique|duplicate|same id|id\\s*=\\s*1 for all|all (notes )?(have|receive) (the same )?id"
+    },
+    {
+      "id": "unobservable",
+      "expect": "not_pass",
+      "unobservable": true,
+      "describe": "the spec adds an audit-log line the tester cannot see from outside: it must not report that check as passed",
+      "edits": [
+        [
+          "notes.push(note);",
+          "notes.push(note);\n    console.log(JSON.stringify({ level: \"info\", message: \"note_created\", id: note.id }));"
+        ]
+      ],
+      "oracle_fails": [],
+      "match": "log"
+    }
+  ]
+}
