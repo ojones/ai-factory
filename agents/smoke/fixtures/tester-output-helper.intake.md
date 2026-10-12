@@ -1,0 +1,1 @@
+Test that the tester agent can produce valid JSON output files using the helper utility.

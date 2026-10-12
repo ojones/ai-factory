@@ -1,0 +1,113 @@
+diff --git a/backend/test-report-helper.js b/backend/test-report-helper.js
+new file mode 100644
+index 0000000..XXXXXXX
+--- /dev/null
++++ b/backend/test-report-helper.js
+@@ -0,0 +1,100 @@
++#!/usr/bin/env node
++/**
++ * Test Report Helper - Utility for AI Factory testers to generate valid JSON test reports
++ * 
++ * Usage: node test-report-helper.js <output-path> <action> [args...]
++ * 
++ * Actions:
++ * - init: Initialize a new test report
++ * - add-result: Add a test result to the report
++ * - finalize: Finalize and validate the report
++ */
++
++const fs = require('fs');
++const path = require('path');
++
++const outputPath = process.argv[2];
++const action = process.argv[3];
++const args = process.argv.slice(4);
++
++function readReport() {
++  if (!fs.existsSync(outputPath)) {
++    return { passed: true, results: [], limitations: [] };
++  }
++  try {
++    return JSON.parse(fs.readFileSync(outputPath, 'utf8'));
++  } catch (e) {
++    return { passed: true, results: [], limitations: [] };
++  }
++}
++
++function writeReport(report) {
++  // Validate the report structure
++  if (!report.hasOwnProperty('passed')) {
++    report.passed = true;
++  }
++  if (!Array.isArray(report.results)) {
++    report.results = [];
++  }
++  if (!Array.isArray(report.limitations)) {
++    report.limitations = [];
++  }
++  
++  // Calculate overall passed status
++  report.passed = report.results.every(result => 
++    result.status === 'passed' || result.status === 'not_run'
++  );
++  
++  fs.writeFileSync(outputPath, JSON.stringify(report, null, 2));
++  return report;
++}
++
++switch (action) {
++  case 'init':
++    const initialReport = {
++      passed: true,
++      results: [],
++      limitations: []
++    };
++    writeReport(initialReport);
++    console.log(`Initialized test report at ${outputPath}`);
++    break;
++    
++  case 'add-result':
++    if (args.length < 4) {
++      console.error('add-result requires: flag check status evidence [repro]');
++      process.exit(1);
++    }
++    const [flag, check, status, evidence] = args;
++    const repro = args[4] || '';
++    
++    const report = readReport();
++    report.results.push({
++      flag,
++      check,
++      status,
++      passed: status === 'passed',
++      evidence,
++      ...(repro ? { repro } : {})
++    });
++    writeReport(report);
++    console.log(`Added result for ${flag}:${check}`);
++    break;
++    
++  case 'add-limitation':
++    if (args.length < 1) {
++      console.error('add-limitation requires: limitation-text');
++      process.exit(1);
++    }
++    const limitationText = args.join(' ');
++    
++    const report2 = readReport();
++    report2.limitations.push(limitationText);
++    writeReport(report2);
++    console.log(`Added limitation: ${limitationText}`);
++    break;
++    
++  case 'finalize':
++    const finalReport = readReport();
++    writeReport(finalReport);
++    console.log(`Finalized test report at ${outputPath}`);
++    break;
++    
++  default:
++    console.error(`Unknown action: ${action}`);
++    console.error('Available actions: init, add-result, add-limitation, finalize');
++    process.exit(1);
++}

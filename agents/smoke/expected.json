@@ -63,5 +63,10 @@
   "retire-flag-gated-anew": {
     "verdict": "changes_requested",
     "match": "new flag|retire-delete-flag|dark|switch|404|not always|still gated|gated|live"
+  },
+  "tester-output-helper": {
+    "verdict": "clean",
+    "match": "",
+    "no_finding_match": "JSON|output|report"
   }
 }

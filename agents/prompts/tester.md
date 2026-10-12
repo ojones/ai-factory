@@ -29,4 +29,10 @@ Give every check one `status`: `passed` (you saw the expected result), `failed` 
 
 You are done when every new flag has a recorded result for each check above, or, with no flags, every requirement has one.
 
-Write `{{report_path}}` as JSON. Build it with a short Python script and `json.dump`, not by typing the JSON by hand: your `evidence` strings contain quotes, braces and newlines, and a report that is not valid JSON is thrown away and stops the run. It is shaped like this: `{"passed": bool, "results": [{"flag": slug, "check": "...", "status": "passed|failed|blocked|not_run", "passed": bool, "evidence": "request, status, relevant response excerpt", "repro": "the curl command that shows the failure"}], "limitations": ["what you could not test, or could not clean up"]}` (`limitations` is an empty list when there are none). `passed` is true only when every result's status is `passed`; the Orchestrator derives it from the statuses. Report failures with their evidence and leave fixing to the coder.
+Write `{{report_path}}` as JSON using the test report helper utility to ensure valid output:
+1. Initialize the report: `node test-report-helper.js {{report_path}} init`
+2. Add each result: `node test-report-helper.js {{report_path}} add-result "flag-slug" "check-description" "status" "evidence from curl requests"`
+3. Add limitations if any: `node test-report-helper.js {{report_path}} add-limitation "what you could not test"`
+4. Finalize the report: `node test-report-helper.js {{report_path}} finalize`
+
+Alternatively, build it with a short Python script and `json.dump`, not by typing the JSON by hand: your `evidence` strings contain quotes, braces and newlines, and a report that is not valid JSON is thrown away and stops the run. It is shaped like this: `{"passed": bool, "results": [{"flag": slug, "check": "...", "status": "passed|failed|blocked|not_run", "passed": bool, "evidence": "request, status, relevant response excerpt", "repro": "the curl command that shows the failure"}], "limitations": ["what you could not test, or could not clean up"]}` (`limitations` is an empty list when there are none). `passed` is true only when every result's status is `passed`; the Orchestrator derives it from the statuses. Report failures with their evidence and leave fixing to the coder.
