@@ -71,8 +71,18 @@ def revert_line(revert):
     return f"Nothing was reverted: {clip(revert.get('reason'), 200)}."
 
 
-def requirements(facts, result, revert):
-    """Numbered, checkable requirements: what must be true once this is fixed."""
+def raised_cap(outcome, cap, ceiling=10.0):
+    """The cost cap for a retry. Money was the problem, so the retry gets twice as much, up to the Intake ceiling; any other
+    ending keeps the cap it had. Returns None when there is nothing to change."""
+    if outcome != "budget_exhausted" or not cap:
+        return None
+    new = min(float(ceiling), round(float(cap) * 2, 2))
+    return new if new > float(cap) else None
+
+
+def requirements(facts, result, revert, app_side=False):
+    """Numbered, checkable requirements: what must be true once this is fixed. `app_side` is for a retry of the app's own
+    request, which carries no requirements about fixing the Factory."""
     outcome, message = facts.get("outcome"), clip(facts.get("message"), 200)
     reqs = []
     status = (revert or {}).get("status")
@@ -99,7 +109,9 @@ def requirements(facts, result, revert):
         reqs.append(f"Whatever stopped the run is resolved: {message}.")
     if recurring and outcome not in ("round_limit", "stuck"):
         reqs.append("These findings, which the coder did not resolve across rounds, stop recurring: " + "; ".join(clip(s, 100) for s in recurring[:MAX_ITEMS]) + ".")
-    for r in (result or {}).get("requirements") or []:
+    # The post-mortem Agent's own requirements are about how to fix the Factory. They belong in a Factory fix request and
+    # not in a retry of the app's request (a retry that was told to build tester helpers would go and build them).
+    for r in ((result or {}).get("requirements") or []) if not app_side else []:
         if isinstance(r, str) and r.strip() and clip(r, 300) not in reqs:
             reqs.append(clip(r, 300))
     reqs.append("A re-run of the same request ends `released` or `nothing_to_release` without anyone editing code by hand.")
@@ -171,15 +183,21 @@ def render(facts, result, revert, target, intake_url="", auto=None):
     return "\n".join(lines) + "\n"
 
 
-def app_request(facts, result, revert, original, category=None, history=()):
+def app_request(facts, result, revert, original, category=None, history=(), cap_note=""):
     """The text of the Update Intake for the app route: what went wrong, what must be true this time, how to approach it,
     and the original request last (extracted, so a retry of a retry does not nest)."""
-    reqs = requirements(facts, result, revert)
+    reqs = requirements(facts, result, revert, app_side=True)
     parts = ["A previous attempt at the request below did not complete, so it is being asked again with what was learned.", "",
              f"What happened: it ended {facts.get('outcome')}: {clip(facts.get('message'), 300)} ({facts.get('run_url')})"]
-    cause = clip((result or {}).get("root_cause"), 400)
-    if cause:
-        parts.append(f"Likely cause: {cause}")
+    if facts.get("outcome") in ("budget_exhausted", "time_limit"):
+        # Money or time ran out: say that, not the post-mortem's guess about which Agent happened to fail when it did.
+        parts.append("Likely cause: the request was more than one pass could finish inside its limits.")
+    elif category in APP_CATEGORIES:
+        cause = clip((result or {}).get("root_cause"), 400)
+        if cause:
+            parts.append(f"Likely cause: {cause}")
+    if cap_note:
+        parts.append(cap_note)
     if history:
         parts += ["", "Earlier attempts:"] + [f"- {h}" for h in history]
     guide = GUIDANCE.get(category or "")
@@ -243,9 +261,14 @@ def file_fix_request(repo, token, pat, facts, result, revert, lim=None):
             update_intake.ensure_label(repo, name, token, color, desc)
         cap = update_intake.form_section(body_text, "Cost cap override (USD)")
         cap = None if cap in ("", "_No response_") else cap
+        new_cap = raised_cap(facts.get("outcome"), facts.get("cap_usd"), lim.get("cost_cap_usd_ceiling", 10.0))
+        cap_note = ""
+        if new_cap:
+            cap_note = f"The cost cap for this attempt is raised from ${float(facts.get('cap_usd')):.2f} to ${new_cap:.2f}, because the last attempt ran out of money."
+            cap = f"{new_cap:.2f}"
         original = update_intake.form_section(body_text, "What should change?") or update_intake.form_section(body_text, "What should be built?")
         meta = {"origin": origin, "attempt": attempt, "history": history + [f"attempt {attempt - 1 or 'zero (the original request)'}: ended {facts.get('outcome')}: {clip(facts.get('message'), 160)}"]}
-        request = app_request(facts, result, revert, original, category, meta["history"])
+        request = app_request(facts, result, revert, original, category, meta["history"], cap_note)
         labels = f"{LABEL},{update_intake.FORM_LABEL},app:{app},{update_intake.AUTO_FIX}" + ("" if autostart else ",needs-human")
         body = (update_intake.with_fix_meta(meta) + "\n\n" + render(facts, result, revert, target, intake_url, auto) + "\n---\n\n" + intake_form(app, request, cap))
         out = gh(["issue", "create", "--repo", repo, "--title", f"{app}: fix request for #{origin} (attempt {attempt}) [{fp}]", "--label", labels,

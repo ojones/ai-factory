@@ -66,8 +66,9 @@ class Content(unittest.TestCase):
 
     def test_the_app_request_carries_the_original_and_the_requirements_and_parses_as_a_form(self):
         text = fr.app_request(FACTS, RESULT, REVERT, "Retire the flag foo.")
-        for needle in ("did not complete", "round_limit", "invented a flag", "Retire the flag foo.", "Requirements for this attempt:"):
+        for needle in ("did not complete", "round_limit", "Retire the flag foo.", "Requirements for this attempt:"):
             self.assertIn(needle, text)
+        self.assertNotIn("invented a flag", text)  # a Factory-side cause is not the app request's business
         issue = fr.render(FACTS, RESULT, REVERT, "app") + "\n---\n\n" + fr.intake_form("demo", text)
         self.assertEqual(u.app_name(issue), "demo")
         self.assertEqual(b.parse_intake(issue, 2.0, 10.0)[0], text)
@@ -84,6 +85,34 @@ class Inference(unittest.TestCase):
         # What the live test showed: a tester that ran out of budget looked like a prompt gap and went to the Factory.
         self.assertEqual(fr.route(fr.inferred_category("prompt_gap", "budget_exhausted")), "app")
         self.assertEqual(fr.route(fr.inferred_category("prompt_gap", "round_limit")), "factory")  # for other endings it stays
+
+
+class Correction(unittest.TestCase):
+    def test_a_budget_failure_retries_with_twice_the_money_up_to_the_ceiling(self):
+        self.assertEqual(fr.raised_cap("budget_exhausted", 0.08, 10.0), 0.16)
+        self.assertEqual(fr.raised_cap("budget_exhausted", 2.0, 10.0), 4.0)
+        self.assertEqual(fr.raised_cap("budget_exhausted", 7.0, 10.0), 10.0)
+        self.assertIsNone(fr.raised_cap("budget_exhausted", 10.0, 10.0))  # already at the ceiling
+        for outcome in ("round_limit", "needs_human", "time_limit", "stuck", "crash"):
+            self.assertIsNone(fr.raised_cap(outcome, 0.08), outcome)
+        self.assertIsNone(fr.raised_cap("budget_exhausted", None))
+
+    def test_the_app_retry_carries_no_requirements_about_fixing_the_factory(self):
+        # What the live retry (#81) got: the post-mortem's requirements about the tester, pasted into the app's request.
+        result = dict(RESULT, category="model_limit", requirements=["The tester agent must produce a valid JSON test report", "Helper utilities should make it easier for AI agents"])
+        app_side = fr.app_request(FACTS, result, REVERT, "Add a count endpoint.", "model_limit", [])
+        self.assertNotIn("tester agent must produce", app_side)
+        self.assertNotIn("Helper utilities", app_side)
+        factory_side = " ".join(fr.requirements(FACTS, result, REVERT))
+        self.assertIn("tester agent must produce", factory_side)  # a Factory fix request keeps them
+
+    def test_a_budget_ending_is_described_as_one_and_not_as_the_agent_that_happened_to_fail(self):
+        facts = dict(FACTS, outcome="budget_exhausted", message="$0.0768 spent against a $0.08 cap, and then: the tester produced no file")
+        text = fr.app_request(facts, dict(RESULT, root_cause="Tester agent failed to produce valid JSON"), REVERT, "x", "model_limit", [],
+                              "The cost cap for this attempt is raised from $0.08 to $0.16, because the last attempt ran out of money.")
+        self.assertIn("more than one pass could finish inside its limits", text)
+        self.assertNotIn("Tester agent failed to produce valid JSON", text)
+        self.assertIn("raised from $0.08 to $0.16", text)
 
 
 class Retries(unittest.TestCase):
@@ -178,6 +207,13 @@ class Filing(unittest.TestCase):
         self.assertEqual(start[-1], "TOKEN=the-pat")  # events from the Actions token would not start the workflow
         self.assertTrue(any(c[:2] == ["issue", "comment"] and "Superseded by" in c[c.index("--body") + 1] for c in calls))
         self.assertIn("started automatically", body)
+
+    def test_a_budget_failure_files_the_retry_with_a_higher_cap_in_the_form(self):
+        facts = dict(FACTS, outcome="budget_exhausted", cap_usd=0.75)
+        _, calls = self.run_it(dict(RESULT, category="model_limit"), facts=facts)
+        body = self.create(calls)[self.create(calls).index("--body") + 1]
+        self.assertEqual(b.parse_intake(body, 2.0, 10.0)[1], 1.5)
+        self.assertIn("raised from $0.75 to $1.50", body)
 
     def test_a_retry_that_fails_files_the_next_attempt_and_closes_the_failed_one(self):
         failed = u.with_fix_meta({"origin": 66, "attempt": 1, "history": ["attempt zero: ended round_limit"]}) + "\n\n" + self.ORIGINAL

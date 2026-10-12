@@ -1383,6 +1383,9 @@ def update_state_issues(d, factory_repo, pat, factory_token):
         print(f"could not update the state issues: {type(e).__name__}", flush=True)
 
 
+NEAR_CAP = 0.9  # an Agent is given only a share of what is left, so a run runs dry a little before the cap itself
+
+
 def ending_for(kind, message, spent, cap):
     """How a NeedsHuman stop is reported. An Agent whose credential has run dry just fails to produce its file (first seen
     when a tester ran out of a $0.08 cap and the run was reported as `needs_human: no valid output file`), so a stop of
@@ -1390,7 +1393,7 @@ def ending_for(kind, message, spent, cap):
     named = {"time_limit": "time_limit", "round_limit": "round_limit", "stuck": "stuck"}.get(kind)
     if named:
         return named, message
-    if cap and spent is not None and spent >= cap:
+    if cap and spent is not None and spent >= NEAR_CAP * cap:
         return "budget_exhausted", f"${spent:.4f} spent against a ${cap:.2f} cap, and then: {message}"
     return "needs_human", message
 

@@ -657,6 +657,12 @@ class Endings(unittest.TestCase):
         self.assertIn("$0.0813 spent against a $0.08 cap", message)
         self.assertIn("no valid output file", message)
 
+    def test_a_stop_just_short_of_the_cap_is_a_budget_ending_too(self):
+        # The second live run: $0.0768 of $0.08. The tester gets half of what is left, so it runs dry before the cap itself.
+        self.assertEqual(b.ending_for("other", "m", 0.076837, 0.08)[0], "budget_exhausted")
+        self.assertEqual(b.ending_for("other", "m", 0.0725, 0.08)[0], "budget_exhausted")
+        self.assertEqual(b.ending_for("other", "m", 0.07, 0.08)[0], "needs_human")  # 87% of the cap: not out of money
+
     def test_other_stops_keep_their_names(self):
         self.assertEqual(b.ending_for("other", "m", 0.05, 0.08), ("needs_human", "m"))
         self.assertEqual(b.ending_for("other", "m", None, None), ("needs_human", "m"))
