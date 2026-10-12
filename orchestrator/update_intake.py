@@ -92,7 +92,8 @@ def render_change_set_task(cs, request=None, parent=None):
     if cs.get("flag"):
         lines += ["", f"Put the whole change behind one feature flag with the slug `{cs['flag']}`."]
     else:
-        lines += ["", "Users cannot see or reach any difference from this change, so it needs no flag."]
+        lines += ["", "Users cannot see or reach any difference from this change, so it needs no flag: do not add one, and do not put "
+                      "anything that is live now behind a new flag."]
     return "\n".join(lines).strip()
 
 

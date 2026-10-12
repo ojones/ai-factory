@@ -101,6 +101,22 @@ class Plan(unittest.TestCase):
             plan["change_sets"][1]["title"] = title
             self.assertFalse(any("only tests" in x for x in check(plan)[0]), title)
 
+    def test_retiring_a_flag_is_internal_and_must_not_be_given_a_new_flag(self):
+        # From the first real retirement runs: the planner invented a flag to retire a flag.
+        for title in ("Remove update-todo-store feature flag and make PUT endpoint always available",
+                      "Retire the delete-todo-endpoint flag", "Remove filter-todos-by-done flag", "Clean up the old search flag"):
+            plan = good()
+            plan["change_sets"][1]["title"] = title
+            plan["change_sets"][1]["flag"] = "retire-it"
+            self.assertTrue(any("retires or removes a flag" in x for x in check(plan)[0]), title)
+            plan["change_sets"][1]["flag"] = None
+            plan["change_sets"][1]["internal_only"] = True
+            self.assertEqual(check(plan)[0], [], title)
+        for title in ("Add a flag-style toggle to the settings page", "Filter sightings by species", "Remove the old species column"):
+            plan = good()
+            plan["change_sets"][1]["title"] = title
+            self.assertFalse(any("retires or removes a flag" in x for x in check(plan)[0]), title)
+
     def test_garbage_is_reported_not_raised(self):
         self.assertEqual(check([])[0], ["the plan is not a JSON object"])
         problems = check({})[0]

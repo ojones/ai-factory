@@ -26,6 +26,9 @@ import sys
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # A change set that exists only to add tests. Every change set includes its own tests, so this one has no outcome of its own.
+# A change set that retires or removes a flag. Its flag must be null: the feature is already live, so a new flag would
+# switch it off. (A run that invented `retire-delete-flag` for this turned a live DELETE endpoint dark.)
+RETIRES_FLAG_RE = re.compile(r"\b(retire|retiring|remove|removing|delete|deleting|drop|dropping|clean ?up|get rid of)\b[^.]{0,60}\b(feature[- ]?)?flags?\b", re.I)
 TESTS_ONLY_RE = re.compile(r"^\s*(add|write|create|update|improve|expand|implement)\b[^.]*\b(unit |integration |comprehensive |more |additional |extra )*(tests?|test coverage|test suite)(?![\w-])", re.I)
 MAX_CHANGE_SETS = 8
 
@@ -95,6 +98,8 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS):
             if dep == cs.get("id"):
                 problems.append(f"{name} depends on itself")
         flag = cs.get("flag")
+        if flag is not None and RETIRES_FLAG_RE.search(str(cs.get("title", ""))):
+            problems.append(f"{name} retires or removes a flag but is given the new flag {flag!r}: users see no difference, so set flag to null and internal_only to true")
         if flag is not None:
             if not isinstance(flag, str) or not SLUG_RE.fullmatch(flag):
                 problems.append(f"{name} has an invalid flag slug {flag!r}")

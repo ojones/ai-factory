@@ -1,0 +1,19 @@
+diff --git a/backend/src/routes/todos.ts b/backend/src/routes/todos.ts
+--- a/backend/src/routes/todos.ts
++++ b/backend/src/routes/todos.ts
+@@ -56,7 +56,7 @@ export function todosRouter(store: TodoStore): Router {
+   router.delete("/api/todos/:id", async (req, res) => {
+-    if (!(await isFeatureEnabled(res, "delete-todo-endpoint"))) {
++    if (!(await isFeatureEnabled(res, "retire-delete-flag"))) {
+       res.status(404).json({ error: "not found" });
+       return;
+     }
+diff --git a/flags.json b/flags.json
+--- a/flags.json
++++ b/flags.json
+@@ -1,4 +1,4 @@
+ [
+-  { "slug": "delete-todo-endpoint", "description": "Delete a todo" },
++  { "slug": "retire-delete-flag", "description": "DELETE /api/todos/:id: retire the delete-todo-endpoint flag so DELETE is always available once released" },
+   { "slug": "patch-todo-endpoint", "description": "PATCH /api/todos/:id" }
+ ]

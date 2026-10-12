@@ -54,5 +54,14 @@
   "rename-field": {
     "verdict": "changes_requested",
     "match": "rename|additive|old|existing|migrat|title|persist|stored"
+  },
+  "retire-flag-clean": {
+    "verdict": "clean",
+    "match": "",
+    "no_finding_match": "not behind|no flag|unflagged|isFeatureEnabled|without a flag|missing flag"
+  },
+  "retire-flag-gated-anew": {
+    "verdict": "changes_requested",
+    "match": "new flag|retire-delete-flag|dark|switch|404|not always|still gated|gated|live"
   }
 }

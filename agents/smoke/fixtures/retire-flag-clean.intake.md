@@ -1,0 +1,1 @@
+Retire the feature flag `filter-todos-by-done`. It has been released and live. Remove the flag check so GET /api/todos?done=true|false always filters, remove its entry from flags.json, and remove tests that only check behaviour while the flag is off. Users must see no difference. This change needs no flag of its own: do not add one.

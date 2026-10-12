@@ -1,0 +1,1 @@
+Retire the feature flag `delete-todo-endpoint`. It has been released and live. Remove the flag check so DELETE /api/todos/:id is always available, and remove its entry from flags.json. Users must see no difference.
