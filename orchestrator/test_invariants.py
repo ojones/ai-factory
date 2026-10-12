@@ -168,6 +168,7 @@ class Invariants(unittest.TestCase):
         group = wf["concurrency"]
         self.assertIn("inputs.app_name", group["group"])
         self.assertIs(group["cancel-in-progress"], False)
+        self.assertEqual(group.get("queue"), "max")  # otherwise GitHub cancels all but one pending run
 
     def test_inv19_a_run_that_changes_nothing_stops(self):
         entry = {"round": 1, "sha": "a", "counts": {}, "checks": {"a: x": "failed"}, "blocking": ["no flag"]}

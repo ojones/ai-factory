@@ -23,7 +23,7 @@ Some tests exercise the code (what the rule says must happen), some read a file 
 | INV-15 | A learning PR auto-merges only when it is an additive change to lint or formatter config. | ARCHITECTURE: Learning loop |
 | INV-16 | The Starter Template's flags fail closed: no flag is read with a default of `true`, and the kill switch sits after the health route and before the static files and every other route. | STANDARDS-VISIBILITY, STANDARDS-FEATURE-FLAGS |
 | INV-17 | The Summary, Report and failure Issue are written even after a crash, breach or cancel: `finalize` and the post-mortem step run `if: always()`. | ARCHITECTURE: Visibility |
-| INV-18 | Build Runs of one app never overlap and a running one is never cancelled: the Build Run workflow's concurrency group is per app with `cancel-in-progress: false`. (A second queued run can still replace an older pending one; that is a known gap, open ticket 02.) | ARCHITECTURE: Intake |
+| INV-18 | Build Runs of one app never overlap, a running one is never cancelled, and none waiting is dropped: the Build Run workflow's concurrency group is per app with `cancel-in-progress: false` and `queue: max` (verified with a probe: without it GitHub cancels all but one pending run). | ARCHITECTURE: Intake |
 | INV-19 | A run whose rounds leave the same checks failing and the same findings open stops instead of spending its remaining budget. | ARCHITECTURE: stage 5 |
 | INV-20 | The post-mortem Agent never receives the DeepInfra parent key; it gets a capped scoped credential or does not run. | ARCHITECTURE: Learning loop |
 | INV-21 | Every workflow that installs OpenHands pins it to the version in `agents/openhands-version.txt`, so an upstream release cannot change an unattended run. | ARCHITECTURE: Visibility |

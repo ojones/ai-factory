@@ -19,12 +19,13 @@ permissions:
   issues: write
   actions: read
 
-# Same Managed App: serialized. A group holds one running and one pending run,
-# and a newer pending run replaces an older one; v1 dispatches exactly one
-# Build Run per Intake, so no accepted request is displaced.
+# Same Managed App: serialized, and every queued run is kept. Without `queue: max` a group holds
+# one running and one pending run and a newer pending run cancels the older one (shown by a probe
+# on 2026-10-12: of three dispatches, the middle one was cancelled). Update Intake can queue several.
 concurrency:
   group: build-run-${{ inputs.app_name }}
   cancel-in-progress: false
+  queue: max
 
 env:
   APP_NAME: ${{ inputs.app_name }}
