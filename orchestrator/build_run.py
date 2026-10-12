@@ -449,6 +449,29 @@ def http(method, url, token=None, body=None, timeout=60):
         return 0, str(e)
 
 
+def json_problem(path, check=None):
+    """Why an Agent's output file cannot be used, in words the Agent can act on; None when it can. Used to tell the
+    Agent on its second attempt what was wrong with its first."""
+    try:
+        text = Path(path).read_text()
+    except OSError:
+        return f"the file {path} was not written"
+    if not text.strip():
+        return f"the file {path} is empty"
+    try:
+        doc = json.loads(text)
+    except ValueError as e:
+        where = f" at line {e.lineno} column {e.colno}" if hasattr(e, "lineno") else ""
+        return (f"it is not valid JSON ({getattr(e, 'msg', e)}{where}); the usual cause is a quote, newline or backslash "
+                "inside a string that was not escaped")
+    try:
+        if check is not None and check(doc) is False:
+            return "its contents were not accepted"
+    except (ValueError, AttributeError, TypeError) as e:
+        return f"its contents were not accepted: {e}"
+    return None
+
+
 def load_json(path):
     try:
         return json.loads(Path(path).read_text())
@@ -692,7 +715,7 @@ class BuildRun:
         env.update(extra or {})
         return env
 
-    def invoke(self, role, label, values, extra_env=None, cwd=None, home=None, share=1.0):
+    def invoke(self, role, label, values, extra_env=None, cwd=None, home=None, share=1.0, note=None):
         """One headless OpenHands invocation. Safe to call from several threads at once when each
         has its own `home` (OpenHands keeps its conversations there) and `cwd`.
         Returns (exit status, 'timeout' if killed; cost; token usage)."""
@@ -700,6 +723,9 @@ class BuildRun:
         model = self.model_for(role, label)
         prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, "build_kind": self.build_kind,
                                                                          "spec": getattr(self, "spec", None) or getattr(self, "task", ""), **values})
+        if note:
+            prompt += (f"\n\nYour previous attempt was rejected: {note}. Do the work again as needed and write the file again. "
+                       "Build the JSON with a short Python script and json.dump, not by typing it by hand.")
         with self.lock:
             before = self.state.d["spent_usd"]
             jwt = self.meter.mint(model, share)
@@ -765,10 +791,10 @@ class BuildRun:
     def agent_json(self, role, label, values, path, extra_env=None, check=None, cwd=None, home=None, share=1.0):
         """Run a role that writes a JSON file; one retry if the file is missing or malformed.
         Returns (document, cost, token usage)."""
-        total_cost, usage = 0.0, None
+        total_cost, usage, note = 0.0, None, None
         for attempt in (1, 2):
             Path(path).unlink(missing_ok=True)
-            _, cost, used = self.invoke(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env, cwd, home, share)
+            _, cost, used = self.invoke(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env, cwd, home, share, note=note)
             total_cost += cost
             usage = merge_usage(usage, used)
             doc = load_json(path)
@@ -777,8 +803,9 @@ class BuildRun:
                     return doc, total_cost, usage
             except (ValueError, AttributeError, TypeError):
                 pass
+            note = json_problem(path, check)  # read before the next attempt removes the file
             self.restore_tree(cwd)
-        raise NeedsHuman("other", f"the {role} produced no valid output file twice")
+        raise NeedsHuman("other", f"the {role} produced no valid output file twice" + (f" (last problem: {note})" if note else ""))
 
     def restore_tree(self, cwd=None):
         """Read-only roles must leave the tree untouched; undo it if they did not."""
@@ -1129,6 +1156,7 @@ class BuildRun:
                                 "assumptions": doc.get("assumptions") or []}
         self.state.stage("Plan", "planner", "1", cost, f"{len(sets)} change set(s)" + (", needs an answer" if questions else ""), usage)
         (self.art / "plan.json").write_text(json.dumps(doc, indent=2))
+        self.post_plan(doc, questions)
         if questions:
             raise NeedsHuman("other", "the plan needs a person to answer first: " + " | ".join(questions)
                              + ". Put the answers in the Update Intake issue, then add `proceed-with-change` again.")
@@ -1141,6 +1169,16 @@ class BuildRun:
         self.state.d.update(outcome="planned", message="Planned as %d change sets, each now its own Update Intake and Build Run, in order: %s."
                             % (len(made), ", ".join(f"{cs} (#{n})" for cs, n in made)))
         return True
+
+    def post_plan(self, doc, questions):
+        """Put the plan on the Intake issue, so the owner can see what is about to be built and every assumption the
+        planner made (a product decision it made for them is otherwise only in a build artifact). Best effort."""
+        try:
+            body = update_intake.render_plan_comment(doc, questions)
+            self.gh(["issue", "comment", str(self.issue), "--repo", self.factory_repo, "--body", body],
+                    token=self.factory_token, check=False)
+        except Exception as e:  # noqa: BLE001
+            log(f"could not post the plan to the Intake issue: {type(e).__name__}")
 
     # --- the run
 

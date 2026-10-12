@@ -58,6 +58,9 @@ AUTO_MERGE_RE = re.compile(r"^templates/starter/(\.eslintrc[^/]*|eslint\.config\
 FIXTURE_RE = re.compile(r"^(agents/replay/cases\.json|agents/smoke-coder/tasks/|orchestrator/test_|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
 SMOKE_DIFF_RE = re.compile(r"^agents/smoke/fixtures/[^/]+\.diff$")
 SMOKE_EXPECTED = "agents/smoke/expected.json"
+# Emphasis a prompt change must not add: a louder sentence is not a fix, and a model that was told so still adds it.
+EMPHASIS_RE = re.compile(r"\b(CRITICAL|WARNING|ACTION REQUIRED|IMPORTANT|MUST NOT|MUST)\b|\u26a0|\*\*(CRITICAL|WARNING|IMPORTANT)")
+APP_PATH_RE = re.compile(r"^diff --git a/(backend|frontend)/", re.M)
 STOP_WORDS = {"the", "a", "an", "is", "are", "was", "to", "of", "in", "on", "for", "and", "not", "no", "it", "this"}
 
 
@@ -144,6 +147,27 @@ def pick_existing(issues, title):
     open_n = next((i["number"] for i in issues if i["title"] == title and i.get("state", "OPEN").upper() == "OPEN"), None)
     closed_n = next((i["number"] for i in issues if i["title"] == title and i.get("state", "").upper() == "CLOSED"), None)
     return open_n, closed_n
+
+
+def added_lines(patch_text):
+    """The lines a unified diff adds (not the `+++` file headers)."""
+    return [l[1:] for l in patch_text.splitlines() if l.startswith("+") and not l.startswith("+++")]
+
+
+def adds_emphasis(patch_text):
+    """True if a diff of agents/prompts/*.md adds shouting (CRITICAL, WARNING, MUST, a warning sign...). Only the
+    added lines count, so a prompt that already says MUST somewhere is not blamed for it."""
+    return any(EMPHASIS_RE.search(l) for l in added_lines(patch_text))
+
+
+def bad_fixture_reason(fixture_diffs):
+    """Why new reviewer smoke fixtures cannot be used, or None. `fixture_diffs` maps each new
+    agents/smoke/fixtures/*.diff path to its text. The reviewer is shown a Managed App's change, so a fixture that is
+    not a diff of app code (for example a diff of a Factory prompt) tests nothing the reviewer ever sees."""
+    for path, text in fixture_diffs.items():
+        if not APP_PATH_RE.search(text):
+            return f"{path} is not a diff of Managed App code (it must change files under backend/ or frontend/)"
+    return None
 
 
 def lesson_has_fixture(paths):
@@ -309,6 +333,18 @@ def open_learning_prs(repo, token):
     return sum(1 for p in json.loads(out or "[]") if p["headRefName"].startswith("learning/"))
 
 
+def rejected_proposal(factory, paths):
+    """The guardrails that look at what the Agent actually changed. Returns the reason to discard it, or None."""
+    prompts = [p for p in paths if p.startswith("agents/prompts/") and p.endswith(".md")]
+    if prompts:
+        patch_text = b.sh(["git", "diff", "HEAD", "--", *prompts], cwd=factory).stdout
+        if adds_emphasis(patch_text):
+            return "it adds emphasis (CRITICAL, WARNING, MUST, a warning sign) to a prompt; if a rule was missed, the fix is a check or a different cause, not a louder sentence"
+    fixtures = [p for p in paths if re.match(r"^agents/smoke/fixtures/[^/]+\.diff$", p)]
+    texts = {p: (Path(factory) / p).read_text() for p in fixtures if (Path(factory) / p).exists()}
+    return bad_fixture_reason(texts)
+
+
 def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
     """Validate what the Agent changed, test it, and open a PR. Returns the PR URL or None.
     The PR is labelled `auto-merge-candidate` only for an additive lint/formatter change; the PR checks
@@ -320,6 +356,15 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
         b.sh(["git", "clean", "-fdq", "--", c], cwd=factory, check=False)
     keep = [c for c in changed if c not in bad]
     if not keep:
+        return None
+    bad = rejected_proposal(factory, keep)
+    if bad:
+        b.log(f"post-mortem proposal rejected: {bad}")
+        gh(["issue", "comment", str(issue_no), "--repo", repo, "--body",
+            f"The post-mortem Agent's proposed change was discarded by the guardrails: {bad}. No PR was opened."], pat)
+        for c in keep:  # leave the checkout clean for whatever runs next
+            b.sh(["git", "checkout", "--", c], cwd=factory, check=False)
+            b.sh(["git", "clean", "-fdq", "--", c], cwd=factory, check=False)
         return None
     if open_learning_prs(repo, pat) >= max_open:
         b.log(f"{max_open} learning PRs are already open; not opening another")

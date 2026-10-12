@@ -161,6 +161,39 @@ class MergePolicy(unittest.TestCase):
         self.assertFalse(pm.lesson_has_fixture(["agents/smoke/expected.json"]))
 
 
+class Guardrails(unittest.TestCase):
+    ADDED = ("diff --git a/agents/prompts/tester.md b/agents/prompts/tester.md\n--- a/agents/prompts/tester.md\n"
+             "+++ b/agents/prompts/tester.md\n@@ -1,2 +1,3 @@\n context line\n+{line}\n context line\n")
+
+    def test_shouting_in_added_prompt_lines_is_caught_wherever_it_appears(self):
+        # Lines taken from the first two learning PRs.
+        for line in ("**CRITICAL**: You MUST write your test results to the file", "**ACTION REQUIRED**: Before finishing, execute this",
+                     "\u26a0\ufe0f CRITICAL: Every new user-facing endpoint", "WARNING: Previous tester runs have failed", "You MUST do it",
+                     "This is IMPORTANT"):
+            self.assertTrue(pm.adds_emphasis(self.ADDED.format(line=line)), line)
+
+    def test_plain_instructions_and_pre_existing_emphasis_are_fine(self):
+        self.assertFalse(pm.adds_emphasis(self.ADDED.format(line="Build the report with json.dump, not by hand.")))
+        removed = "--- a/p.md\n+++ b/p.md\n-You MUST do it\n+You do it\n"
+        self.assertFalse(pm.adds_emphasis(removed))
+        self.assertFalse(pm.adds_emphasis("+++ b/p.md\n context MUST stay\n"))
+
+    def test_a_smoke_fixture_must_be_a_diff_of_app_code(self):
+        good = "diff --git a/backend/src/routes/x.ts b/backend/src/routes/x.ts\n+code\n"
+        factory_diff = "diff --git a/agents/prompts/tester.md b/agents/prompts/tester.md\n+WARNING: x\n"
+        self.assertIsNone(pm.bad_fixture_reason({"agents/smoke/fixtures/a.diff": good}))
+        self.assertIsNone(pm.bad_fixture_reason({}))
+        reason = pm.bad_fixture_reason({"agents/smoke/fixtures/a.diff": good, "agents/smoke/fixtures/tester-no-output.diff": factory_diff})
+        self.assertIn("tester-no-output.diff is not a diff of Managed App code", reason)
+        self.assertIn("frontend/", pm.bad_fixture_reason({"agents/smoke/fixtures/f.diff": "diff --git a/frontend/x b/frontend/x\n"}) or "frontend/")
+
+    def test_existing_smoke_fixtures_all_pass_the_fixture_rule(self):
+        root = Path(pm.b.FACTORY_DIR) / "agents/smoke/fixtures"
+        texts = {str(p): p.read_text() for p in root.glob("*.diff")}
+        self.assertTrue(texts)
+        self.assertIsNone(pm.bad_fixture_reason(texts))
+
+
 class AgentCredential(unittest.TestCase):
     def test_the_agent_gets_a_capped_single_model_credential_never_the_parent_key(self):
         from unittest import mock

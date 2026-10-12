@@ -632,5 +632,63 @@ class SpendLedger(unittest.TestCase):
         self.make(5.0, [], issue=None).check_daily_cap()
 
 
+class JsonOutput(unittest.TestCase):
+    def write(self, text):
+        import tempfile
+        f = Path(tempfile.mkdtemp()) / "out.json"
+        if text is not None:
+            f.write_text(text)
+        return f
+
+    def test_the_problem_is_described_for_the_agent(self):
+        self.assertIn("was not written", b.json_problem(self.write(None)))
+        self.assertIn("is empty", b.json_problem(self.write("  \n")))
+        # What the tester wrote in the first real watchdog test: unescaped quotes inside a string.
+        bad = b.json_problem(self.write('{"evidence": "Response: {"intervalSeconds":2}"}'))
+        self.assertIn("not valid JSON", bad)
+        self.assertIn("line 1 column", bad)
+        self.assertIn("not escaped", bad)
+
+    def test_a_usable_file_has_no_problem_and_a_rejected_one_says_why(self):
+        self.assertIsNone(b.json_problem(self.write('{"a": 1}')))
+        def check(doc):
+            raise ValueError("no results list")
+        self.assertIn("no results list", b.json_problem(self.write('{"a": 1}'), check))
+        self.assertIn("not accepted", b.json_problem(self.write('{"a": 1}'), lambda d: False))
+
+    def test_the_second_attempt_is_told_what_was_wrong_with_the_first(self):
+        from unittest import mock
+        run = object.__new__(b.BuildRun)
+        path = self.write(None)
+        notes, attempts = [], []
+
+        def invoke(role, label, values, extra_env, cwd, home, share, note=None):
+            attempts.append(label)
+            notes.append(note)
+            path.write_text('{"results": [' if len(attempts) == 1 else '{"results": []}')
+            return 0, 0.1, None
+
+        run.invoke, run.restore_tree = invoke, lambda cwd=None: None
+        doc, cost, _ = run.agent_json("tester", "t1", {}, path)
+        self.assertEqual(doc, {"results": []})
+        self.assertEqual((attempts, notes[0]), (["t1", "t1b"], None))
+        self.assertIn("not valid JSON", notes[1])
+        self.assertAlmostEqual(cost, 0.2)
+
+    def test_two_bad_attempts_end_in_needs_human_with_the_last_reason(self):
+        run = object.__new__(b.BuildRun)
+        path = self.write(None)
+
+        def invoke(role, label, values, extra_env, cwd, home, share, note=None):
+            path.write_text("{oops")
+            return 0, 0.1, None
+
+        run.invoke, run.restore_tree = invoke, lambda cwd=None: None
+        with self.assertRaises(b.NeedsHuman) as cm:
+            run.agent_json("tester", "t1", {}, path)
+        self.assertIn("no valid output file twice", str(cm.exception))
+        self.assertIn("last problem: it is not valid JSON", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

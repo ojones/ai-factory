@@ -64,6 +64,19 @@ class ChangeSets(unittest.TestCase):
         self.assertEqual(b.parse_intake(u.child_body("notes", "t", 7, "CS-1", [], "1.00"), 2.0, 10.0)[1], 1.0)
         self.assertEqual(b.parse_intake(u.child_body("notes", "t", 7, "CS-1", []), 2.0, 10.0)[1], 2.0)
 
+    def test_the_plan_comment_shows_change_sets_assumptions_and_questions(self):
+        plan = {"change_sets": [{"id": "CS-1", "title": "Soft-delete a todo", "flag": "delete-todo"},
+                                {"id": "CS-2", "title": "Cleanup", "flag": None}],
+                "assumptions": ["Deleting is a soft delete, so records are kept"]}
+        text = u.render_plan_comment(plan, ["Should deleted todos be recoverable?"])
+        for needle in ("Plan: 2 change sets", "**CS-1** Soft-delete a todo (flag `delete-todo`)", "no flag (internal)",
+                       "Assumptions I made for you", "soft delete, so records are kept", "I need an answer", "recoverable?"):
+            self.assertIn(needle, text)
+        one = u.render_plan_comment({"change_sets": [{"id": "CS-1", "title": "x", "flag": "f"}]})
+        self.assertIn("Plan: 1 change set.", one)
+        self.assertNotIn("Assumptions", one)
+        self.assertNotIn("answer", one)
+
     def test_titles_are_one_short_line(self):
         self.assertEqual(u.one_line("a\n  b\tc"), "a b c")
         self.assertEqual(len(u.one_line("x" * 500)), 80)
@@ -229,6 +242,15 @@ class Planning(unittest.TestCase):
                 for i in range(1, n + 1)]
         return {"requirements": [{"id": "REQ-1", "text": "do it"}], "assumptions": ["a"], "change_sets": sets,
                 "open_questions": [{"id": "Q-1", "text": q, "blocking": True} for q in questions]}
+
+    def test_the_plan_is_posted_on_the_intake_issue(self):
+        run = self.make(self.plan(1))
+        run.factory_token = "t"
+        run.gh = mock.Mock()
+        run.plan_change()
+        args = run.gh.call_args[0][0]
+        self.assertEqual(args[:3], ["issue", "comment", "9"])
+        self.assertIn("Assumptions I made for you", args[args.index("--body") + 1])
 
     def test_one_change_set_becomes_this_runs_task_and_spec(self):
         run = self.make(self.plan(1))

@@ -96,6 +96,22 @@ def render_change_set_task(cs, request=None, parent=None):
     return "\n".join(lines).strip()
 
 
+def render_plan_comment(plan, questions=()):
+    """The plan as a comment on the Update Intake: change sets with their flags, the assumptions the planner made on the
+    owner's behalf, and any question it needs answered. Anything the owner disagrees with can be corrected in the issue."""
+    sets = plan.get("change_sets") or []
+    lines = [f"**Plan: {len(sets)} change set{'s' if len(sets) != 1 else ''}.**", ""]
+    for cs in sets:
+        flag = f"flag `{cs['flag']}`" if cs.get("flag") else "no flag (internal)"
+        lines.append(f"- **{cs.get('id')}** {one_line(cs.get('title', ''), 120)} ({flag})")
+    if plan.get("assumptions"):
+        lines += ["", "**Assumptions I made for you** (not asked, because they looked low-impact; if one is wrong, the change is behind a flag and can be switched off, then fix the request here and add `proceed-with-change` again):"]
+        lines += [f"- {one_line(a, 300)}" for a in plan["assumptions"]]
+    if questions:
+        lines += ["", "**I need an answer before building anything:**"] + [f"- {one_line(q, 400)}" for q in questions]
+    return "\n".join(lines)
+
+
 def child_body(app, task, parent, cs_id, depends_on, cap=None):
     """A child issue's body: the Update Intake form fields plus hidden plan metadata."""
     meta = {"parent": parent, "cs": cs_id, "depends_on": depends_on}
