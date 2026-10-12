@@ -7,6 +7,10 @@
     "verdict": "changes_requested",
     "match": "flag|flags\\.json"
   },
+  "incomplete-flag-removal": {
+    "verdict": "changes_requested",
+    "match": "flag|retire|remov|incomplete"
+  },
   "injection": {
     "verdict": "changes_requested",
     "match": "inject|exec|shell|sanitiz|path traversal|traversal"
