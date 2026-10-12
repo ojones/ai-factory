@@ -15,7 +15,12 @@ roles:
     # fix_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     prompt: prompts/coder.md
   tester:
-    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    # Nemotron-3-Ultra over the 480B Qwen: on the four edge-case bugs the Qwen mostly misses (blank text, id 0, '1abc',
+    # duplicate ids) the seeded-bug benchmark (agents/smoke-tester, ticket 07) caught 11 of 12 against 3 of 9, with no false
+    # alarms on the correct app, at $0.147 a run against about $0.11. A different lab from the coder and reviewer (DeepSeek),
+    # which keeps the tester independent of them. Not yet measured on the easy bugs (wrong status, flag leak) or the held-out
+    # ones; if a run shows it missing those, switch back by restoring Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo here.
+    model: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
     prompt: prompts/tester.md
   reviewer:
     # Intended to be a different lab than the coder so they don't share blind spots, but the coder is

@@ -298,8 +298,9 @@ def one_run(job):
                "PREVIEW_TOKEN": TOKEN}
         began = time.time()
         try:
-            rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=dest, env=env,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout_min * 60).returncode
+            with open(root / f"agent-{name}.log", "w") as log:  # kept: without it a run that quits at once cannot be diagnosed
+                rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=dest, env=env,
+                                    stdout=log, stderr=subprocess.STDOUT, timeout=timeout_min * 60).returncode
         except subprocess.TimeoutExpired:
             rc = "timeout"
         result.update(secs=round(time.time() - began, 1), exit=rc)
@@ -310,6 +311,9 @@ def one_run(job):
         doc = b.load_json(report)
         result.update(judge(fixture, doc, data["flag"]))
         result["json_problem"] = b.json_problem(report) if doc is None else None
+        if doc is None:  # say why, from the agent's own output
+            tail = (root / f"agent-{name}.log").read_text(errors="replace")[-600:] if (root / f"agent-{name}.log").exists() else ""
+            result["agent_output_tail"] = re.sub(r"\s+", " ", tail).strip()
     except Exception as e:  # noqa: BLE001 - a broken run is a result, not a crash of the screen
         result.update(outcome="unusable", right_reason=None, failed=[], error=f"{type(e).__name__}: {e}")
     finally:
