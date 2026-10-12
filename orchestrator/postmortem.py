@@ -170,6 +170,12 @@ def bad_fixture_reason(fixture_diffs):
     return None
 
 
+def records_stuck_issue(outcome):
+    """Whether a run's ending gets the generic `Stuck run` lesson. A release the watchdog switched off is already a
+    specific, severe lesson (`watchdog_disabled`); recording it twice made two issues and two analyses for one event."""
+    return outcome not in b.OK_OUTCOMES and outcome != "watchdog_disabled"
+
+
 def lesson_has_fixture(paths):
     """True when a change set includes a test, smoke case or replay case alongside the fix."""
     # A reviewer smoke fixture only counts as a pair: the diff the reviewer is shown and its expected.json entry. The
@@ -452,7 +458,7 @@ def main():
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
     facts_path, result_path = work / "artifacts" / "postmortem-facts.json", work / "postmortem-result.json"
     facts_path.write_text(json.dumps(facts, indent=2))
-    stuck_issue = record_issue(repo, token, facts) if stuck else None
+    stuck_issue = record_issue(repo, token, facts) if records_stuck_issue(d.get("outcome")) else None
     minors = record_minors(repo, token, f"{repo.split('/')[0]}/{d['app']}", pat, facts)
     new_minors = [n for n, proposed in minors if not proposed]
     recorded = [record_lesson(repo, token, x, facts) for x in lessons]

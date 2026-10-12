@@ -161,6 +161,15 @@ class MergePolicy(unittest.TestCase):
         self.assertFalse(pm.lesson_has_fixture(["agents/smoke/expected.json"]))
 
 
+class OneEventOneRecord(unittest.TestCase):
+    def test_a_watchdog_disable_is_one_lesson_not_two(self):
+        self.assertFalse(pm.records_stuck_issue("watchdog_disabled"))
+        for stuck in ("round_limit", "stuck", "needs_human", "crash", "budget_exhausted", "time_limit"):
+            self.assertTrue(pm.records_stuck_issue(stuck), stuck)
+        for ok in ("released", "nothing_to_release", "planned"):
+            self.assertFalse(pm.records_stuck_issue(ok), ok)
+
+
 class Guardrails(unittest.TestCase):
     ADDED = ("diff --git a/agents/prompts/tester.md b/agents/prompts/tester.md\n--- a/agents/prompts/tester.md\n"
              "+++ b/agents/prompts/tester.md\n@@ -1,2 +1,3 @@\n context line\n+{line}\n context line\n")
