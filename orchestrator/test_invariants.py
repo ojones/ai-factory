@@ -288,6 +288,13 @@ class Invariants(unittest.TestCase):
         starts = [(a, t) for a, t in calls if a[:2] == ["issue", "edit"] and u.GO in a]
         self.assertEqual([t for _, t in starts], ["the-pat"])  # the PAT, so the label event starts the workflow
 
+    def test_inv28_a_check_that_admits_it_was_not_observed_does_not_pass(self):
+        real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
+        self.assertEqual(b.check_state({"status": "passed", "evidence": real}), "not_run")
+        self.assertFalse(b.derive_test({"results": [{"flag": "a", "check": "x", "status": "passed", "evidence": real}]}, ["a"])[0])
+        self.assertEqual(b.check_state({"status": "passed", "evidence": "Status: 200"}), "passed")
+        self.assertEqual(b.check_state({"status": "passed", "evidence": "Cannot see logs, but npm run test:file shows 1 passed"}), "passed")
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

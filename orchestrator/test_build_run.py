@@ -451,6 +451,22 @@ class VerificationStates(unittest.TestCase):
         doc = {"results": [{"flag": "a", "status": "blocked", "passed": True}]}
         self.assertFalse(b.derive_test(doc, ["a"])[0])
 
+    def test_a_check_whose_own_evidence_admits_it_was_not_observed_does_not_pass(self):
+        # The first real run on an unobservable requirement: marked passed, evidence said it could not be seen.
+        real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
+        self.assertEqual(b.check_state({"status": "passed", "evidence": real}), "not_run")
+        self.assertFalse(b.derive_test({"results": [{"flag": "a", "check": "logs the hash", "status": "passed", "evidence": real}]}, ["a"])[0])
+        for admission in ("Could not verify in production", "I cannot see the logs", "Not able to confirm", "no way to inspect it",
+                          "This is unverifiable from outside", "not verified"):
+            self.assertEqual(b.check_state({"status": "passed", "evidence": admission}), "not_run", admission)
+
+    def test_ordinary_evidence_and_evidence_backed_by_a_test_run_still_pass(self):
+        for ok in ('Status: 200, Response: {"intervalSeconds":2}', "Response body has no hash. Hash not visible in headers either.",
+                   "Unable to observe the logs from outside, but the unit test 'logs the hash' passes (npm run test:file: 1 passed)",
+                   "", None):
+            self.assertEqual(b.check_state({"status": "passed", "evidence": ok}), "passed", ok)
+        self.assertEqual(b.check_state({"status": "failed", "evidence": "could not verify"}), "failed")  # only a pass is downgraded
+
     def test_the_older_boolean_report_still_works_and_garbage_fails(self):
         self.assertEqual(b.check_state({"passed": True}), "passed")
         self.assertEqual(b.check_state({"passed": False}), "failed")

@@ -134,14 +134,30 @@ def previous_report(work, rnd):
 CHECK_STATES = ("passed", "failed", "blocked", "not_run")
 
 
+# Evidence that says, in the tester's own words, that it did not observe the thing it is reporting on. A model that writes
+# this and still marks the check `passed` (seen in the first real run on an unobservable requirement) has not verified it.
+UNOBSERVED_RE = re.compile(
+    r"\b(unable to|not able to|cannot|can't|could not|couldn't|did not|didn't|no way to|no access to)\s+(directly\s+)?"
+    r"(observe|verify|see|view|read|check|confirm|access|inspect|determine|validate)\b|\bunverifi(able|ed)\b|\bnot (been )?(verified|observed)\b", re.I)
+RAN_A_TEST_RE = re.compile(r"\b(npm (run )?test|vitest|jest|unit test|test file|test suite|tests? (pass|passed|asserts?))\b", re.I)
+
+
+def admits_unobserved(evidence):
+    """True if the evidence says the thing was not observed, unless it also points at a test that was run for it."""
+    text = str(evidence or "")
+    return bool(UNOBSERVED_RE.search(text)) and not RAN_A_TEST_RE.search(text)
+
+
 def check_state(r):
     """One tester result's state. `status` is one of CHECK_STATES; a report that only has the older
-    boolean `passed` is read as passed or failed. Anything unrecognised counts as failed."""
+    boolean `passed` is read as passed or failed. Anything unrecognised counts as failed. A check marked `passed`
+    whose own evidence admits it was not observed counts as `not_run`: it keeps the change from releasing."""
     if not isinstance(r, dict):
         return "failed"
-    if r.get("status") in CHECK_STATES:
-        return r["status"]
-    return "passed" if r.get("passed") is True else "failed"
+    state = r["status"] if r.get("status") in CHECK_STATES else ("passed" if r.get("passed") is True else "failed")
+    if state == "passed" and admits_unobserved(r.get("evidence")):
+        return "not_run"
+    return state
 
 
 def derive_test(doc, expected_flags):

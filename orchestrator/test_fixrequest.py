@@ -74,6 +74,15 @@ class Content(unittest.TestCase):
         self.assertEqual(b.parse_intake(issue, 2.0, 10.0)[1], 2.0)  # the explanation did not leak into the cost-cap field
 
 
+class Inference(unittest.TestCase):
+    def test_a_run_that_ran_out_of_money_or_time_was_too_big_for_its_limits(self):
+        for outcome in ("budget_exhausted", "time_limit"):
+            self.assertEqual(fr.route(fr.inferred_category(None, outcome)), "app", outcome)
+        for outcome in ("round_limit", "needs_human", "crash", "stuck"):
+            self.assertEqual(fr.route(fr.inferred_category(None, outcome)), "info", outcome)
+        self.assertEqual(fr.inferred_category("plan_gap", "budget_exhausted"), "plan_gap")  # a named cause wins
+
+
 class Retries(unittest.TestCase):
     def test_a_human_intake_is_the_origin_and_its_fix_is_attempt_one(self):
         self.assertEqual(fr.attempt_info("### App name\n\ndemo\n", "66"), ("66", 1, []))

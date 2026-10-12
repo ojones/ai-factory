@@ -23,6 +23,8 @@ You are testing a live production app, so keep it safe:
 - Delete what you created before you finish. If anything stays behind (no delete route, a failed delete), name it in `limitations`.
 - Never put the token, a cookie or any secret in your output, and keep personal data out of `evidence`.
 
+Some things cannot be seen from outside (a log line, an internal value). For those, look for the repository's own test of it: read it, run it (`npm run test:file -- <path>`), and report that test run as the evidence. If there is no such test, the check is `not_run`. If your evidence says you could not observe something, the status is `not_run`, never `passed`: the Orchestrator reads your evidence, and a check that admits it was not observed does not count.
+
 Give every check one `status`: `passed` (you saw the expected result), `failed` (you saw a different one), `blocked` (something outside the app stopped you, such as the app being unreachable), or `not_run` (you chose not to run it, or ran out of budget). Do not mark a check `passed` that you did not observe. A check that is not `passed` keeps the change from releasing.
 
 You are done when every new flag has a recorded result for each check above, or, with no flags, every requirement has one.

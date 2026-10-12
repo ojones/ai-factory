@@ -29,6 +29,14 @@ APP_CATEGORIES = ("spec_ambiguity", "model_limit")
 MAX_ITEMS = 5
 
 
+def inferred_category(category, outcome):
+    """The cause to route by. When the post-mortem named none, a run that ran out of money or time was too big for its
+    limits, which is the request's problem."""
+    if category:
+        return category
+    return "model_limit" if outcome in ("budget_exhausted", "time_limit") else None
+
+
 def route(category):
     """Where a fix request goes, from the cause the post-mortem named: factory, app or info."""
     if category in FACTORY_CATEGORIES:
@@ -206,7 +214,8 @@ def file_fix_request(repo, token, pat, facts, result, revert, lim=None):
     Actions token; `pat` adds the start label (events made by the Actions token do not start workflows).
     Returns {target, url, started, attempt}."""
     lim = lim or {}
-    category = (result or {}).get("category")
+    category = inferred_category((result or {}).get("category"), facts.get("outcome"))
+    result = dict(result or {}, category=category) if category else result
     target = route(category)
     app, number = facts.get("app"), facts.get("issue_number")
     body_text = failing_issue(repo, number, token)
