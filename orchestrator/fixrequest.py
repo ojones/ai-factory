@@ -30,11 +30,12 @@ MAX_ITEMS = 5
 
 
 def inferred_category(category, outcome):
-    """The cause to route by. When the post-mortem named none, a run that ran out of money or time was too big for its
-    limits, which is the request's problem."""
-    if category:
-        return category
-    return "model_limit" if outcome in ("budget_exhausted", "time_limit") else None
+    """The cause to route by. A run that ran out of money or time was too big for its limits, which is the request's
+    problem: that decides the route unless the post-mortem named a Factory cause that is not a prompt (an Agent that fails
+    because its credential ran dry looks like a prompt gap, which it is not). With no cause named, the same rule applies."""
+    if outcome in ("budget_exhausted", "time_limit") and category in (None, "", "prompt_gap", "infra", "unknown", "model_limit"):
+        return "model_limit"
+    return category or None
 
 
 def route(category):

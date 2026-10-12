@@ -1247,8 +1247,8 @@ class BuildRun:
         except BudgetExhausted as e:
             self.state.d.update(outcome="budget_exhausted", message=str(e))
         except NeedsHuman as e:
-            self.state.d.update(outcome={"time_limit": "time_limit", "round_limit": "round_limit", "stuck": "stuck"}.get(e.kind, "needs_human"),
-                                message=str(e))
+            outcome, message = ending_for(e.kind, str(e), self.state.d.get("spent_usd"), self.cap)
+            self.state.d.update(outcome=outcome, message=message)
         except Exception as e:  # noqa: BLE001 - any crash must still reach finalize
             traceback.print_exc()
             self.state.d.update(outcome="crash", message=f"{type(e).__name__}: {e}")
@@ -1381,6 +1381,18 @@ def update_state_issues(d, factory_repo, pat, factory_token):
                lambda prev: appstate.render_registry(prev, d, state_url))
     except Exception as e:  # noqa: BLE001
         print(f"could not update the state issues: {type(e).__name__}", flush=True)
+
+
+def ending_for(kind, message, spent, cap):
+    """How a NeedsHuman stop is reported. An Agent whose credential has run dry just fails to produce its file (first seen
+    when a tester ran out of a $0.08 cap and the run was reported as `needs_human: no valid output file`), so a stop of
+    kind `other` with the cap already spent is a budget ending, not a mystery."""
+    named = {"time_limit": "time_limit", "round_limit": "round_limit", "stuck": "stuck"}.get(kind)
+    if named:
+        return named, message
+    if cap and spent is not None and spent >= cap:
+        return "budget_exhausted", f"${spent:.4f} spent against a ${cap:.2f} cap, and then: {message}"
+    return "needs_human", message
 
 
 def revert_decision(d, mode, flags_added=()):

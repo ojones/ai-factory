@@ -648,6 +648,23 @@ class SpendLedger(unittest.TestCase):
         self.make(5.0, [], issue=None).check_daily_cap()
 
 
+class Endings(unittest.TestCase):
+    def test_a_stop_after_the_cap_is_spent_is_a_budget_ending(self):
+        # The live under-funded run: $0.0813 spent against a $0.08 cap, then the tester produced no file.
+        msg = "the tester produced no valid output file twice (last problem: the file x was not written)"
+        outcome, message = b.ending_for("other", msg, 0.081273, 0.08)
+        self.assertEqual(outcome, "budget_exhausted")
+        self.assertIn("$0.0813 spent against a $0.08 cap", message)
+        self.assertIn("no valid output file", message)
+
+    def test_other_stops_keep_their_names(self):
+        self.assertEqual(b.ending_for("other", "m", 0.05, 0.08), ("needs_human", "m"))
+        self.assertEqual(b.ending_for("other", "m", None, None), ("needs_human", "m"))
+        self.assertEqual(b.ending_for("round_limit", "m", 9.0, 0.08), ("round_limit", "m"))
+        self.assertEqual(b.ending_for("time_limit", "m", 9.0, 0.08), ("time_limit", "m"))
+        self.assertEqual(b.ending_for("stuck", "m", 0.0, 0.08), ("stuck", "m"))
+
+
 class JsonOutput(unittest.TestCase):
     def write(self, text):
         import tempfile

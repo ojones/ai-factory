@@ -80,7 +80,10 @@ class Inference(unittest.TestCase):
             self.assertEqual(fr.route(fr.inferred_category(None, outcome)), "app", outcome)
         for outcome in ("round_limit", "needs_human", "crash", "stuck"):
             self.assertEqual(fr.route(fr.inferred_category(None, outcome)), "info", outcome)
-        self.assertEqual(fr.inferred_category("plan_gap", "budget_exhausted"), "plan_gap")  # a named cause wins
+        self.assertEqual(fr.inferred_category("plan_gap", "budget_exhausted"), "plan_gap")  # a named structural cause wins
+        # What the live test showed: a tester that ran out of budget looked like a prompt gap and went to the Factory.
+        self.assertEqual(fr.route(fr.inferred_category("prompt_gap", "budget_exhausted")), "app")
+        self.assertEqual(fr.route(fr.inferred_category("prompt_gap", "round_limit")), "factory")  # for other endings it stays
 
 
 class Retries(unittest.TestCase):
