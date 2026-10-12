@@ -1,4 +1,8 @@
 {
+  "missing-flag-implementation": {
+    "verdict": "changes_requested",
+    "match": "flag|flags\\.json"
+  },
   "offbyone": {
     "verdict": "changes_requested",
     "match": "slice|off-by-one|off by one|limit \\+ 1|limit\\+1|extra item|one more"
