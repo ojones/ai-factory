@@ -51,6 +51,10 @@
     "verdict": "changes_requested",
     "match": "test|assert|toBeDefined|cannot fail|vacuous|behaviou?r"
   },
+  "error-log-increase": {
+    "verdict": "changes_requested",
+    "match": "error.*log|logging.*error|watchdog|post-release.*monitor"
+  },
   "rename-field": {
     "verdict": "changes_requested",
     "match": "rename|additive|old|existing|migrat|title|persist|stored"
