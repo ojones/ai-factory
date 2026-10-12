@@ -1,0 +1,21 @@
+name: Probe queue (current)
+
+# Throwaway: shows what GitHub does with three runs dispatched at once into one concurrency group (ticket 02).
+# To be deleted after the experiment.
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "Which dispatch this is"
+        required: true
+
+concurrency:
+  group: probe-queue-current
+  cancel-in-progress: false
+
+jobs:
+  wait:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "run ${{ inputs.n }} started $(date -u +%T)"; sleep 75; echo "run ${{ inputs.n }} done $(date -u +%T)"
