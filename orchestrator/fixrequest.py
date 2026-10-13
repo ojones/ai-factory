@@ -7,12 +7,14 @@ that can be checked afterwards. It is routed by the cause the post-mortem named:
   factory  a prompt, planner, Starter Template or orchestrator cause. An ai-factory issue labelled `factory-fix-request`.
            Adding `ready-for-factory-run` gives it to the Factory Run (the post-mortem Agent), which proposes a PR for a person
            to merge. The app planner is not used: it plans changes to Managed Apps, and this is a change to the Factory.
-  app      the request itself was the problem (unclear, too big for the model). An *unstarted* Update Intake for the app,
-           with the failure and the requirements written into the request. Adding `proceed-with-change` starts it: the
-           planner plans it, then the usual coder, tester and reviewer run. It is unstarted so a person reads it first.
+  app      the request itself was the problem (unclear, too big for the model, or a release the watchdog switched off). The
+           story's OWN issue is updated, not a new one: a comment says it broke and why, and the retry state is hidden in it
+           (the attempt, the story's flag, what earlier attempts found, the guidance). While attempts remain the PAT puts
+           `proceed-with-change` back on the same issue, so the same story runs again with the same flag; after
+           `fix_request_max_attempts` it stays open, labelled `needs-human`, attached to its flag.
   info     no cause was named (or an infrastructure one). A `fix-request` issue in ai-factory for a person to read.
 
-One open fix request per Intake and route: a run that fails again adds a comment instead of a second issue.
+Factory and information routes: one open fix request per Intake and route; a run that fails again adds a comment instead of a second issue.
 """
 import hashlib
 import json
@@ -25,7 +27,7 @@ import update_intake
 LABEL = "fix-request"
 FACTORY_LABEL = "factory-fix-request"
 FACTORY_CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap")
-APP_CATEGORIES = ("spec_ambiguity", "model_limit")
+APP_CATEGORIES = ("spec_ambiguity", "model_limit", "regression")
 MAX_ITEMS = 5
 
 
@@ -35,6 +37,8 @@ def inferred_category(category, outcome):
     because its credential ran dry looks like a prompt gap, which it is not). With no cause named, the same rule applies."""
     if outcome in ("budget_exhausted", "time_limit") and category in (None, "", "prompt_gap", "infra", "unknown", "model_limit"):
         return "model_limit"
+    if outcome == "watchdog_disabled" and category not in FACTORY_CATEGORIES:
+        return "regression"  # the change broke production: the story is retried, fixing the code behind the same flag
     return category or None
 
 
@@ -134,12 +138,56 @@ def attempt_info(failing_body, failing_number):
     return failing_number, 1, []
 
 
+RETRY_RE = re.compile(r"<!-- factory-retry:(.*?) -->", re.S)
+RETRYING = "retrying"
+
+
+def with_retry_state(state):
+    """The hidden state of a story's retries, appended to the comment that reports a failure."""
+    return f"<!-- factory-retry:{json.dumps(state, separators=(',', ':')).replace('--', chr(92) + 'u002d' + chr(92) + 'u002d')} -->"
+
+
+def retry_state(comments):
+    """The newest retry state hidden in a list of comment bodies ({} when the story has never failed): the attempt number, the story's
+    flag(s), what earlier attempts found, the guidance for the next attempt and the failed run it answers."""
+    for body in reversed([c for c in comments if isinstance(c, str)]):
+        m = RETRY_RE.search(body)
+        if m:
+            try:
+                state = json.loads(m.group(1))
+                return state if isinstance(state, dict) else {}
+            except ValueError:
+                continue
+    return {}
+
+
+def retry_note(flags, attempt=None):
+    """What the reviewer and tester are told when a story is retried: its flag is released again once it passes."""
+    if not flags:
+        return ""
+    names = ", ".join(f"`{f}`" for f in flags)
+    return (f"\n\nThis is retry {attempt or '?'} of a story that failed after its release; it keeps its flag {names}. Test it like a new flag: dark "
+            "without the Preview Token (the feature must not be reachable) and working with the token, including the behaviour that broke "
+            "the last time. When this change passes, the flag is released again.")
+
+
+def retry_decision(state, facts, lim):
+    """(duplicate, attempt, autostart) for a failure of a story whose retry state is `state`. A failure of a run already answered is a
+    duplicate; otherwise this is the next attempt, and it starts itself only while attempts remain."""
+    if state.get("last_run") and state.get("last_run") == facts.get("run_url"):
+        return True, int(state.get("attempt", 0)), False
+    attempt = int(state.get("attempt", 0)) + 1
+    return False, attempt, should_autostart("app", attempt, lim)
+
+
 ORIGINAL_MARKER = "Original request:\n\n"
 GUIDANCE = {
     "spec_ambiguity": ("Nobody is available to answer questions. Where the request is ambiguous or contradicts itself, choose the most conservative "
                        "reading (keep existing data and behaviour, remove nothing permanently, keep the change behind its flag) and state the "
                        "choice as an assumption."),
     "model_limit": "The last attempt was too much for one pass. Plan the smallest independently valuable change sets and keep each one small.",
+    "regression": ("The change broke the app after its release and the watchdog switched its flag off. Find what regressed (the error lines, the diff and the "
+                   "tests), fix the code behind the same flag, and add a test that fails without the fix. Do not remove the flag or the feature."),
 }
 
 
@@ -148,13 +196,15 @@ def extract_original(text):
     return text.split(ORIGINAL_MARKER, 1)[1].strip() if ORIGINAL_MARKER in (text or "") else (text or "").strip()
 
 
-def render(facts, result, revert, target, intake_url="", auto=None):
-    """The issue body. `auto` is None, or {"attempt": n, "max": m, "started": bool} for an app-route fix request."""
+def render(facts, result, revert, target, intake_url="", auto=None, flags=()):
+    """The issue body, or for the app route the comment on the story's own issue. `auto` is None, or {"attempt": n, "max": m, "started": bool}."""
     cat = (result or {}).get("category")
     lines = [f"## What happened", "",
              f"The Build Run for `{facts.get('app')}` ended **{facts.get('outcome')}**: {clip(facts.get('message'), 400)}", "",
              f"- Run: {facts.get('run_url')}", f"- Request: {intake_url or '#' + str(facts.get('issue_number'))}",
              f"- Review passes: {facts.get('review_passes', 0)}; spent ${(facts.get('spent_usd') or 0):.2f} of a ${(facts.get('cap_usd') or 0):.2f} cap"]
+    if flags:
+        lines.append("- Feature flag of this story: " + ", ".join(f"`{f}`" for f in flags) + " (kept through the retries)")
     for s in [clip(x, 200) for x in facts.get("final_blocking") or []][:MAX_ITEMS]:
         lines.append(f"- Still blocking at the end: {s}")
     lines += ["", "## What was done automatically", "", revert_line(revert), "", "## Analysis (automated, and may be wrong)", ""]
@@ -170,24 +220,25 @@ def render(facts, result, revert, target, intake_url="", auto=None):
         lines.append(f"This is a fault in the Factory itself ({cat}). Add the label `ready-for-factory-run` and the Factory Run (the post-mortem Agent) will try a fix "
                      "and open a pull request for you to review. Nothing changes until you merge it.")
     elif target == "app" and auto and auto.get("started"):
-        lines.append(f"This is about the request, not the Factory ({cat}). The Update Intake below was **started automatically** (automatic retry {auto['attempt']} "
-                     f"of at most {auto['max']}); no review is needed. It goes through the planner and the usual coder, tester and reviewer. If it also fails, "
-                     "the next retry is filed the same way; after the last one a person is asked. To stop it, cancel its Build Run and close this issue.")
+        lines.append(f"This is about the request, not the Factory ({cat}). **This same issue is being retried automatically** (retry {auto['attempt']} of at most "
+                     f"{auto['max']}), with the same feature flag; no review is needed. It goes through the planner and the usual coder, tester and reviewer. If it "
+                     "fails again this issue is updated again; after the last retry a person is asked. To stop it, cancel its Build Run and remove `proceed-with-change`.")
     elif target == "app":
-        why = (f"{auto['max']} automatic retries of this Intake have already failed, so a person is asked" if auto and auto.get("attempt", 1) > auto.get("max", 0)
+        why = (f"{auto['max']} automatic retries have already failed, so a person is asked" if auto and auto.get("attempt", 1) > auto.get("max", 0)
                else "automatic retries are switched off")
-        lines.append(f"This is about the request, not the Factory ({cat}). It was **not** started automatically ({why}). Read and edit the Update Intake below, "
-                     "then add `proceed-with-change` to run it through the planner.")
+        lines.append(f"This is about the request, not the Factory ({cat}). It was **not** retried automatically ({why}); this issue stays here, attached to its flag. "
+                     "Read the notes above, edit the issue if the request needs to change, then add `proceed-with-change` to retry.")
     else:
         lines.append("No cause was named, or it was infrastructure. Read the run and decide; there is nothing to start automatically.")
     return "\n".join(lines) + "\n"
 
 
-def app_request(facts, result, revert, original, category=None, history=(), cap_note=""):
+def app_request(facts, result, revert, original, category=None, history=(), cap_note="", flags=()):
     """The text of the Update Intake for the app route: what went wrong, what must be true this time, how to approach it,
     and the original request last (extracted, so a retry of a retry does not nest)."""
     reqs = requirements(facts, result, revert, app_side=True)
-    parts = ["A previous attempt at the request below did not complete, so it is being asked again with what was learned.", "",
+    parts = [("A previous attempt at the request below did not complete, so it is being asked again with what was learned." if original is not None
+              else "A previous attempt at this request did not complete, so it is being tried again with what was learned."), "",
              f"What happened: it ended {facts.get('outcome')}: {clip(facts.get('message'), 300)} ({facts.get('run_url')})"]
     if facts.get("outcome") in ("budget_exhausted", "time_limit"):
         # Money or time ran out: say that, not the post-mortem's guess about which Agent happened to fail when it did.
@@ -200,11 +251,15 @@ def app_request(facts, result, revert, original, category=None, history=(), cap_
         parts.append(cap_note)
     if history:
         parts += ["", "Earlier attempts:"] + [f"- {h}" for h in history]
+    if flags:
+        parts += ["", "This story keeps its feature flag through every retry: use exactly " + ", ".join(f"`{f}`" for f in flags) + " (do not invent another). "
+                  "If it is already in `flags.json`, keep it and fix the code behind it; otherwise add it with exactly that slug."]
     guide = GUIDANCE.get(category or "")
     if guide:
         parts += ["", "How to approach it this time: " + guide]
     parts += ["", "Requirements for this attempt:"] + [f"- {r}" for r in reqs]
-    parts += ["", ORIGINAL_MARKER + (extract_original(original) or "(the original request could not be read; see the issue linked above)")]
+    if original is not None:
+        parts += ["", ORIGINAL_MARKER + (extract_original(original) or "(the original request could not be read; see the issue linked above)")]
     return "\n".join(parts)
 
 
@@ -256,14 +311,60 @@ def file_provider_alert(repo, token, facts):
     return m.group(0) if m else ""
 
 
-def file_fix_request(repo, token, pat, facts, result, revert, lim=None):
-    """Create the fix request (or comment on the open one for this attempt) and, for the app route, start it. `token` is the
-    Actions token; `pat` adds the start label (events made by the Actions token do not start workflows).
+def failing_story(repo, number, token):
+    """The Intake whose run failed, as {"body", "comments": [bodies], "url"} (empty values if it cannot be read)."""
+    p = gh(["issue", "view", str(number), "--repo", repo, "--json", "body,comments,url"], token)
+    try:
+        doc = json.loads(p.stdout or "{}")
+    except ValueError:
+        doc = {}
+    return {"body": doc.get("body") or "", "comments": [c.get("body", "") for c in doc.get("comments") or []], "url": doc.get("url") or ""}
+
+
+def file_app_retry(repo, token, pat, facts, result, revert, lim, category):
+    """A failure of a story: the SAME issue is updated, never a new one. The failure, what was done about it and what to do next go in a
+    comment, with the retry state hidden in it (the attempt, the story's flag, what earlier attempts found, the guidance for the next
+    attempt). While attempts remain the PAT puts `proceed-with-change` back on the issue, so the same issue, with the same flag, runs
+    again; after `fix_request_max_attempts` it stays open, labelled `needs-human`, attached to its flag.
     Returns {target, url, started, attempt}."""
+    app, number = facts.get("app"), facts.get("issue_number")
+    story = failing_story(repo, number, token)
+    state = retry_state(story["comments"])
+    duplicate, attempt, autostart = retry_decision(state, facts, lim)
+    if duplicate:
+        return {"target": "app", "url": story["url"], "started": False, "attempt": attempt}
+    history = [str(h) for h in state.get("history", [])][-3:]
+    history.append(f"attempt {attempt - 1 or 'zero (the original request)'}: ended {facts.get('outcome')}: {clip(facts.get('message'), 160)}")
+    flags = [f for f in (facts.get("flags") or state.get("flags") or []) if isinstance(f, str)]
+    new_cap = raised_cap(facts.get("outcome"), facts.get("cap_usd"), lim.get("cost_cap_usd_ceiling", 10.0))
+    cap_note = (f"The cost cap for this attempt is raised from ${float(facts.get('cap_usd')):.2f} to ${new_cap:.2f}, because the last attempt ran out of money."
+                if new_cap else "")
+    auto = {"attempt": attempt, "max": int(lim.get("fix_request_max_attempts", 2)), "started": autostart}
+    new_state = {"attempt": attempt, "flags": flags, "history": history, "last_run": facts.get("run_url"), "cap": new_cap or state.get("cap"),
+                 "guidance": app_request(facts, result, revert, None, category, history, cap_note, flags)[:6000]}
+    for name, color, desc in ((RETRYING, "fbca04", "This story failed and is being retried on the same issue and flag"),
+                              ("needs-human", "b60205", "The Orchestrator stopped and needs a person"), (update_intake.GO, "0e8a16", "Start this change now")):
+        update_intake.ensure_label(repo, name, token, color, desc)
+    gh(["issue", "comment", str(number), "--repo", repo, "--body", f"## Attempt {attempt - 1 or 'zero'} did not complete\n\n"
+        + render(facts, result, revert, "app", story["url"], auto, flags) + "\n" + with_retry_state(new_state)], token)
+    if autostart:
+        gh(["issue", "edit", str(number), "--repo", repo, "--add-label", RETRYING, "--remove-label", "needs-human"], token)
+        gh(["issue", "edit", str(number), "--repo", repo, "--add-label", update_intake.GO], pat)  # the PAT: the Actions token would not start the workflow
+    else:
+        gh(["issue", "edit", str(number), "--repo", repo, "--add-label", "needs-human", "--remove-label", RETRYING], token)
+    return {"target": "app", "url": story["url"], "started": autostart, "attempt": attempt}
+
+
+def file_fix_request(repo, token, pat, facts, result, revert, lim=None):
+    """For the Factory and information routes, create the fix request (or comment on the open one for this attempt). For the app route,
+    update the story's own issue and retry it (file_app_retry). `token` is the Actions token; `pat` adds the start label (events made by
+    the Actions token do not start workflows). Returns {target, url, started, attempt}."""
     lim = lim or {}
     category = inferred_category((result or {}).get("category"), facts.get("outcome"))
     result = dict(result or {}, category=category) if category else result
     target = route(category)
+    if target == "app":
+        return file_app_retry(repo, token, pat, facts, result, revert, lim, category)
     app, number = facts.get("app"), facts.get("issue_number")
     body_text = failing_issue(repo, number, token)
     origin, attempt, history = attempt_info(body_text, number)
@@ -279,46 +380,8 @@ def file_fix_request(repo, token, pat, facts, result, revert, lim=None):
             f"**Failed again** ({facts.get('outcome')}): {clip(facts.get('message'), 300)}\n{facts.get('run_url')}\n\n{revert_line(revert)}"], token)
         return {"target": target, "url": again["url"], "started": False, "attempt": attempt}
     intake_url = f"https://github.com/{repo}/issues/{number}"
-    started = False
-    if target == "app":
-        autostart = should_autostart(target, attempt, lim)
-        auto = {"attempt": attempt, "max": int(lim.get("fix_request_max_attempts", 2)), "started": autostart}
-        for name, color, desc in ((update_intake.FORM_LABEL, "1d76db", "A change request for an existing Managed App"), (f"app:{app}", "1d76db", ""),
-                                  (update_intake.AUTO_FIX, "fbca04", "Filed and started by the Orchestrator after a Build Run failed"),
-                                  ("needs-human", "b60205", "The Orchestrator stopped and needs a person"), (update_intake.GO, "0e8a16", "Start this change now")):
-            update_intake.ensure_label(repo, name, token, color, desc)
-        cap = update_intake.form_section(body_text, "Cost cap override (USD)")
-        cap = None if cap in ("", "_No response_") else cap
-        new_cap = raised_cap(facts.get("outcome"), facts.get("cap_usd"), lim.get("cost_cap_usd_ceiling", 10.0))
-        cap_note = ""
-        if new_cap:
-            cap_note = f"The cost cap for this attempt is raised from ${float(facts.get('cap_usd')):.2f} to ${new_cap:.2f}, because the last attempt ran out of money."
-            cap = f"{new_cap:.2f}"
-        original = update_intake.form_section(body_text, "What should change?") or update_intake.form_section(body_text, "What should be built?")
-        meta = {"origin": origin, "attempt": attempt, "history": history + [f"attempt {attempt - 1 or 'zero (the original request)'}: ended {facts.get('outcome')}: {clip(facts.get('message'), 160)}"]}
-        request = app_request(facts, result, revert, original, category, meta["history"], cap_note)
-        labels = f"{LABEL},{update_intake.FORM_LABEL},app:{app},{update_intake.AUTO_FIX}" + ("" if autostart else ",needs-human")
-        body = (update_intake.with_fix_meta(meta) + "\n\n" + render(facts, result, revert, target, intake_url, auto) + "\n---\n\n" + intake_form(app, request, cap))
-        out = gh(["issue", "create", "--repo", repo, "--title", f"{app}: fix request for #{origin} (attempt {attempt}) [{fp}]", "--label", labels,
-                  "--body", body], token)
-    else:
-        labels = f"{LABEL},{FACTORY_LABEL}" if target == "factory" else LABEL
-        out = gh(["issue", "create", "--repo", repo, "--title", f"Fix request [{fp}]: {category or 'unknown cause'} in {app}'s run for #{number}",
-                  "--label", labels, "--body", render(facts, result, revert, target, intake_url)], token)
+    labels = f"{LABEL},{FACTORY_LABEL}" if target == "factory" else LABEL
+    out = gh(["issue", "create", "--repo", repo, "--title", f"Fix request [{fp}]: {category or 'unknown cause'} in {app}'s run for #{number}",
+              "--label", labels, "--body", render(facts, result, revert, target, intake_url)], token)
     m = re.search(r"https://\S+/issues/(\d+)", out.stdout or "")
-    url, new_number = (m.group(0), m.group(1)) if m else ("", "")
-    if target == "app" and new_number:
-        if autostart:
-            gh(["issue", "edit", new_number, "--repo", repo, "--add-label", update_intake.GO], pat)
-            gh(["issue", "comment", new_number, "--repo", repo, "--body",
-                f"Started automatically (automatic retry {attempt} of at most {auto['max']}). The planner runs first."], token)
-            started = True
-        else:
-            gh(["issue", "comment", new_number, "--repo", repo, "--body",
-                f"Not started: {auto['max']} automatic retries of #{origin} have already failed, or automatic retries are off. Read it, edit it if needed, "
-                f"then add `{update_intake.GO}` to run it."], token)
-        if str(number) != new_number:  # the failed Intake is superseded by its retry
-            gh(["issue", "comment", str(number), "--repo", repo, "--body", f"Superseded by {url} ({'started automatically' if started else 'waiting for a person'})."], token)
-            if update_intake.fix_meta(body_text) or started:
-                gh(["issue", "close", str(number), "--repo", repo, "--reason", "not planned"], token)
-    return {"target": target, "url": url, "started": started, "attempt": attempt}
+    return {"target": target, "url": m.group(0) if m else "", "started": False, "attempt": attempt}

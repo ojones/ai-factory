@@ -160,7 +160,7 @@ class Retries(unittest.TestCase):
 class Filing(unittest.TestCase):
     ORIGINAL = "### App name\n\ndemo\n\n### What should change?\n\nRetire the flag foo.\n\n### Cost cap override (USD)\n\n0.75\n"
 
-    def run_it(self, result, existing=None, facts=FACTS, body=None, lim=None):
+    def run_it(self, result, existing=None, facts=FACTS, body=None, lim=None, comments=()):
         calls = []
 
         def fake(args, token, check=False):
@@ -168,7 +168,8 @@ class Filing(unittest.TestCase):
             if args[:2] == ["issue", "list"]:
                 return mock.Mock(stdout=json.dumps(existing or []))
             if args[:2] == ["issue", "view"]:
-                return mock.Mock(stdout=json.dumps({"body": body if body is not None else self.ORIGINAL}))
+                return mock.Mock(stdout=json.dumps({"body": body if body is not None else self.ORIGINAL, "url": "https://github.com/o/f/issues/66",
+                                                    "comments": [{"body": c} for c in comments]}))
             if args[:2] == ["issue", "create"]:
                 return mock.Mock(stdout="https://github.com/o/f/issues/80\n")
             return mock.Mock(stdout="")
@@ -189,56 +190,73 @@ class Filing(unittest.TestCase):
         self.assertNotIn("update-intake", labels)
         self.assertFalse([c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c])
 
-    def test_an_app_cause_files_an_update_intake_and_starts_it_with_the_pat_so_no_person_is_needed(self):
+    def state_of(self, calls):
+        comment = next(c for c in calls if c[:2] == ["issue", "comment"])
+        return comment[comment.index("--body") + 1], fr.retry_state([comment[comment.index("--body") + 1]])
+
+    def started(self, calls):
+        return [c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c]
+
+    def test_an_app_cause_updates_the_same_issue_and_restarts_it_with_the_pat_so_no_person_is_needed(self):
         out, calls = self.run_it(dict(RESULT, category="spec_ambiguity"))
-        self.assertEqual((out["target"], out["started"], out["attempt"]), ("app", True, 1))
-        create = self.create(calls)
-        labels = create[create.index("--label") + 1]
-        for needle in ("update-intake", "app:demo", "auto-fix"):
-            self.assertIn(needle, labels)
-        self.assertNotIn("needs-human", labels)
-        body = create[create.index("--body") + 1]
-        self.assertEqual(u.app_name(body), "demo")
-        self.assertEqual(u.fix_meta(body)["origin"], "66")
-        text = b.parse_intake(body, 2.0, 10.0)
-        self.assertEqual(text[1], 0.75)  # the original's cost cap carries over
-        self.assertIn("Retire the flag foo.", text[0])
-        start = next(c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c)
-        self.assertEqual(start[-1], "TOKEN=the-pat")  # events from the Actions token would not start the workflow
-        self.assertTrue(any(c[:2] == ["issue", "comment"] and "Superseded by" in c[c.index("--body") + 1] for c in calls))
-        self.assertIn("started automatically", body)
+        self.assertEqual((out["target"], out["started"], out["attempt"], out["url"]), ("app", True, 1, "https://github.com/o/f/issues/66"))
+        self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]])  # no new issue: the story keeps its own
+        text, state = self.state_of(calls)
+        self.assertIn("## Attempt zero did not complete", text)
+        self.assertIn("retried automatically", text)
+        self.assertEqual((state["attempt"], state["last_run"]), (1, "https://x/run/9"))
+        self.assertIn("Nobody is available to answer questions", state["guidance"])
+        self.assertEqual(self.started(calls)[0][-1], "TOKEN=the-pat")  # events from the Actions token would not start the workflow
+        self.assertTrue(any(c[:3] == ["issue", "edit", "66"] and "retrying" in c for c in calls))
+        self.assertFalse([c for c in calls if c[:2] == ["issue", "close"]])
 
-    def test_a_budget_failure_files_the_retry_with_a_higher_cap_in_the_form(self):
-        facts = dict(FACTS, outcome="budget_exhausted", cap_usd=0.75)
-        _, calls = self.run_it(dict(RESULT, category="model_limit"), facts=facts)
-        body = self.create(calls)[self.create(calls).index("--body") + 1]
-        self.assertEqual(b.parse_intake(body, 2.0, 10.0)[1], 1.5)
-        self.assertIn("raised from $0.75 to $1.50", body)
+    def test_a_budget_failure_retries_the_same_issue_with_a_higher_cap(self):
+        _, calls = self.run_it(dict(RESULT, category="model_limit"), facts=dict(FACTS, outcome="budget_exhausted", cap_usd=0.75))
+        _, state = self.state_of(calls)
+        self.assertEqual(state["cap"], 1.5)
+        self.assertIn("raised from $0.75 to $1.50", state["guidance"])
 
-    def test_a_retry_that_fails_files_the_next_attempt_and_closes_the_failed_one(self):
-        failed = u.with_fix_meta({"origin": 66, "attempt": 1, "history": ["attempt zero: ended round_limit"]}) + "\n\n" + self.ORIGINAL
-        out, calls = self.run_it(dict(RESULT, category="model_limit"), body=failed, facts=dict(FACTS, issue_number="81"))
+    def test_a_watchdog_switch_off_retries_the_story_with_the_same_flag(self):
+        out, calls = self.run_it(None, facts=dict(FACTS, outcome="watchdog_disabled", message="errors rose", flags=["todo-ui"]))
+        self.assertEqual((out["target"], out["started"]), ("app", True))
+        text, state = self.state_of(calls)
+        self.assertEqual(state["flags"], ["todo-ui"])
+        self.assertIn("use exactly `todo-ui`", state["guidance"])
+        self.assertIn("fix the code behind the same flag", state["guidance"])
+        self.assertIn("Feature flag of this story: `todo-ui`", text)
+
+    def test_a_retry_that_fails_updates_the_same_issue_again_and_remembers_the_flag_and_what_was_found(self):
+        earlier = "text\n" + fr.with_retry_state({"attempt": 1, "flags": ["todo-ui"], "history": ["attempt zero: ended round_limit: x"], "last_run": "https://x/run/1", "cap": None})
+        out, calls = self.run_it(dict(RESULT, category="model_limit"), comments=[earlier])
         self.assertEqual((out["started"], out["attempt"]), (True, 2))
-        body = self.create(calls)[self.create(calls).index("--body") + 1]
-        meta = u.fix_meta(body)
-        self.assertEqual((meta["origin"], meta["attempt"]), (66, 2))
-        self.assertEqual(len(meta["history"]), 2)
-        self.assertIn("Earlier attempts:", body)
-        self.assertTrue(any(c[:3] == ["issue", "close", "81"] for c in calls))
+        _, state = self.state_of(calls)
+        self.assertEqual((state["attempt"], state["flags"]), (2, ["todo-ui"]))  # the flag survives a failure that did not name one
+        self.assertEqual(len(state["history"]), 2)
+        self.assertIn("Earlier attempts:", state["guidance"])
+        self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]])
 
-    def test_after_the_last_automatic_retry_it_is_filed_unstarted_and_marked_for_a_person(self):
-        failed = u.with_fix_meta({"origin": 66, "attempt": 2, "history": []}) + "\n\n" + self.ORIGINAL
-        out, calls = self.run_it(dict(RESULT, category="spec_ambiguity"), body=failed, facts=dict(FACTS, issue_number="82"))
+    def test_after_the_last_automatic_retry_the_issue_stays_open_for_a_person_attached_to_its_flag(self):
+        earlier = fr.with_retry_state({"attempt": 2, "flags": ["todo-ui"], "history": [], "last_run": "https://x/run/1"})
+        out, calls = self.run_it(dict(RESULT, category="spec_ambiguity"), comments=[earlier])
         self.assertEqual((out["started"], out["attempt"]), (False, 3))
-        create = self.create(calls)
-        self.assertIn("needs-human", create[create.index("--label") + 1])
-        self.assertFalse([c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c])  # nothing starts
-        self.assertIn("not** started automatically", create[create.index("--body") + 1])
+        self.assertFalse(self.started(calls))  # nothing starts
+        self.assertTrue(any(c[:3] == ["issue", "edit", "66"] and "needs-human" in c and "--add-label" in c for c in calls))
+        text, state = self.state_of(calls)
+        self.assertIn("not** retried automatically", text)
+        self.assertIn("todo-ui", text)
+        self.assertEqual(state["flags"], ["todo-ui"])
 
-    def test_switching_autostart_off_files_it_unstarted(self):
+    def test_the_same_failure_reported_twice_does_not_add_a_second_attempt(self):
+        earlier = fr.with_retry_state({"attempt": 1, "flags": [], "history": [], "last_run": FACTS["run_url"]})
+        out, calls = self.run_it(dict(RESULT, category="spec_ambiguity"), comments=[earlier])
+        self.assertEqual(out["attempt"], 1)
+        self.assertFalse([c for c in calls if c[:2] == ["issue", "comment"]])
+        self.assertFalse(self.started(calls))
+
+    def test_switching_autostart_off_leaves_the_issue_for_a_person(self):
         out, calls = self.run_it(dict(RESULT, category="spec_ambiguity"), lim={"fix_request_autostart": False})
         self.assertFalse(out["started"])
-        self.assertFalse([c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c])
+        self.assertFalse(self.started(calls))
 
     def test_no_cause_files_an_information_issue_only(self):
         out, calls = self.run_it(None)

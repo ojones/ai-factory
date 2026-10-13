@@ -31,6 +31,7 @@ from pathlib import Path
 
 import appstate
 import audit
+import fixrequest
 import planner
 import update_intake
 from update_intake import form_section  # noqa: F401 - the Issue Form parser lives with Update Intake
@@ -832,6 +833,8 @@ class State:
 
 class BuildRun:
     retiring = ()  # the flags this run retires in passing (set in setup)
+    retry_state = {}  # the story's retry state from its issue (fixrequest.retry_state)
+    reuse_flags = []  # the flag(s) a retried story keeps through every attempt
     flag_issues = {}  # slug -> number of the story each released flag came from (from the State issue)
     agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
     def __init__(self):
@@ -898,16 +901,27 @@ class BuildRun:
     # --- setup
 
     def setup(self):
-        out = self.gh(["issue", "view", self.issue, "--repo", self.factory_repo, "--json", "title,body,labels"],
+        out = self.gh(["issue", "view", self.issue, "--repo", self.factory_repo, "--json", "title,body,labels,comments"],
                       token=self.factory_token).stdout
         issue = json.loads(out)
         self.update_intake, self.plan_meta = identify_intake(issue, self.app, self.issue)
-        self.fix_meta = update_intake.fix_meta(issue["body"] or "")
+        self.fix_meta = update_intake.fix_meta(issue["body"] or "")  # an older-style retry carried its state in the body
+        # A story that failed before carries its retry state in a comment on this same issue: the attempt, its flag, what the earlier attempts
+        # found and the guidance for this one. The same issue and the same flag run again.
+        retry = fixrequest.retry_state([c.get("body", "") for c in issue.get("comments") or []])
+        self.retry_state = retry
+        self.reuse_flags = [f for f in retry.get("flags", []) if isinstance(f, str) and SLUG_RE.fullmatch(f)]
+        if retry:
+            self.fix_meta = {"origin": self.issue, "attempt": int(retry.get("attempt", 0)), "history": retry.get("history", [])}
         if self.fix_meta:
             self.state.d["fix"] = self.fix_meta
         self.state.d["intake_kind"] = "update" if self.update_intake else "new"
         self.task, self.cap = parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
                                            self.lim["cost_cap_usd_ceiling"])
+        if retry.get("guidance"):
+            self.task += "\n\n" + str(retry["guidance"])
+            if retry.get("cap"):
+                self.cap = max(self.cap, min(float(retry["cap"]), float(self.lim["cost_cap_usd_ceiling"])))
         self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
         # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
         raw_cap = form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
@@ -1383,6 +1397,10 @@ class BuildRun:
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
         flags = new_flag_slugs(base_flags, head_flags)
+        # A retried story keeps its flag: if it is already in flags.json (the failed attempt's code stayed, dark) it is not "new", but it is
+        # tested and released again like one.
+        flags += [s for s in self.reuse_flags if s in manifest_slugs(head_flags) and s not in flags]
+        self.state.d["flags"] = list(flags)
         share = 0.5
         tester_tree = self.work / f"tester-tree-{rnd}"
         changed_files = self.git("diff", "--name-only", base, head, check=False).stdout.split()
@@ -1520,8 +1538,16 @@ class BuildRun:
                 raise NeedsHuman("other", f"flag slug {slug!r} is not a valid slug; nothing released")
         for slug in flags:
             key = f"{self.app}.feature.{slug}"
-            if self.gb("GET", f"/features/{key}")[0] == 200:
-                kept.append(key)  # never re-enable or alter an existing flag
+            status, existing = self.gb("GET", f"/features/{key}")
+            if status == 200:
+                prod = (((existing.get("feature") or existing) if isinstance(existing, dict) else {}).get("environments") or {}).get("production") or {}
+                if slug in self.reuse_flags and prod.get("enabled") is False:
+                    # The story's own flag, switched off by the watchdog when its release broke production: the fix passed the gates, so
+                    # it is released again. Any other existing flag is left exactly as it is.
+                    self.gb("POST", f"/features/{key}", {"environments": {"production": {"enabled": True, "rules": []}}})
+                    released.append(key)
+                else:
+                    kept.append(key)
                 continue
             feature = {"id": key, "owner": "ai-factory", "valueType": "boolean", "defaultValue": "true", "project": project,
                        "environments": {"production": {"enabled": True, "rules": []}}}
@@ -1613,7 +1639,7 @@ class BuildRun:
         problems = []
 
         def check(doc):
-            found, _ = planner.validate_plan(doc, self.build_kind, limit)
+            found, _ = planner.validate_plan(doc, self.build_kind, limit, self.reuse_flags)
             problems[:] = found
             if found:
                 raise ValueError("; ".join(found))
@@ -1624,7 +1650,7 @@ class BuildRun:
             if problems:
                 raise NeedsHuman("other", "the planner's plan was rejected: " + "; ".join(problems))
             raise
-        _, questions = planner.validate_plan(doc, self.build_kind, limit)
+        _, questions = planner.validate_plan(doc, self.build_kind, limit, self.reuse_flags)
         if questions and getattr(self, "fix_meta", None):
             # An automatic retry has no person to answer. Take the most conservative reading and say so, in the plan comment.
             doc["assumptions"] = list(doc.get("assumptions") or []) + [
@@ -1642,6 +1668,8 @@ class BuildRun:
                              + ". Put the answers in the Update Intake issue, then add `proceed-with-change` again.")
         if len(sets) == 1:
             self.task = update_intake.render_change_set_task(sets[0], request=self.task)
+            if sets[0].get("flag"):
+                self.state.d["flags"] = [sets[0]["flag"]]  # the story's flag, known before any code: a failure keeps it for the retry
 
             self.spec = self.task
             return False
@@ -1675,6 +1703,7 @@ class BuildRun:
             import flag_retirement
             task = self.task + flag_retirement.retirement_block(self.retiring)
             self.spec = (getattr(self, "spec", None) or self.task) + flag_retirement.retirement_note(self.retiring)
+            self.spec += fixrequest.retry_note(self.reuse_flags, self.retry_state.get("attempt"))
             if self.retiring:
                 log("retiring in passing: " + ", ".join(self.retiring))
                 self.state.d["retiring"] = list(self.retiring)

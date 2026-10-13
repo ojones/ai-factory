@@ -251,42 +251,44 @@ class Invariants(unittest.TestCase):
         import audit
         self.assertTrue(audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "failed", "reason": "x"})))
 
-    def test_inv26_a_bad_ending_gets_one_fix_request_per_intake(self):
+    def test_inv26_a_bad_ending_is_handled_on_the_stories_own_issue_or_as_one_fix_request(self):
         import fixrequest as fr, postmortem as pm
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
             self.assertTrue(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release", "planned"):
             self.assertFalse(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
         self.assertEqual((fr.route("plan_gap"), fr.route("spec_ambiguity"), fr.route("infra"), fr.route(None)), ("factory", "app", "info", "info"))
-        self.assertEqual(fr.fingerprint("a", "1", "app"), fr.fingerprint("a", "1", "app"))
-        self.assertNotEqual(fr.fingerprint("a", "1", "app"), fr.fingerprint("a", "2", "app"))
+        self.assertEqual(fr.route(fr.inferred_category(None, "watchdog_disabled")), "app")  # a release the watchdog switched off is the story's to fix
+        self.assertEqual(fr.fingerprint("a", "1", "factory"), fr.fingerprint("a", "1", "factory"))
+        self.assertNotEqual(fr.fingerprint("a", "1", "factory"), fr.fingerprint("a", "2", "factory"))
+        state = {"attempt": 1, "last_run": "r1"}
+        self.assertEqual(fr.retry_decision(state, {"run_url": "r1"}, {})[0], True)  # the same failure twice is one attempt
 
-    def test_inv27_self_correction_starts_itself_but_is_bounded(self):
+    def test_inv27_self_correction_runs_on_the_same_issue_and_flag_and_is_bounded(self):
         import fixrequest as fr
         lim = {"fix_request_max_attempts": 2}
         self.assertEqual([fr.should_autostart("app", n, lim) for n in (1, 2, 3, 4)], [True, True, False, False])
         self.assertFalse(fr.should_autostart("factory", 1, lim))  # a Factory fix is a PR a person merges
         self.assertEqual(PROFILES["limits"]["fix_request_max_attempts"], 2)
         self.assertTrue(PROFILES["limits"]["fix_request_autostart"])
-        body = fr.update_intake.with_fix_meta({"origin": 1, "attempt": 2})
-        self.assertEqual(fr.attempt_info(body, "9")[:2], (1, 3))  # a failed retry files the next attempt, counting up
+        hidden = fr.with_retry_state({"attempt": 2, "flags": ["f"], "history": ["--x--"], "last_run": "r"})
+        self.assertEqual(fr.retry_state(["no state here", "note " + hidden]), {"attempt": 2, "flags": ["f"], "history": ["--x--"], "last_run": "r"})
+        self.assertEqual(fr.retry_decision({"attempt": 2, "last_run": "r"}, {"run_url": "r2"}, lim), (False, 3, False))  # out of tries: stays for a person
         import update_intake as u
         calls = []
 
         def fake(args, token, check=False):
             calls.append((args, token))
-            if args[:2] == ["issue", "create"]:
-                return mock.Mock(stdout="https://github.com/o/f/issues/80\n")
             if args[:2] == ["issue", "view"]:
-                return mock.Mock(stdout='{"body": "### App name\\n\\ndemo\\n\\n### What should change?\\n\\nx\\n"}')
+                return mock.Mock(stdout='{"body": "x", "url": "https://github.com/o/f/issues/7", "comments": []}')
             return mock.Mock(stdout="[]")
 
-        facts = {"app": "demo", "outcome": "round_limit", "message": "m", "run_url": "u", "issue_number": "7"}
+        facts = {"app": "demo", "outcome": "round_limit", "message": "m", "run_url": "u", "issue_number": "7", "flags": ["demo-flag"]}
         with mock.patch.object(fr, "gh", fake), mock.patch.object(u, "gh", fake):
             out = fr.file_fix_request("o/f", "actions", "the-pat", facts, {"category": "spec_ambiguity"}, None, lim)
         self.assertTrue(out["started"])
-        starts = [(a, t) for a, t in calls if a[:2] == ["issue", "edit"] and u.GO in a]
-        self.assertEqual([t for _, t in starts], ["the-pat"])  # the PAT, so the label event starts the workflow
+        self.assertFalse([a for a, _ in calls if a[:2] == ["issue", "create"]])  # the same issue, never a new one
+        self.assertEqual([t for a, t in calls if a[:2] == ["issue", "edit"] and u.GO in a], ["the-pat"])  # the PAT, so the label event starts the workflow
 
     def test_inv28_a_check_that_admits_it_was_not_observed_does_not_pass(self):
         real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
@@ -410,6 +412,18 @@ class Invariants(unittest.TestCase):
         run.gh = lambda *a, **k: calls.append(a)
         run.link_flags_to_issue(["x"])
         self.assertEqual(calls, [])
+
+    def test_inv39_a_story_and_its_flag_live_and_die_together(self):
+        import fixrequest as fr
+        import planner as pl
+        plan = {"requirements": [{"id": "REQ-1", "text": "t"}], "assumptions": [], "open_questions": [],
+                "change_sets": [{"id": "CS-1", "title": "T", "requirements": ["REQ-1"], "depends_on": [], "criteria": ["AC-1: x"], "verification": ["v"],
+                                 "flag": "other", "internal_only": False, "out_of_scope": []}]}
+        self.assertTrue(pl.validate_plan(plan, "update", 8, ["story-flag"])[0])  # a retry may not invent another flag
+        self.assertIn("story-flag", fr.retry_note(["story-flag"], 2))
+        self.assertEqual(fr.retry_state([fr.with_retry_state({"flags": ["story-flag"]})])["flags"], ["story-flag"])
+        for fn in ("release", "disable_flags"):
+            self.assertTrue(hasattr(b.BuildRun, fn))
 
 
 class Registry(unittest.TestCase):

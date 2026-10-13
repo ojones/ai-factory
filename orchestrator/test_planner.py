@@ -141,5 +141,19 @@ class Plan(unittest.TestCase):
         self.assertEqual(run(bad).returncode, 1)
 
 
+class RetriedStory(unittest.TestCase):
+    def one_set(self, flag):
+        plan = good()
+        plan["change_sets"] = [dict(plan["change_sets"][0], flag=flag)]
+        plan["requirements"] = plan["requirements"][:1]
+        return plan
+
+    def test_a_retried_story_keeps_its_flag(self):
+        self.assertEqual(p.validate_plan(self.one_set("todo-ui"), "update", 8, ["todo-ui"]), ([], []))
+        problems = p.validate_plan(self.one_set("another"), "update", 8, ["todo-ui"])[0]
+        self.assertTrue(any("keeps its flag" in x and "todo-ui" in x for x in problems))
+        self.assertEqual(p.validate_plan(self.one_set("another"), "update", 8, [])[0], [])  # no retry, no constraint
+
+
 if __name__ == "__main__":
     unittest.main()

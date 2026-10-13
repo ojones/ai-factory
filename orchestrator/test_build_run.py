@@ -860,5 +860,48 @@ class StoryAndFlagReferenceEachOther(unittest.TestCase):
         self.assertEqual(run.state.d["release"]["released"], ["app.feature.todo-ui"])
 
 
+class RetryOnTheSameIssue(unittest.TestCase):
+    def release_run(self, existing_enabled, reuse):
+        run = object.__new__(b.BuildRun)
+        run.app, run.issue, run.issue_url, run.issue_title, run.run_id, run.run_url = "app", "94", "https://github.com/o/r/issues/94", "t", "7", "u"
+        run.app_repo, run.reuse_flags = "o/app", reuse
+        run.state = b.State(Path("/tmp/x-state.json"), "app", "94", "u")
+        run.state.save = lambda: None
+        run.gh = lambda *a, **k: type("R", (), {"stdout": ""})()
+        posts = []
+
+        def gb(method, path, body=None):
+            if method == "GET":
+                if path.startswith("/projects"):
+                    return 200, {"projects": [{"id": "p"}]}
+                return 200, {"feature": {"environments": {"production": {"enabled": existing_enabled}}}}
+            posts.append((path, body))
+            return 200, {}
+        run.gb = gb
+        return run, posts
+
+    def test_the_stories_own_flag_the_watchdog_switched_off_is_released_again(self):
+        run, posts = self.release_run(False, ["todo-ui"])
+        run.release(["todo-ui"], "sha")
+        self.assertEqual(posts, [("/features/app.feature.todo-ui", {"environments": {"production": {"enabled": True, "rules": []}}})])
+        self.assertEqual(run.state.d["release"]["released"], ["app.feature.todo-ui"])
+
+    def test_any_other_existing_flag_is_left_exactly_as_it_is(self):
+        run, posts = self.release_run(False, [])
+        run.release(["todo-ui"], "sha")
+        self.assertEqual(posts, [])
+        self.assertEqual(run.state.d["release"], {"released": [], "kept": ["app.feature.todo-ui"]})
+        run, posts = self.release_run(True, ["todo-ui"])  # already on: nothing to re-enable
+        run.release(["todo-ui"], "sha")
+        self.assertEqual(posts, [])
+
+    def test_setup_reads_the_retry_state_from_the_issue_comments(self):
+        import fixrequest as fr
+        hidden = fr.with_retry_state({"attempt": 1, "flags": ["todo-ui"], "history": ["h"], "guidance": "Fix the regression.", "cap": 1.5})
+        retry = fr.retry_state([c for c in ["note", hidden]])
+        self.assertEqual(retry["flags"], ["todo-ui"])
+        self.assertTrue(all(b.SLUG_RE.fullmatch(f) for f in retry["flags"]))
+
+
 if __name__ == "__main__":
     unittest.main()

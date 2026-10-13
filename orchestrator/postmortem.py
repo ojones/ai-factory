@@ -94,7 +94,7 @@ def collect_facts(work, d):
               for s in d.get("stages", [])]
     return {"app": d.get("app"), "outcome": d.get("outcome"), "message": d.get("message"),
             "run_url": d.get("run_url"), "issue_number": d.get("issue_number"), "spent_usd": d.get("spent_usd"),
-            "commits": d.get("commits", []), "cap_usd": d.get("cap_usd"), "review_passes": d.get("review_passes") or 0,
+            "commits": d.get("commits", []), "flags": d.get("flags") or [], "cap_usd": d.get("cap_usd"), "review_passes": d.get("review_passes") or 0,
             "audit": d.get("audit") or [], "revert": d.get("revert"), "plan": d.get("plan"), "intake_kind": d.get("intake_kind"), "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
             "rounds": rounds, "recurring_findings": recurring, "stages": stages,
             "final_minor": [{k: f.get(k, "") for k in ("summary", "evidence", "file", "line")} for f in final_minor]}
