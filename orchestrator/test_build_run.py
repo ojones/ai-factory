@@ -127,7 +127,7 @@ class Prompts(unittest.TestCase):
         "coder": {"app_name", "round", "task", "findings_path", "build_kind"},
         "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind", "spec"},
         "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric", "build_kind"},
-        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec", "api_check"},
+        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec", "api_check", "ui_section"},
         "planner": {"app_name", "build_kind", "task", "plan_path", "spec"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
         "postmortem": {"facts_path", "result_path", "categories"},
@@ -320,6 +320,7 @@ class ParallelReviewAndTest(unittest.TestCase):
         run = object.__new__(b.BuildRun)
         run.app, run.preview = "demo", "tok"
         run.cfg = {"roles": {"reviewer": {"mode": "agent"}}}
+        run.lim = {}
         run.work = Path(__import__("tempfile").mkdtemp(prefix="work-test-"))
         run.state = b.State(run.work / "state.json", "demo", "1", "url")
         run.state.save = lambda: None
@@ -777,6 +778,37 @@ class AgentIsolation(unittest.TestCase):
             problems = b.isolation_problems({**good, **bad})
             self.assertEqual(len(problems), 1)
             self.assertIn(text, problems[0])
+
+
+class UiCheckReconcile(unittest.TestCase):
+    ok = {"id": "a", "ok": True, "problems": []}
+    bad = {"id": "b", "ok": False, "problems": ["role='button': expected it to be visible, but it is not"], "observed": {}}
+
+    def result(self, status="passed", ui=("b",)):
+        return {"flag": "f", "check": "c", "status": status, "passed": status == "passed", "evidence": "looked fine", "ui": list(ui)}
+
+    def test_a_scenario_the_browser_saw_fail_cannot_be_reported_as_passed(self):
+        out = b.reconcile_ui_checks({"results": [self.result()]}, {"b": self.bad})
+        self.assertEqual(b.check_state(out["results"][0]), "failed")
+        self.assertIn("ui-check helper observed otherwise", out["results"][0]["evidence"])
+
+    def test_a_scenario_never_run_cannot_be_reported_as_passed_and_a_left_out_failure_is_added(self):
+        self.assertEqual(b.check_state(b.reconcile_ui_checks({"results": [self.result(ui=("zzz",))]}, {})["results"][0]), "not_run")
+        out = b.reconcile_ui_checks({"results": [self.result(ui=())]}, {"b": self.bad})
+        self.assertEqual(b.check_state(out["results"][-1]), "failed")
+        self.assertEqual(out["results"][-1]["ui"], ["b"])
+
+    def test_api_and_ui_checks_are_reconciled_separately(self):
+        doc = {"results": [{**self.result(), "api": ["a"]}]}
+        self.assertEqual(b.check_state(b.reconcile_api_checks(doc, {"a": self.ok})["results"][0]), "passed")
+        self.assertEqual(b.check_state(b.reconcile_ui_checks(doc, {"b": self.bad})["results"][0]), "failed")
+
+    def test_the_browser_instructions_appear_only_for_a_change_that_has_something_on_screen(self):
+        self.assertTrue(b.wants_ui_check(["frontend/src/App.tsx"], "x"))
+        self.assertTrue(b.wants_ui_check(["backend/src/a.ts"], "Add a button that clears the list"))
+        self.assertFalse(b.wants_ui_check(["backend/src/a.ts"], "Return 201 from POST /api/notes"))
+        self.assertEqual(b.ui_section(False, "/x/ui_check.py"), "")
+        self.assertIn("/x/ui_check.py", b.ui_section(True, "/x/ui_check.py"))
 
 
 if __name__ == "__main__":

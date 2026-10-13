@@ -54,6 +54,18 @@ jobs:
       - name: Install OpenHands and the orchestrator's dependencies
         run: pip install "openhands==$(cat factory/agents/openhands-version.txt)" pyyaml
 
+      # limits.ui_check in agents/profiles.yml: the tester may drive a headless browser (orchestrator/ui_check.py). Playwright and its
+      # Chromium are pinned (agents/playwright-version.txt) and installed outside any Managed App, in a directory every account can read.
+      - name: Install the browser for ui-check (pinned)
+        run: |
+          if python -c "import yaml, sys; sys.exit(0 if yaml.safe_load(open('factory/agents/profiles.yml'))['limits'].get('ui_check') else 1)"; then
+            pip install "playwright==$(cat factory/agents/playwright-version.txt)"
+            sudo mkdir -p /opt/playwright
+            sudo env "PATH=$PATH" PLAYWRIGHT_BROWSERS_PATH=/opt/playwright "$(command -v playwright)" install --with-deps chromium
+            sudo chmod -R a+rX /opt/playwright
+            echo "PLAYWRIGHT_BROWSERS_PATH=/opt/playwright" >> "$GITHUB_ENV"
+          fi
+
       # limits.agent_isolation in agents/profiles.yml. With `user`, Agents run as a separate unprivileged account, and the Build Run's
       # directories move to /srv/agent (the runner's home is closed to other accounts), shared through ACLs.
       - name: Working directories, and the Agent user if isolation is on
@@ -115,6 +127,8 @@ jobs:
             ${{ env.BUILD_RUN_DIR }}/verdict-*.json
             ${{ env.BUILD_RUN_DIR }}/test-report-*.json
             ${{ env.BUILD_RUN_DIR }}/api-check-*.jsonl
+            ${{ env.BUILD_RUN_DIR }}/ui-check-*.jsonl
+            ${{ env.BUILD_RUN_DIR }}/ui-*.png
             ${{ env.BUILD_RUN_DIR }}/diagnosis-*.json
             ${{ env.BUILD_RUN_DIR }}/findings-*.json
           if-no-files-found: ignore

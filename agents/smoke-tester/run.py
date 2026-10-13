@@ -292,7 +292,7 @@ def one_run(job):
         report, api_log = root / f"report-{name}.json", root / f"api-check-{name}.jsonl"
         prompt = b.render(b.load_prompt(str(ROOT / "agents" / "prompts" / "tester.md")), {
             "app_name": "smoke-app", "build_kind": "update", "spec": spec_for(data, fixture), "app_url": app.url, "head_sha": head,
-            "report_path": report, "previous_report": "none (this is the first test pass)", "api_check": b.API_CHECK})
+            "report_path": report, "previous_report": "none (this is the first test pass)", "api_check": b.API_CHECK, "ui_section": ""})
         home.mkdir(parents=True, exist_ok=True)
         env = {**sc.minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": base_url, "LLM_API_KEY": key, "RUNTIME": "process",
                "PREVIEW_TOKEN": TOKEN, "API_CHECK_BASE": app.url, "API_CHECK_LOG": str(api_log)}

@@ -74,6 +74,9 @@ limits:
   # files (where the PAT, Fly token and GrowthBook admin key are). The Orchestrator proves this with a self-check at the start of
   # each run and stops if it does not hold.
   agent_isolation: user
+  # The tester may drive a headless browser (orchestrator/ui_check.py) when a change touches the frontend or the spec mentions a screen.
+  # The workflow installs the pinned Playwright and Chromium (agents/playwright-version.txt) only when this is true.
+  ui_check: true
   # Waiting for Test Gate -> Build -> Deploy of one pushed commit.
   pipeline_timeout_minutes: 25
   # Re-runs of a failed pipeline step the Pipeline Agent diagnoses as flaky/infra.

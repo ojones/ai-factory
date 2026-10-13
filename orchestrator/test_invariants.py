@@ -372,6 +372,18 @@ class Invariants(unittest.TestCase):
         self.assertFalse(mt.should_file(applicable, key, [], [{"number": 9}]))
         self.assertEqual(set(b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR), {".github/dependabot.yml", ".github/workflows/test-gate.yml"})
 
+    def test_inv36_the_browser_helpers_observation_outranks_the_testers_judgement(self):
+        import ui_check as uc
+        ui = {"s": {"id": "s", "ok": False, "problems": ["role='button': expected it to be visible, but it is not"], "observed": {}}}
+        passed = {"flag": "f", "check": "c", "status": "passed", "passed": True, "evidence": "e", "ui": ["s"]}
+        self.assertEqual(b.check_state(b.reconcile_ui_checks({"results": [passed]}, ui)["results"][0]), "failed")
+        self.assertEqual(b.check_state(b.reconcile_ui_checks({"results": [passed]}, {})["results"][0]), "not_run")
+        self.assertEqual(b.check_state(b.reconcile_ui_checks({"results": [{**passed, "ui": []}]}, ui)["results"][-1]), "failed")
+        self.assertIsNotNone(uc.validate([{"id": "a", "start": "https://other.example/", "expect": {"visible": [{"label": "x"}]}}])[1])
+        self.assertNotIn("TKN-secret", uc.scrub("/?preview=TKN-secret and TKN-secret", "TKN-secret"))
+        self.assertRegex((ROOT / "agents/playwright-version.txt").read_text().strip(), r"^\d+\.\d+\.\d+$")
+        self.assertIn("playwright-version.txt", (ROOT / ".github/workflows/build-run.yml").read_text())
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

@@ -47,6 +47,7 @@ PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "IN
 TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR = (".github/dependabot.yml", ".github/workflows/test-gate.yml")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the tester calls (see api_check.py)
+UI_CHECK = str(FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser counterpart (see ui_check.py)
 # How a Build Run can end well. `planned`: an update Intake was split into child issues, each its own Build Run.
 OK_OUTCOMES = ("released", "nothing_to_release", "planned")
 
@@ -187,39 +188,75 @@ def load_api_results(path):
     return out
 
 
-def _api_ids(result):
-    ids = result.get("api")
+def _helper_ids(result, field):
+    ids = result.get(field)
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else ([ids] if isinstance(ids, str) else [])
 
 
-def reconcile_api_checks(doc, api):
-    """The tester's report with the helper's observations ranking above its judgement. A result that cites an api-check which
-    failed cannot stay `passed`; one that cites a check the helper never ran cannot either; and a check the helper saw fail
-    that no result mentions is added as a failure, so the tester cannot leave out what it was shown. Results that cite no
-    api-check are untouched."""
+def reconcile_helper_checks(doc, found, field, label):
+    """The tester's report with a helper's observations ranking above its judgement. A result that cites a check (in `field`, `api`
+    or `ui`) which failed cannot stay `passed`; one that cites a check the helper never ran cannot either; and a check the helper saw
+    fail that no result mentions is added as a failure, so the tester cannot leave out what it was shown. Results that cite no check of
+    this kind are untouched."""
     results = [dict(r) for r in (doc.get("results") if isinstance(doc, dict) else None) or [] if isinstance(r, dict)]
     cited = set()
     for r in results:
-        ids = _api_ids(r)
+        ids = _helper_ids(r, field)
         cited.update(ids)
-        failing = [i for i in ids if i in api and not api[i].get("ok")]
-        unknown = [i for i in ids if i not in api]
+        failing = [i for i in ids if i in found and not found[i].get("ok")]
+        unknown = [i for i in ids if i not in found]
         if check_state(r) != "passed":
             continue
         if failing:
-            r.update(status="failed", passed=False, evidence=(f"{r.get('evidence', '')} | the api-check helper observed otherwise: "
-                     + "; ".join(f"{i}: {'; '.join(api[i].get('problems') or ['failed'])}" for i in failing)).strip(" |"))
+            r.update(status="failed", passed=False, evidence=(f"{r.get('evidence', '')} | the {label} helper observed otherwise: "
+                     + "; ".join(f"{i}: {'; '.join(found[i].get('problems') or ['failed'])}" for i in failing)).strip(" |"))
         elif unknown:
-            r.update(status="not_run", passed=False, evidence=(f"{r.get('evidence', '')} | cites api-check id(s) the helper never ran: "
+            r.update(status="not_run", passed=False, evidence=(f"{r.get('evidence', '')} | cites {label} id(s) the helper never ran: "
                      + ", ".join(unknown)).strip(" |"))
     flag = next((r.get("flag") for r in results if r.get("flag")), "")
-    for i, res in api.items():
+    for i, res in found.items():
         if not res.get("ok") and i not in cited:
             observed = res.get("observed") or {}
-            results.append({"flag": flag, "check": f"api-check {i}: {res.get('name', i)}", "status": "failed", "passed": False, "api": [i],
-                            "evidence": "the api-check helper observed a failure the report did not mention: "
-                                        + "; ".join(res.get("problems") or ["failed"]) + f" (status {observed.get('status')})"})
+            seen = f" (status {observed.get('status')})" if "status" in observed else ""
+            results.append({"flag": flag, "check": f"{label} {i}: {res.get('name', i)}", "status": "failed", "passed": False, field: [i],
+                            "evidence": f"the {label} helper observed a failure the report did not mention: "
+                                        + "; ".join(res.get("problems") or ["failed"]) + seen})
     return {**doc, "results": results}
+
+
+def reconcile_api_checks(doc, api):
+    return reconcile_helper_checks(doc, api, "api", "api-check")
+
+
+def reconcile_ui_checks(doc, ui):
+    return reconcile_helper_checks(doc, ui, "ui", "ui-check")
+
+
+UI_WORDS = re.compile(r"\b(page|screen|button|link|menu|modal|dialog|ui|frontend|front-end|label|form field|input field|dropdown|checkbox)\b", re.I)
+
+
+def wants_ui_check(changed_files, spec):
+    """True when the change touches the frontend or the spec talks about something a person sees on screen."""
+    return any(str(f).startswith("frontend/") for f in changed_files) or bool(UI_WORDS.search(spec or ""))
+
+
+def ui_section(wanted, helper_path):
+    """The tester prompt's browser instructions, or an empty string when this change has nothing to see."""
+    if not wanted:
+        return ""
+    return (f"This change has something on screen, so also check it in a browser with the `ui-check` helper (a headless Chromium): write the "
+            f"scenarios into a file and run `python3 {helper_path} ui-checks.json`. The base URL and the token are already set. A scenario is a "
+            "`start` path, `auth` (`\"preview\"` opens the page with the Preview Token, so a dark UI change shows; `\"none\"` is an ordinary "
+            "visitor), `steps` (`click`, `fill` with a `value`, `press`, `goto`, `wait_for`, `check`, `select`) and an `expect` of what must be "
+            "on the page afterwards: `visible`, `hidden`, `text` (with `contains` or `equals`), `count` (with `is`), `url_path`, "
+            "`title_contains`, `no_console_errors`. Find things the way a user does: `{\"role\": \"button\", \"name\": \"Add\"}`, "
+            "`{\"label\": \"New todo\"}`, `{\"text\": \"...\"}`, `{\"placeholder\": \"...\"}` or `{\"test_id\": \"...\"}`. Take every expected "
+            "label and text from the spec word for word, and check both sides of a flagged control: hidden with `auth: none`, visible with "
+            "`auth: preview`. The helper, not you, decides pass or fail, and the Orchestrator reads its log, so a scenario it saw fail cannot be "
+            "reported as passed. Cite the scenario ids a result rests on in its `ui` list. Create only records tagged `factory-test-`, "
+            "and delete them afterwards. Example: `{\"checks\": [{\"id\": \"add\", \"name\": \"Adding a todo shows it\", \"auth\": \"preview\", "
+            "\"steps\": [{\"fill\": {\"label\": \"New todo\", \"value\": \"factory-test-a\"}}, {\"click\": {\"role\": \"button\", \"name\": \"Add\"}}], "
+            "\"expect\": {\"text\": [{\"role\": \"listitem\", \"contains\": \"factory-test-a\"}]}}]}`.")
 
 
 def derive_test(doc, expected_flags):
@@ -849,7 +886,9 @@ class BuildRun:
         tools = self.work / "tools"
         tools.mkdir(parents=True, exist_ok=True)
         shutil.copy(API_CHECK, tools / "api_check.py")
+        shutil.copy(UI_CHECK, tools / "ui_check.py")
         self.api_check_path = str(tools / "api_check.py")
+        self.ui_check_path = str(tools / "ui_check.py")
         problems = self.isolation_self_check()
         self.state.d["isolation"] = {"user": self.agent_user, "problems": problems}
         self.state.save()
@@ -1230,6 +1269,8 @@ class BuildRun:
         flags = new_flag_slugs(base_flags, head_flags)
         share = 0.5
         tester_tree = self.work / f"tester-tree-{rnd}"
+        changed_files = self.git("diff", "--name-only", base, head, check=False).stdout.split()
+        want_ui = bool(self.lim.get("ui_check", False)) and wants_ui_check(changed_files, getattr(self, "spec", None) or getattr(self, "task", ""))
         role_mode = self.cfg["roles"]["reviewer"].get("mode", "agent")
 
         def review():
@@ -1250,10 +1291,13 @@ class BuildRun:
                 return self.agent_json(
                     "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
                                           "report_path": self.work / f"test-report-{rnd}.json",
-                                          "previous_report": previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK)},
+                                          "previous_report": previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK),
+                                          "ui_section": ui_section(want_ui, getattr(self, "ui_check_path", UI_CHECK))},
                     self.work / f"test-report-{rnd}.json",
                     {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
-                     "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl")},
+                     "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl"), "UI_CHECK_BASE": f"https://{self.app}.fly.dev",
+                     "UI_CHECK_LOG": str(self.work / f"ui-check-{rnd}.jsonl"), "UI_CHECK_DIR": str(self.work),
+                     **({"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {})},
                     check=lambda doc: derive_test(doc, flags) and None,
                     cwd=tester_tree, home=self.work / f"home-tester-{rnd}", share=share)
             finally:
@@ -1276,6 +1320,7 @@ class BuildRun:
         try:
             tdoc, cost, usage = test_job.result()
             tdoc = reconcile_api_checks(tdoc, load_api_results(self.work / f"api-check-{rnd}.jsonl"))
+            tdoc = reconcile_ui_checks(tdoc, load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
             try:  # so the next round's tester sees the failures the helper added; best effort, never a reason to stop the run
                 (self.work / f"test-report-{rnd}.json").write_text(json.dumps(tdoc, indent=2))
             except OSError as e:
