@@ -836,7 +836,7 @@ class BuildRun:
             workspace = os.environ.get("GITHUB_WORKSPACE", "/home/runner/work")
             probes = {"whoami": "id -un", "environ": f"cat /proc/{marker.pid}/environ 2>/dev/null | tr '\\0' '\\n'",
                       "workspace": f"ls '{workspace}' 2>/dev/null",
-                      "env_names": "env | cut -d= -f1 | grep -E '^(FACTORY_|FLY_|GROWTHBOOK|DEEPINFRA|PREVIEW_MASTER|GITHUB_TOKEN|GH_TOKEN|ACTIONS_)' || true",
+                      "env_names": "env | cut -d= -f1 | grep -E '^(FACTORY_|FLY_API|GROWTHBOOK|DEEPINFRA|PREVIEW_MASTER|GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL)' || true",
                       "sudo": "sudo -n true 2>/dev/null && echo yes || echo no"}
             outputs = {}
             for name, script in probes.items():
