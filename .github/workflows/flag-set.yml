@@ -1,0 +1,45 @@
+name: Flag set
+
+# Manual: switch one Managed App flag on or off in production. Off is the rollback for a released change; on is for a test.
+# orchestrator/flag_set.py changes only the production `enabled` switch of a flag that already exists and reads it back.
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Managed App name (for example ojones-todo)
+        required: true
+      flag:
+        description: Flag slug (for example fast-heartbeat)
+        required: true
+      state:
+        description: Production state
+        required: true
+        type: choice
+        options: ["off", "on"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flag-set
+  cancel-in-progress: false
+
+jobs:
+  set:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Switch the flag
+        env:
+          GROWTHBOOK_ADMIN_PAT: ${{ secrets.GROWTHBOOK_ADMIN_PAT }}
+          APP: ${{ inputs.app }}
+          FLAG: ${{ inputs.flag }}
+          STATE: ${{ inputs.state }}
+        run: python orchestrator/flag_set.py "$APP" "$FLAG" "$STATE"

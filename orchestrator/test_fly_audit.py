@@ -46,5 +46,14 @@ class Ledger(unittest.TestCase):
         pm.record_agent_spend(budget, "jwt", "o/r", "tok", "7")
 
 
+class FlagSet(unittest.TestCase):
+    def test_only_valid_names_make_a_key(self):
+        import flag_set
+        self.assertEqual(flag_set.feature_key("ojones-todo", "fast-heartbeat"), "ojones-todo.feature.fast-heartbeat")
+        for app, slug in (("../x", "a"), ("a", "A b"), ("", "a"), ("a", "")):
+            self.assertIsNone(flag_set.feature_key(app, slug))
+        self.assertEqual(flag_set.main(["x", "app", "flag", "maybe"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
