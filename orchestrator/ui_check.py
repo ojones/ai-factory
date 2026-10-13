@@ -160,7 +160,10 @@ def locate(page, loc):
     return page.get_by_test_id(loc["test_id"])
 
 
-def observe(page, expect, console_errors, token):
+EXPECT_PATIENCE_S = 4.0
+
+
+def observe(page, expect, console_errors, token, text_timeout=3000):
     obs = {"visible": {}, "text": {}, "count": {}, "url_path": "", "title": "", "console_errors": [scrub(e, token) for e in console_errors]}
     for loc in expect.get("visible", []) + expect.get("hidden", []):
         try:
@@ -169,7 +172,7 @@ def observe(page, expect, console_errors, token):
             obs["visible"][loc_key(loc)] = False
     for item in expect.get("text", []):
         try:
-            obs["text"][loc_key(item)] = scrub(locate(page, item).first.inner_text(timeout=3000), token)
+            obs["text"][loc_key(item)] = scrub(locate(page, item).first.inner_text(timeout=text_timeout), token)
         except Exception:  # noqa: BLE001
             obs["text"][loc_key(item)] = None
     for item in expect.get("count", []):
@@ -181,6 +184,19 @@ def observe(page, expect, console_errors, token):
     obs["url_path"] = urlparse(page.url).path or "/"
     obs["title"] = scrub(page.title(), token)
     return obs
+
+
+def settle(page, expect, console_errors, token, patience=EXPECT_PATIENCE_S):
+    """What the page shows once it has had a few seconds to settle, with the problems found. A page updates after a network call, so
+    the expectations are re-read until they hold or the patience runs out (the way Playwright's own assertions wait), and only the
+    last reading counts. Without this a correct page fails because the check looked a moment too soon."""
+    deadline = time.time() + patience
+    while True:
+        obs = observe(page, expect, console_errors, token, text_timeout=400)
+        problems = compare(expect, obs)
+        if not problems or time.time() >= deadline:
+            return obs, problems
+        page.wait_for_timeout(250)
 
 
 def do_step(page, step, base):
@@ -228,8 +244,7 @@ def run_checks(checks, base, token, log_path=None, shot_dir=None):
                 page.goto(base.rstrip("/") + c.get("start", "/"), timeout=NAV_TIMEOUT_MS)
                 for step in c.get("steps", []):
                     do_step(page, step, base)
-                obs = observe(page, c["expect"], console_errors, token)
-                problems = compare(c["expect"], obs)
+                obs, problems = settle(page, c["expect"], console_errors, token)
             except Exception as e:  # noqa: BLE001 - a timeout or a failed navigation is a failed check, with the reason
                 problems = [scrub(f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}", token)]
             if problems and shot_dir:

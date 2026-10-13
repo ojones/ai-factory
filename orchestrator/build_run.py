@@ -224,6 +224,15 @@ def reconcile_helper_checks(doc, found, field, label):
     return {**doc, "results": results}
 
 
+def report_from_helper_failures(api, ui):
+    """A tester report built only from what the helpers saw fail, for when the tester wrote none. None when nothing failed: with no
+    report and no failure there is nothing to act on, and the run stops for a person as before."""
+    if all(r.get("ok") for r in list(api.values()) + list(ui.values())):
+        return None
+    doc = {"passed": False, "results": [], "limitations": ["the tester wrote no report; these failures come from the helpers' own logs, and nothing else was assessed"]}
+    return reconcile_ui_checks(reconcile_api_checks(doc, api), ui)
+
+
 def reconcile_api_checks(doc, api):
     return reconcile_helper_checks(doc, api, "api", "api-check")
 
@@ -253,8 +262,12 @@ def ui_section(wanted, helper_path):
             "`{\"label\": \"New todo\"}`, `{\"text\": \"...\"}`, `{\"placeholder\": \"...\"}` or `{\"test_id\": \"...\"}`. Take every expected "
             "label and text from the spec word for word, and check both sides of a flagged control: hidden with `auth: none`, visible with "
             "`auth: preview`. The helper, not you, decides pass or fail, and the Orchestrator reads its log, so a scenario it saw fail cannot be "
-            "reported as passed. Cite the scenario ids a result rests on in its `ui` list. Create only records tagged `factory-test-`, "
-            "and delete them afterwards. Example: `{\"checks\": [{\"id\": \"add\", \"name\": \"Adding a todo shows it\", \"auth\": \"preview\", "
+            "reported as passed. Cite the scenario ids a result rests on in its `ui` list. The helper waits a few seconds for each expectation "
+            "(a page updates after a network call), so add no sleeps. Budget: run the file once, and a second time only to fix a mistake in your "
+            "own scenarios; do not read the app's source to explain a failure, report what the helper observed. The app is live and shared: "
+            "give each scenario its own record named `factory-test-<scenario>`, delete what you created afterwards, and never assert that a "
+            "list is empty or that someone else's records are gone (mark that check `not_run` and say why). Whatever happens, finish by writing "
+            "the report: a report with failures is useful, no report stops the run. Example: `{\"checks\": [{\"id\": \"add\", \"name\": \"Adding a todo shows it\", \"auth\": \"preview\", "
             "\"steps\": [{\"fill\": {\"label\": \"New todo\", \"value\": \"factory-test-a\"}}, {\"click\": {\"role\": \"button\", \"name\": \"Add\"}}], "
             "\"expect\": {\"text\": [{\"role\": \"listitem\", \"contains\": \"factory-test-a\"}]}}]}`.")
 
@@ -1288,18 +1301,29 @@ class BuildRun:
         def test():
             self.git("worktree", "add", "--detach", str(tester_tree), head)
             try:
-                return self.agent_json(
-                    "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
-                                          "report_path": self.work / f"test-report-{rnd}.json",
-                                          "previous_report": previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK),
-                                          "ui_section": ui_section(want_ui, getattr(self, "ui_check_path", UI_CHECK))},
-                    self.work / f"test-report-{rnd}.json",
-                    {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
-                     "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl"), "UI_CHECK_BASE": f"https://{self.app}.fly.dev",
-                     "UI_CHECK_LOG": str(self.work / f"ui-check-{rnd}.jsonl"), "UI_CHECK_DIR": str(self.work),
-                     **({"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {})},
-                    check=lambda doc: derive_test(doc, flags) and None,
-                    cwd=tester_tree, home=self.work / f"home-tester-{rnd}", share=share)
+                try:
+                    return self.agent_json(
+                        "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
+                                              "report_path": self.work / f"test-report-{rnd}.json",
+                                              "previous_report": previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK),
+                                              "ui_section": ui_section(want_ui, getattr(self, "ui_check_path", UI_CHECK))},
+                        self.work / f"test-report-{rnd}.json",
+                        {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
+                         "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl"), "UI_CHECK_BASE": f"https://{self.app}.fly.dev",
+                         "UI_CHECK_LOG": str(self.work / f"ui-check-{rnd}.jsonl"), "UI_CHECK_DIR": str(self.work),
+                         **({"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {})},
+                        check=lambda doc: derive_test(doc, flags) and None,
+                        cwd=tester_tree, home=self.work / f"home-tester-{rnd}", share=share)
+                except NeedsHuman:
+                    # No usable report, but if a helper saw something fail that is a finding the coder can act on: use it
+                    # instead of stopping for a person. With nothing failed there is nothing to act on, so it stops as before.
+                    doc = report_from_helper_failures(load_api_results(self.work / f"api-check-{rnd}.jsonl"),
+                                                      load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
+                    if doc is None:
+                        raise
+                    with self.lock:
+                        log("The tester wrote no usable report; using what its helpers saw fail instead.")
+                    return doc, 0.0, None
             finally:
                 self.git("worktree", "remove", "--force", str(tester_tree), check=False)
 

@@ -35,6 +35,9 @@ class Handler(BaseHTTPRequestHandler):
         if "preview=TKN9f3a1c" in self.path:
             self.send_header("Set-Cookie", "preview=TKN9f3a1c; HttpOnly; Path=/")
         self.end_headers()
+        if self.path.startswith("/late"):  # a page that fills in after a network-sized delay
+            self.wfile.write(b"<!doctype html><title>Late</title><p id=p>Loading</p><script>setTimeout(function(){document.getElementById('p').textContent='Loaded'},1500)</script>")
+            return
         self.wfile.write((PAGE % ("<button>Secret flagged control</button>" if preview else "")).encode())
 
 
@@ -93,6 +96,12 @@ class Live(unittest.TestCase):
         self.assertTrue((tmp / results[3]["screenshot"]).exists())
         self.assertEqual(len(log.read_text().splitlines()), 4)
         self.assertNotIn("TKN9f3a1c", log.read_text())
+
+    def test_expectations_wait_for_a_page_that_updates_after_a_delay(self):
+        r = u.run_checks([{"id": "late", "start": "/late", "auth": "none", "expect": {"text": [{"text": "Loaded", "contains": "Loaded"}]}},
+                          {"id": "never", "start": "/late", "auth": "none", "expect": {"text": [{"text": "Never appears", "contains": "x"}]}}], self.base, None)
+        self.assertTrue(r[0]["ok"], r[0]["problems"])
+        self.assertFalse(r[1]["ok"])
 
     def test_other_origins_are_never_requested_and_a_missing_token_fails(self):
         r = u.run_checks([{"id": "x", "auth": "preview", "expect": {"visible": [BTN]}}], self.base, None)

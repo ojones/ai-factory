@@ -811,5 +811,17 @@ class UiCheckReconcile(unittest.TestCase):
         self.assertIn("/x/ui_check.py", b.ui_section(True, "/x/ui_check.py"))
 
 
+class ReportFromHelpers(unittest.TestCase):
+    bad = {"id": "b", "name": "n", "ok": False, "problems": ["role='button': expected it to be visible, but it is not"], "observed": {}}
+    good = {"id": "g", "name": "n", "ok": True, "problems": []}
+
+    def test_a_missing_report_becomes_the_failures_the_helpers_saw(self):
+        doc = b.report_from_helper_failures({}, {"b": self.bad, "g": self.good})
+        self.assertEqual([r["status"] for r in doc["results"]], ["failed"])
+        self.assertIn("no report", doc["limitations"][0])
+        self.assertEqual(b.report_from_helper_failures({"g": self.good}, {}), None)  # nothing failed: nothing to act on
+        self.assertEqual(b.report_from_helper_failures({}, {}), None)
+
+
 if __name__ == "__main__":
     unittest.main()
