@@ -42,3 +42,42 @@ jobs:
           echo "agent can write to the workspace: $(as_agent "touch $GITHUB_WORKSPACE/.probe && echo yes || echo no")"
           echo "agent environment has token variables: $(as_agent 'env | grep -ci "token\|pat\|secret"')"
           kill $PID
+
+  tools:
+    # Can the separate user run what an Agent needs, from a directory both users share? (no model calls, no cost)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: factory
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install "openhands==$(cat factory/agents/openhands-version.txt)" pyyaml
+      - name: Probe tools and shared directory
+        run: |
+          set +e
+          sudo apt-get install -y -qq acl >/dev/null 2>&1; echo "setfacl: $(command -v setfacl || echo missing)"
+          sudo useradd -m -s /bin/bash agent
+          sudo mkdir -p /srv/agent
+          sudo chown agent:agent /srv/agent
+          sudo setfacl -R -m u:runner:rwx /srv/agent
+          sudo setfacl -R -d -m u:runner:rwx -m u:agent:rwx /srv/agent
+          git config --global --add safe.directory '*'
+          as_agent() { sudo -n -u agent -H env "PATH=$PATH" bash -c "$1" 2>&1; }
+          for c in "openhands --version" "node --version" "npm --version" "python3 --version" "git --version"; do
+            echo "agent runs [$c]: $(as_agent "$c" | head -1)"
+          done
+          as_agent "mkdir -p /srv/agent/app && cd /srv/agent/app && git init -q -b main && git config user.email a@b && git config user.name a && echo hi > f && git add f && git commit -qm one && echo agent-committed"
+          echo "runner reads agent's repo: $(git -C /srv/agent/app log --oneline | head -1)"
+          echo "runner writes in agent's repo: $(echo more >> /srv/agent/app/f && echo yes || echo no)"
+          echo "runner commits there: $(cd /srv/agent/app && git -c user.email=r@b -c user.name=r commit -qam two && echo yes || echo no)"
+          echo "agent still writes after runner touched it: $(as_agent 'echo x >> /srv/agent/app/f && echo yes || echo no')"
+          echo "agent npm ci works: $(cd /srv/agent && sudo -n -u agent -H env "PATH=$PATH" bash -c 'mkdir -p /srv/agent/n && cd /srv/agent/n && echo "{\"name\":\"t\",\"version\":\"1.0.0\"}" > package.json && npm install --silent 2>&1 | tail -1; echo done')"
+          ls -l /srv/agent/app | head -3
+
