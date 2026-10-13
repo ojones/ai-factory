@@ -19,7 +19,8 @@
     "start": "npm run start --workspace backend",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "audit": "npm audit --omit=dev --audit-level=high"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -49,6 +49,25 @@ def list_fly_apps(org, token):
     return [{"name": a["name"], "machines": a.get("machine_count")} for a in r["apps"] if a.get("name")]
 
 
+def idle_days(last_push_iso, now=None):
+    """Whole days since an ISO timestamp, or None if it cannot be read."""
+    import time
+    try:
+        then = time.mktime(time.strptime(last_push_iso[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+    except (ValueError, TypeError):
+        return None
+    return int(((now or time.time()) - then) // 86400)
+
+
+def idle_report(rows):
+    """A markdown table of [(app, days idle or None)], longest idle first. Report only: nothing is retired automatically."""
+    lines = ["### Managed Apps by days since the last push", "", "| App | Days idle |", "|---|---|"]
+    for app, days in sorted(rows, key=lambda r: -(r[1] if r[1] is not None else -1)):
+        lines.append(f"| `{app}` | {days if days is not None else '?'} |")
+    lines += ["", "Nothing is retired automatically. Run the Teardown workflow for an app you no longer need."]
+    return "\n".join(lines)
+
+
 def main():
     repo, org = os.environ["GITHUB_REPOSITORY"], os.environ.get("FLY_ORG") or "personal"
     owner, pat, token = repo.split("/")[0], os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
@@ -58,6 +77,18 @@ def main():
         out = b.sh(["gh", "api", f"repos/{owner}/{name}", "--jq", ".description"], env={**os.environ, "GH_TOKEN": pat}, check=False)
         return out.returncode == 0 and update_intake.is_factory_repo(out.stdout.strip(), repo)
 
+    try:  # the idle-app report goes in the run summary; it never fails the audit
+        import production_feedback as pf
+        rows = []
+        for app in pf.managed_apps(repo, token):
+            pushed = b.sh(["gh", "api", f"repos/{owner}/{app}", "--jq", ".pushed_at"], env={**os.environ, "GH_TOKEN": pat}, check=False).stdout.strip()
+            rows.append((app, idle_days(pushed)))
+        report = idle_report(rows)
+        print(report)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a").write(report + "\n")
+    except Exception as e:  # noqa: BLE001
+        print(f"idle report failed: {type(e).__name__}: {e}")
     found = orphans(list_fly_apps(org, os.environ["FLY_API_TOKEN"]), infra, owned_repo)
     env = {**os.environ, "GH_TOKEN": token}
     update_intake.ensure_label(repo, LABEL, token, "b60205", "Fly apps nobody owns")

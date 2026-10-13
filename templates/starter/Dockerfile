@@ -5,17 +5,14 @@
 #     no separate frontend container/app)
 #   - minimal base image, non-root user, base image pinned by digest
 #     (not just a floating tag, so a build is reproducible even if the
-#     `20-alpine` tag is later repointed at a different image)
+#     `22-alpine` tag is later repointed at a different image)
 #
-# Base image: node:20-alpine. To refresh the pinned digest (e.g. for a
-# later Node LTS or a security patch), resolve the new digest with:
-#   docker buildx imagetools inspect node:20-alpine
-# and replace the sha256 below — this is the one line that intentionally
-# needs a human (or Agent) to revisit periodically.
-ARG BASE_IMAGE=node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+# Base image: node:22-alpine, pinned by digest in both FROM lines below. The image is written out in each
+# FROM line (not through an ARG) so Dependabot's Docker updater can find it: it opens an update for a new digest
+# or Node release, the Orchestrator turns that into an Update Intake, and the normal gate tests it.
 
 # ---- Build stage: install all deps, compile backend + build frontend ----
-FROM ${BASE_IMAGE} AS build
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS build
 WORKDIR /app
 
 # Install dependencies first, as their own layer, so source-only changes
@@ -37,7 +34,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # ---- Runtime stage: minimal image, non-root, only what's needed to run ----
-FROM ${BASE_IMAGE} AS runtime
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 

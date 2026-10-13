@@ -46,10 +46,17 @@ def parse_name_status(text):
     return out
 
 
+def orchestrator_applied(changes):
+    """The changed paths the Build Run copies itself (b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR), which no Agent applies or reports."""
+    return [path for _, path in changes if path in b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR]
+
+
 def split_changes(changes):
-    """(applicable, protected, ignored) path lists from [(status, path)]."""
+    """(applicable, protected, ignored) path lists from [(status, path)]. Files the Orchestrator applies itself are in none of them."""
     applicable, protected, ignored = [], [], []
     for status, path in changes:
+        if path in b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR:
+            continue
         if path in SKIP:
             ignored.append(path)
         elif b.protected_violations([path]):
@@ -71,12 +78,14 @@ def should_sync(applicable, target, stamp, filed_titles, open_for_app, app):
     return not any(f"[sync {target[:7]}]" in t for t in filed_titles)
 
 
-def sync_request(app, target, base, applicable, protected, diff_text):
+def sync_request(app, target, base, applicable, protected, diff_text, by_orchestrator=()):
     files = "\n".join(f"- {s} `{p}`" for s, p in applicable)
     parts = [f"The Factory's Starter Template changed after `{app}` was seeded. Apply these changes to the app's corresponding files "
              f"(the template's `backend/`, `frontend/` and root files map to the same paths in this repo).",
              "", f"Template commit this app is being brought up to: `{target}` (it was last synced to `{base[:12]}`).", "",
              "Files changed in the template:", files]
+    if by_orchestrator:
+        parts += ["", "Already applied by the Orchestrator before you start (do not touch them): " + ", ".join(f"`{p}`" for p in by_orchestrator)]
     if protected:
         parts += ["", "Not applied here, because Agents may not change them (a person must): " + ", ".join(f"`{p}`" for p in protected)]
     clipped = diff_text if len(diff_text) <= MAX_DIFF_CHARS else diff_text[:MAX_DIFF_CHARS] + "\n... (clipped; read the rest from the Factory repo)"
@@ -125,14 +134,15 @@ def main():
                 continue
             changes = parse_name_status(git("diff", "--name-status", "-M", base, target, "--", TEMPLATE))
             applicable, protected, _ = split_changes(changes)
+            by_orchestrator = orchestrator_applied(changes)
             titles = [i["title"] for i in pf.intakes_with(repo, token, app, LABEL, "all")]
             open_now = pf.intakes_with(repo, token, app, LABEL, "open")
-            if not should_sync(applicable, target, app_stamp(owner, app, pat), titles, open_now, app):
+            if not should_sync(applicable or by_orchestrator, target, app_stamp(owner, app, pat), titles, open_now, app):
                 continue
             paths = [p for _, p in applicable]
-            diff_text = git("diff", "-M", base, target, "--", *[TEMPLATE + p for p in paths])
+            diff_text = git("diff", "-M", base, target, "--", *[TEMPLATE + p for p in paths]) if paths else ""  # no paths would diff everything
             n = pf.file_intake(repo, token, pat, app, f"{app}: template sync [sync {target[:7]}]",
-                               sync_request(app, target, base, applicable, protected, diff_text), LABEL,
+                               sync_request(app, target, base, applicable, protected, diff_text, by_orchestrator), LABEL,
                                "Filed and started by the Orchestrator to bring an app up to the Starter Template",
                                "Started automatically: the Starter Template changed after this app was seeded. The planner runs first.")
             b.log(f"{app}: template sync filed as #{n} ({len(paths)} file(s), {len(protected)} protected)")

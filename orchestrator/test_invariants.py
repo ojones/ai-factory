@@ -360,6 +360,18 @@ class Invariants(unittest.TestCase):
         self.assertTrue(b.isolation_problems({"whoami": "runner", "environ": "SELF-CHECK-SECRET", "workspace": "x", "env_names": "FACTORY_PAT", "sudo": "yes"}))
         self.assertEqual(PROFILES["limits"]["agent_isolation"], "user")
 
+    def test_inv35_updates_reach_apps_only_as_gated_intakes(self):
+        import maintenance as mt
+        npm = {"number": 1, "title": "Bump a from 1 to 2", "url": "u", "headRefName": "dependabot/npm_and_yarn/a-2", "labels": []}
+        acts = {"number": 2, "title": "Bump actions/checkout", "url": "u", "headRefName": "dependabot/github_actions/x", "labels": []}
+        applicable, reported = mt.split_prs([npm, acts])
+        self.assertEqual((applicable, reported), ([npm], [acts]))
+        key = mt.update_key(applicable)
+        self.assertTrue(mt.should_file(applicable, key, [], []))
+        self.assertFalse(mt.should_file(applicable, key, [f"a: dependency updates [maint {key}]"], []))
+        self.assertFalse(mt.should_file(applicable, key, [], [{"number": 9}]))
+        self.assertEqual(set(b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR), {".github/dependabot.yml", ".github/workflows/test-gate.yml"})
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

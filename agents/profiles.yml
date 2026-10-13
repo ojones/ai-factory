@@ -88,6 +88,10 @@ limits:
   fly_infra_apps: []
   # Errors a deployed app logs, and `escaped-defect` issues its owner files, become Update Intakes that start themselves
   # (orchestrator/production_feedback.py, scheduled by production-feedback.yml). min_occurrences: times one error must appear in a scan.
+  # Daily: Dependabot's open pull requests for each app (npm packages, Docker base image) become one self-starting Update Intake
+  # (orchestrator/maintenance.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
+  maintenance:
+    enabled: true
   production_feedback:
     enabled: true
     min_occurrences: 3

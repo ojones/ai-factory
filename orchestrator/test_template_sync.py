@@ -23,6 +23,14 @@ class Changes(unittest.TestCase):
         self.assertEqual(sorted(protected), [".github/workflows/ci.yml", "backend/src/feature-flags.ts", "fly.toml"])
         self.assertEqual(ignored, ["package-lock.json"])
 
+    def test_files_the_build_run_copies_itself_are_in_no_agent_list(self):
+        changes = [("M", ".github/dependabot.yml"), ("M", ".github/workflows/test-gate.yml"), ("M", ".github/workflows/build.yml"), ("M", "package.json")]
+        applicable, protected, _ = t.split_changes(changes)
+        self.assertEqual([p for _, p in applicable], ["package.json"])
+        self.assertEqual(protected, [".github/workflows/build.yml"])
+        self.assertEqual(t.orchestrator_applied(changes), [".github/dependabot.yml", ".github/workflows/test-gate.yml"])
+        self.assertIn("Already applied by the Orchestrator", t.sync_request("a", T, BASE, [], [], "", [".github/dependabot.yml"]))
+
     def test_only_a_full_sha_is_a_stamp(self):
         self.assertEqual(t.stamp_value(T + "\n"), T)
         for bad in ("", "abc123", "not a sha", T + "x"):

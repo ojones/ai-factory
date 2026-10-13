@@ -42,6 +42,9 @@ PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to 
 # Starter Template files the coder must not change: the workflows hold the Fly
 # token, and the flag wrapper is the release gate's other half.
 PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md")
+# Protected files a template-sync Build Run copies from the Starter Template itself, before any Agent runs (an Agent may not edit
+# them, and no Agent is involved). Only files that are safe to overwrite belong here: nobody but the template ever changes them.
+TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR = (".github/dependabot.yml", ".github/workflows/test-gate.yml")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the tester calls (see api_check.py)
 # How a Build Run can end well. `planned`: an update Intake was split into child issues, each its own Build Run.
@@ -803,6 +806,7 @@ class BuildRun:
         self.install_dependencies()
         self.git("config", "user.name", "ai-factory-coder")
         self.git("config", "user.email", "coder@ai-factory.local")
+        self.apply_template_files({l["name"] for l in issue.get("labels", [])})
         self.state.d["base_sha"] = self.head()
         # The base of a first build is the seed commit, the repository's root. Any later Build Run
         # starts from a commit with history, so its change is an update that needs flags.
@@ -811,6 +815,31 @@ class BuildRun:
         self.state.d["build_kind"] = self.build_kind
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
+
+    def apply_template_files(self, labels):
+        """A template-sync Intake: copy the protected Starter Template files in TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR into the app
+        and push them before the planner and coder start, so the run's starting point already has them. No Agent touches them. A
+        failure is logged and the run goes on: the rest of the sync does not depend on these files."""
+        if "template-sync" not in labels:
+            return
+        try:
+            changed = []
+            for rel in TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR:
+                src, dst = FACTORY_DIR / "templates" / "starter" / rel, self.app_dir / rel
+                if src.is_file() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, dst)
+                    changed.append(rel)
+            if not changed:
+                return
+            self.git("add", "--", *changed)
+            self.git("-c", "user.name=ai-factory-orchestrator", "-c", "user.email=orchestrator@ai-factory.local", "commit", "-q", "-m",
+                     "chore: sync protected Starter Template files\n\n" + "\n".join(changed))
+            sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
+            self.share_with_agent(self.app_dir)
+            log("synced protected template files: " + ", ".join(changed))
+        except Exception as e:  # noqa: BLE001
+            log(f"could not sync protected template files: {type(e).__name__}: {e}")
 
     def prepare_agent_user(self):
         """With isolation on: put the helper the tester calls where the Agent user can read it, and prove isolation holds before

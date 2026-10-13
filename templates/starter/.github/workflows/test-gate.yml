@@ -25,3 +25,8 @@ jobs:
 
       - name: Test (unit tests + boot/health-check smoke test)
         run: npm test
+
+      # High or critical advisories in production dependencies fail the gate. The fix is a dependency update, which is what the
+      # daily maintenance Intake (from Dependabot's pull requests) delivers.
+      - name: Audit production dependencies
+        run: npm run audit

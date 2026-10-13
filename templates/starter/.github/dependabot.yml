@@ -1,0 +1,21 @@
+# Dependabot finds out-of-date and vulnerable dependencies. It only detects: the Factory's Orchestrator reads its open pull requests
+# and turns them into one Update Intake per app, so every change goes through the same Test Gate, review and tests. Nothing here
+# merges. (Owned by the Starter Template; Agents may not edit .github/.)
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: daily
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
