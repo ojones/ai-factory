@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -727,6 +728,27 @@ class JsonOutput(unittest.TestCase):
             run.agent_json("tester", "t1", {}, path)
         self.assertIn("no valid output file twice", str(cm.exception))
         self.assertIn("last problem: it is not valid JSON", str(cm.exception))
+
+
+class RunWatched(unittest.TestCase):
+    def test_stalled_only_after_the_limit_and_never_when_off(self):
+        self.assertFalse(b.silent_too_long(100, 150, 60))
+        self.assertTrue(b.silent_too_long(100, 160, 60))
+        self.assertFalse(b.silent_too_long(0, 10**6, 0))
+
+    def test_a_silent_process_is_killed_as_a_stall_and_a_chatty_one_finishes(self):
+        import sys, tempfile
+        out = Path(tempfile.mkdtemp()) / "o.jsonl"
+        started = time.time()
+        rc = b.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
+        self.assertEqual(rc, "stall")
+        self.assertLess(time.time() - started, 10)
+        rc = b.run_watched([sys.executable, "-c", "import time\nfor i in range(6):\n print(i, flush=True); time.sleep(0.4)"],
+                           None, os.environ.copy(), out, 30, 1.5, poll=0.2)
+        self.assertEqual(rc, 0)
+        rc = b.run_watched([sys.executable, "-c", "import time\nwhile True:\n print('x', flush=True); time.sleep(0.2)"],
+                           None, os.environ.copy(), out, 1, 5, poll=0.2)
+        self.assertEqual(rc, "timeout")
 
 
 if __name__ == "__main__":

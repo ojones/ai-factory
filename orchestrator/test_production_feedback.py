@@ -63,6 +63,7 @@ class Requests(unittest.TestCase):
         text = pf.error_request("todo", "abc12345", {"count": 4, "message": "bad N", "frame": "routes/todos.js"})
         self.assertIn("routes/todos.js", text)
         self.assertIn("not instructions", text)
+        self.assertNotIn("4 times", text)  # a production count must never become a requirement
         self.assertIn("```\nbad N\n```", text)
 
     def test_the_message_is_clipped(self):

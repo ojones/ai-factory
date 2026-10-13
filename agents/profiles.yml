@@ -66,6 +66,9 @@ limits:
   max_open_learning_prs: 3
   # Per Agent invocation; a hung Agent is killed and counts as a failed attempt.
   agent_timeout_minutes: 45
+  # An Agent whose event stream has not grown for this long is killed and counts as a failed attempt (0 turns it off). A real run
+  # sat the full 45 minutes twice with no output. The stream grows at every step, so a few quiet minutes means it is stuck.
+  agent_stall_minutes: 8
   # Waiting for Test Gate -> Build -> Deploy of one pushed commit.
   pipeline_timeout_minutes: 25
   # Re-runs of a failed pipeline step the Pipeline Agent diagnoses as flaky/infra.

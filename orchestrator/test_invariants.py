@@ -332,6 +332,14 @@ class Invariants(unittest.TestCase):
         import inspect
         self.assertIn('!= owner', inspect.getsource(pf.scan_defect_labels))  # a defect label by anyone but the owner is skipped
 
+    def test_inv32_a_silent_agent_is_killed_long_before_the_overall_timeout(self):
+        import tempfile
+        out = Path(tempfile.mkdtemp()) / "o.jsonl"
+        rc = b.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
+        self.assertEqual(rc, "stall")
+        self.assertGreater(PROFILES["limits"]["agent_stall_minutes"], 0)
+        self.assertLess(PROFILES["limits"]["agent_stall_minutes"], PROFILES["limits"]["agent_timeout_minutes"])
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

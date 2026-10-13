@@ -499,6 +499,39 @@ def log(msg):
     print(msg, flush=True)
 
 
+def silent_too_long(last_progress, now, stall_seconds):
+    """True when an Agent's output has not grown for `stall_seconds` (0 turns the check off)."""
+    return stall_seconds > 0 and now - last_progress >= stall_seconds
+
+
+def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0):
+    """Run an Agent writing its event stream to `out_path`. Returns its exit status, or "timeout" after `timeout_s` of wall time,
+    or "stall" when the stream stops growing for `stall_s` seconds (the process group is killed either way). A real run once sat
+    45 minutes twice with no output at all, so a silent Agent is cut off long before the overall timeout."""
+    import signal
+    with open(out_path, "w") as f:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+        began = last_change = time.time()
+        size = -1
+        while True:
+            try:
+                return proc.wait(timeout=poll)
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.time()
+            current = os.path.getsize(out_path)
+            if current != size:
+                size, last_change = current, now
+            reason = "timeout" if now - began >= timeout_s else "stall" if silent_too_long(last_change, now, stall_s) else None
+            if reason:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    proc.kill()
+                proc.wait()
+                return reason
+
+
 def sh(cmd, cwd=None, env=None, check=True, timeout=None):
     p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
     if check and p.returncode != 0:
@@ -816,13 +849,12 @@ class BuildRun:
         jsonl = self.art / f"openhands-{role}-{label}.jsonl"
         known = self.conversation_dirs(home)
         began = time.time()
-        try:
-            with jsonl.open("w") as f:
-                rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt],
-                                    cwd=cwd or self.app_dir, env=self.agent_env(role, jwt, extra_env, home, model), stdout=f,
-                                    stderr=subprocess.STDOUT, timeout=self.lim["agent_timeout_minutes"] * 60).returncode
-        except subprocess.TimeoutExpired:
-            rc = "timeout"
+        rc = run_watched(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd or self.app_dir,
+                         self.agent_env(role, jwt, extra_env, home, model), jsonl, self.lim["agent_timeout_minutes"] * 60,
+                         float(self.lim.get("agent_stall_minutes", 0)) * 60)
+        if rc == "stall":
+            with self.lock:
+                log(f"{role} ({label}): no output for {self.lim.get('agent_stall_minutes')} minutes; killed it so the attempt can restart")
         after = self.record_spend(jwt)
         blocked = scan_for_provider_block(jsonl)
         if blocked:  # the account ran dry (possibly mid-run): stop everything, do not count it as the Agent's failure
