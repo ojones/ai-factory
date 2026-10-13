@@ -1,0 +1,44 @@
+name: Isolation probe
+
+# Manual experiment (ticket 10): on a GitHub-hosted runner, can a separate unprivileged user read what the Build Run's Python process
+# holds? Uses a made-up secret, never a real one, and prints only yes/no per probe.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Probe
+        run: |
+          set +e
+          FAKE="fake-secret-$RANDOM$RANDOM"
+          echo "runner user: $(id -un) uid=$(id -u); sudo without password: $(sudo -n true 2>&1 && echo yes || echo no)"
+          sudo useradd -m -s /bin/bash agent
+          # a stand-in for the Orchestrator: holds the secret in its environment and (briefly) in an argument, like `git -c http.extraheader=...`
+          FAKE_TOKEN="$FAKE" python3 -c "import time,sys; time.sleep(60)" "extraheader=$FAKE" &
+          PID=$!
+          sleep 1
+          as_agent() { sudo -n -u agent -H bash -c "$1" 2>&1; }
+          probe() { # name, command (succeeds => the secret/file WAS readable)
+            if as_agent "$2" | grep -q "$FAKE"; then echo "EXPOSED  $1"; else echo "blocked  $1"; fi
+          }
+          probe "/proc/PID/environ of the runner-user process" "cat /proc/$PID/environ | tr '\0' '\n'"
+          probe "/proc/PID/cmdline (arguments)" "cat /proc/$PID/cmdline | tr '\0' '\n'"
+          probe "ps aux shows arguments" "ps aux"
+          as_agent "ls -ld /home/runner /home/runner/work /home/runner/work/_temp $GITHUB_WORKSPACE" | sed 's/^/  perms: /'
+          for f in "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_STEP_SUMMARY" "$RUNNER_TEMP"/* /home/runner/.gitconfig /home/runner/.docker/config.json /home/runner/.npmrc /home/runner/.config/gh/hosts.yml; do
+            [ -e "$f" ] || continue
+            if as_agent "test -r '$f' && echo readable" | grep -q readable; then echo "  agent can READ: $f"; else echo "  agent cannot read: $f"; fi
+          done
+          echo "agent can sudo: $(as_agent 'sudo -n true && echo yes || echo no')"
+          echo "agent can write to the workspace: $(as_agent "touch $GITHUB_WORKSPACE/.probe && echo yes || echo no")"
+          echo "agent environment has token variables: $(as_agent 'env | grep -ci "token\|pat\|secret"')"
+          kill $PID
