@@ -13,6 +13,8 @@ A finding is **blocking** when it is any of:
 
 A **flag checked in several unrelated places** is a **minor** finding: one change set has one flag, checked at the single entry point of the change, so that retiring it later means deleting one check. Name the extra call sites. A flag read from a computed or stored string instead of a plain literal is also minor: it cannot be found and removed mechanically. On a **retirement** (the task or spec lists `retire-flag: <slug>` lines), for each such slug, anything left that mentions the slug in code, a test of the flag-off behaviour that remains, or any change beyond removing the flag is **blocking**.
 
+A new flag in `flags.json` whose `description` does not start with an issue reference (`owner/repo#number:`) is a **minor** finding: the flag must point back to its story.
+
 A **declared but unused flag** is a **minor** finding: a slug in `flags.json` that no `isFeatureEnabled(res, slug)` call in the repository reads. It would be released with nothing behind it. Look for the slug in the whole repository, not only the diff, because the check may already exist in older code. Quote the `flags.json` entry as evidence.
 
 A test that covers only the happy path of new input handling, with no invalid or boundary case, is **minor**. Anything else is **minor**. Formatting and naming are the formatter's job, so leave them out.

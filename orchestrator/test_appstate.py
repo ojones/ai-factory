@@ -69,5 +69,15 @@ class AppState(unittest.TestCase):
         self.assertNotIn("javascript:", body.split("<!--")[0])
 
 
+class Stories(unittest.TestCase):
+    def test_a_flag_links_to_the_story_it_came_from(self):
+        self.assertEqual(a.story_link({"issue": 94, "run_url": "https://github.com/o/ai-factory/actions/runs/5"}), "[#94](https://github.com/o/ai-factory/issues/94)")
+        self.assertEqual(a.story_link({"run_url": "https://github.com/o/ai-factory/actions/runs/5"}), "-")
+        self.assertEqual(a.story_link({"issue": 94, "run_url": "garbage"}), "-")
+        body = a.render_state("", {**report(url="https://github.com/o/ai-factory/actions/runs/9"), "issue_number": 12})
+        self.assertIn("| Flag | Date | State | Story |", body)
+        self.assertIn("[#12](https://github.com/o/ai-factory/issues/12)", body)
+
+
 if __name__ == "__main__":
     unittest.main()

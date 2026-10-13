@@ -124,7 +124,7 @@ class Guards(unittest.TestCase):
 class Prompts(unittest.TestCase):
     """Every role prompt's placeholders are exactly the ones the orchestrator supplies."""
     SUPPLIED = {
-        "coder": {"app_name", "round", "task", "findings_path", "build_kind"},
+        "coder": {"app_name", "round", "task", "findings_path", "build_kind", "issue_ref"},
         "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind", "spec"},
         "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric", "build_kind"},
         "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec", "api_check", "ui_section"},
@@ -821,6 +821,43 @@ class ReportFromHelpers(unittest.TestCase):
         self.assertIn("no report", doc["limitations"][0])
         self.assertEqual(b.report_from_helper_failures({"g": self.good}, {}), None)  # nothing failed: nothing to act on
         self.assertEqual(b.report_from_helper_failures({}, {}), None)
+
+
+class StoryAndFlagReferenceEachOther(unittest.TestCase):
+    def test_the_title_carries_the_flag_and_a_retry_does_not_pile_up_tags(self):
+        self.assertEqual(b.title_with_flags("app: add a page", ["todo-ui"]), "app: add a page [flag: todo-ui]")
+        self.assertEqual(b.title_with_flags("app: add a page [flag: todo-ui]", ["todo-ui"]), "app: add a page [flag: todo-ui]")
+        self.assertEqual(b.title_with_flags("app: a [flag: x]", ["y", "z"]), "app: a [flags: y, z]")
+        self.assertEqual(b.title_with_flags("app: a", []), "app: a")
+
+    def test_labels_descriptions_and_tags(self):
+        self.assertEqual(b.flag_label("todo-ui"), "flag:todo-ui")
+        self.assertIsNone(b.flag_label("x" * 60))
+        text = b.flag_description("https://github.com/o/r/issues/94", "app: a page [flag: todo-ui]")
+        self.assertTrue(text.startswith("https://github.com/o/r/issues/94 "))
+        self.assertNotIn("[flag", text)
+        self.assertEqual(b.flag_tags("94", "app"), ["intake-94", "app-app"])
+
+    def test_release_creates_the_feature_with_its_story_and_still_works_if_growthbook_refuses_the_extras(self):
+        run = object.__new__(b.BuildRun)
+        run.app, run.issue, run.issue_url, run.issue_title, run.run_id, run.run_url = "app", "94", "https://github.com/o/r/issues/94", "app: a page", "7", "u"
+        run.app_repo, run.state = "o/app", b.State(Path("/tmp/x-state.json"), "app", "94", "u")
+        run.state.save = lambda: None
+        run.gh = lambda *a, **k: type("R", (), {"stdout": ""})()
+        posts = []
+
+        def gb(method, path, body=None):
+            if method == "GET":
+                return (200, {"projects": [{"id": "p"}]}) if path.startswith("/projects") else (404, {})
+            posts.append(body)
+            return (400, {}) if "tags" in body else (200, {})
+        run.gb = gb
+        run.release(["todo-ui"], "sha")
+        self.assertEqual(len(posts), 2)  # refused with the extras, created without them
+        self.assertEqual(posts[0]["tags"], ["intake-94", "app-app"])
+        self.assertIn("issues/94", posts[0]["description"])
+        self.assertNotIn("tags", posts[1])
+        self.assertEqual(run.state.d["release"]["released"], ["app.feature.todo-ui"])
 
 
 if __name__ == "__main__":

@@ -88,7 +88,8 @@ def one_run(job):
         findings = root / f"findings-{slug}-{app}-{trial}.json"
         findings.write_text('{"blocking": [], "minor": []}')
         prompt = b.render(b.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), {
-            "app_name": app, "round": "1", "task": task, "findings_path": findings, "build_kind": "first build"})
+            "app_name": app, "round": "1", "task": task, "findings_path": findings, "build_kind": "first build",
+            "issue_ref": "owner/repo#1"})
         home.mkdir(parents=True, exist_ok=True)
         env = {**smoke.minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": BASE_URL, "LLM_API_KEY": KEY,
                "RUNTIME": "process"}

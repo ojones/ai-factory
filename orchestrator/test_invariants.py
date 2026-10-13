@@ -397,6 +397,20 @@ class Invariants(unittest.TestCase):
         self.assertEqual(b.removed_flag_slugs('[{"slug":"old"}]', "[]"), ["old"])
         self.assertGreaterEqual(PROFILES["limits"]["flag_retirement"]["piggyback_max"], 1)
 
+    def test_inv38_a_flag_and_its_story_point_at_each_other(self):
+        self.assertEqual(b.title_with_flags("app: a page", ["x"]), "app: a page [flag: x]")
+        self.assertEqual(b.flag_label("x"), "flag:x")
+        self.assertIn("issues/9", b.flag_description("https://github.com/o/r/issues/9", "t"))
+        self.assertEqual(b.flag_tags(9, "app"), ["intake-9", "app-app"])
+        import appstate
+        self.assertIn("issues/9", appstate.story_link({"issue": 9, "run_url": "https://github.com/o/r/actions/runs/1"}))
+        run = object.__new__(b.BuildRun)
+        run.update_intake, run.issue_title = False, "app"  # a first build's title is never touched
+        calls = []
+        run.gh = lambda *a, **k: calls.append(a)
+        run.link_flags_to_issue(["x"])
+        self.assertEqual(calls, [])
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

@@ -37,6 +37,12 @@ class Candidates(unittest.TestCase):
         self.assertEqual(fr.piggyback_slugs(flags, manifest, "2026-10-12", 1, 0), [])
 
 
+class Stories(unittest.TestCase):
+    def test_issue_of_reads_the_story_each_flag_came_from(self):
+        flags = [{**entry("a", 1), "issue": 94}, entry("b", 2), {**entry("c", 3), "issue": "x"}]
+        self.assertEqual(fr.issue_of(flags), {"a": 94})
+
+
 class Texts(unittest.TestCase):
     def test_the_task_block_and_the_spec_note_carry_one_retire_line_per_flag(self):
         self.assertEqual(fr.retirement_block([]), "")

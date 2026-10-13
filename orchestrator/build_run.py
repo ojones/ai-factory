@@ -275,6 +275,32 @@ def ui_section(wanted, helper_path):
 RETIRE_RE = re.compile(r"^retire-flag: ([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*$", re.M)  # one line per flag to retire
 
 
+FLAG_TAG_RE = re.compile(r"\s*\[flags?: [^\]]*\]")
+
+
+def flag_label(slug):
+    """The label that marks a story with its flag (GitHub labels hold 50 characters), or None for a slug too long to fit."""
+    name = f"flag:{slug}"
+    return name if len(name) <= 50 else None
+
+
+def title_with_flags(title, slugs):
+    """The issue title carrying its flag(s), `... [flag: slug]`, replacing any earlier such tag; unchanged for no slugs."""
+    if not slugs:
+        return title
+    base = FLAG_TAG_RE.sub("", title or "").rstrip()
+    return f"{base} [{'flag' if len(slugs) == 1 else 'flags'}: {', '.join(slugs)}]"
+
+
+def flag_description(issue_url, title):
+    """What a GrowthBook feature says about the story it came from: the issue link first, so the two can be followed both ways."""
+    return f"{issue_url} {FLAG_TAG_RE.sub('', title or '').strip()}"[:300].strip()
+
+
+def flag_tags(issue, app):
+    return [f"intake-{issue}", f"app-{app}"]
+
+
 class NothingToDo(Exception):
     """The request is already satisfied (for example, the flag it would retire is already gone): end clean, spend nothing."""
 
@@ -806,6 +832,7 @@ class State:
 
 class BuildRun:
     retiring = ()  # the flags this run retires in passing (set in setup)
+    flag_issues = {}  # slug -> number of the story each released flag came from (from the State issue)
     agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
     def __init__(self):
         e = os.environ
@@ -814,6 +841,7 @@ class BuildRun:
         if not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", self.app) or len(self.app) > 30 or not self.issue.isdigit():
             raise SystemExit(f"invalid inputs: app_name={self.app!r} issue_number={self.issue!r}")
         self.factory_repo = e["GITHUB_REPOSITORY"]
+        self.issue_url = f"https://github.com/{self.factory_repo}/issues/{self.issue}"
         self.owner = self.factory_repo.split("/")[0]
         self.app_repo = f"{self.owner}/{self.app}"
         self.run_id = e.get("GITHUB_RUN_ID", "0")
@@ -884,6 +912,7 @@ class BuildRun:
         # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
         raw_cap = form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
         self.cap_override = raw_cap if raw_cap and raw_cap != "_No response_" else None
+        self.issue_title = issue.get("title", "")
         self.state.d["cap_usd"] = self.cap
         self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
         self.state.save()
@@ -949,6 +978,7 @@ class BuildRun:
                 owner = self.app_repo.split("/")[0]
                 state_flags, manifest = flag_retirement.app_flags(owner, self.app, self.pat)
                 if state_flags is not None:
+                    self.flag_issues = flag_retirement.issue_of(state_flags)
                     limits = self.lim.get("flag_retirement") or {}
                     picked = flag_retirement.piggyback_slugs(state_flags, manifest, time.strftime("%Y-%m-%d", time.gmtime()),
                                                              int(limits.get("min_age_days", 1)), limits.get("piggyback_max", 5))
@@ -1188,7 +1218,8 @@ class BuildRun:
         task0, attempts = task, 0
         base = self.head()
         while True:
-            self.run_agent("coder", label, {"round": label, "task": task, "findings_path": findings_path})
+            self.run_agent("coder", label, {"round": label, "task": task, "findings_path": findings_path,
+                                            "issue_ref": f"{self.factory_repo}#{self.issue}"})
             cost, head = self._last_cost, self.head()
             problem = None
             if head == base:
@@ -1440,6 +1471,29 @@ class BuildRun:
     def gb(self, method, path, body=None):
         return http(method, f"{GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
 
+    def link_flags_to_issue(self, slugs):
+        """The story names its flag: a `flag:<slug>` label, the flag in the title, and a comment with the full key (the flag, in turn, links
+        back through its GrowthBook description and tag). Update Intakes only: a first build's title must stay the bare app name.
+        Best effort, never a reason to stop the run."""
+        if not self.update_intake or not slugs:
+            return
+        try:
+            for slug in slugs:
+                label = flag_label(slug)
+                if label:
+                    update_intake.ensure_label(self.factory_repo, label, self.factory_token, "5319e7", "The feature flag of this story")
+                    self.gh(["issue", "edit", self.issue, "--repo", self.factory_repo, "--add-label", label], token=self.factory_token, check=False)
+            new_title = title_with_flags(getattr(self, "issue_title", ""), slugs)
+            if new_title and new_title != getattr(self, "issue_title", ""):
+                self.gh(["issue", "edit", self.issue, "--repo", self.factory_repo, "--title", new_title], token=self.factory_token, check=False)
+                self.issue_title = new_title
+            keys = ", ".join(f"`{self.app}.feature.{s}`" for s in slugs)
+            self.gh(["issue", "comment", self.issue, "--repo", self.factory_repo, "--body",
+                     f"Feature flag {keys}: released by [Build Run {self.run_id}]({self.run_url}). The flag in GrowthBook links back here."],
+                    token=self.factory_token, check=False)
+        except Exception as e:  # noqa: BLE001
+            log(f"could not link the flag to its issue: {type(e).__name__}: {e}")
+
     def archive_retired_flags(self, base, head):
         """Flags this run removed from flags.json are archived in GrowthBook (best effort), so a retired flag leaves nothing behind.
         Only when the run ended well: an outcome that is not OK has been reverted, and its flags are still in use."""
@@ -1450,6 +1504,11 @@ class BuildRun:
             for slug in gone:
                 status, _ = self.gb("POST", f"/features/{self.app}.feature.{slug}", {"archived": True})
                 log(f"archived retired flag {slug} in GrowthBook (HTTP {status})")
+                story = getattr(self, "flag_issues", {}).get(slug)
+                if story:  # the flag's story hears that its flag is gone
+                    self.gh(["issue", "comment", str(story), "--repo", self.factory_repo, "--body",
+                             f"Feature flag `{self.app}.feature.{slug}` retired by [Build Run {self.run_id}]({self.run_url}): its behaviour is now simply on, "
+                             "and the flag is archived in GrowthBook."], token=self.factory_token, check=False)
         except Exception as e:  # noqa: BLE001
             log(f"could not archive retired flags: {type(e).__name__}: {e}")
 
@@ -1464,9 +1523,14 @@ class BuildRun:
             if self.gb("GET", f"/features/{key}")[0] == 200:
                 kept.append(key)  # never re-enable or alter an existing flag
                 continue
-            status, r = self.gb("POST", "/features", {
-                "id": key, "owner": "ai-factory", "valueType": "boolean", "defaultValue": "true", "project": project,
-                "environments": {"production": {"enabled": True, "rules": []}}})
+            feature = {"id": key, "owner": "ai-factory", "valueType": "boolean", "defaultValue": "true", "project": project,
+                       "environments": {"production": {"enabled": True, "rules": []}}}
+            # The feature points back at its story (issue link in the description, an `intake-<n>` tag); if GrowthBook refuses the extras the
+            # flag is still created without them, because a flag that cannot be released is worse than one without a pointer.
+            status, r = self.gb("POST", "/features", {**feature, "description": flag_description(getattr(self, "issue_url", ""), getattr(self, "issue_title", "")),
+                                                       "tags": flag_tags(getattr(self, "issue", ""), self.app)})
+            if status == 400:
+                status, r = self.gb("POST", "/features", feature)
             if status != 200:
                 raise RuntimeError(f"creating flag {key} failed: HTTP {status} {r}")
             released.append(key)
@@ -1627,6 +1691,7 @@ class BuildRun:
                     self.check_limits()
                     if flags:
                         self.release(flags, head)
+                        self.link_flags_to_issue(flags)
                         self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
                         self.watch_release()
                     else:

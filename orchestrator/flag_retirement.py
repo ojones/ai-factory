@@ -45,6 +45,17 @@ def slug_of(key):
     return key.split(".feature.")[-1]
 
 
+def issue_of(state_flags):
+    """{slug: story issue number} for the flags the State issue knows the story of."""
+    out = {}
+    for f in state_flags:
+        try:
+            out[slug_of(f["key"])] = int(f["issue"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 def age_days(date, today):
     """Whole days between two YYYY-MM-DD strings, or None if either cannot be read."""
     try:

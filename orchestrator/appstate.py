@@ -45,6 +45,12 @@ def day(d):
     return (d.get("finished_at") or d.get("started_at") or "")[:10]
 
 
+def story_link(flag):
+    """A link to the issue a flag came from, built from the run URL's repository (the story lives in the Factory repo), or '-'."""
+    m = re.match(r"(https://github\.com/[^/]+/[^/]+)/actions/", flag.get("run_url") or "")
+    return f"[#{flag['issue']}]({m.group(1)}/issues/{flag['issue']})" if m and flag.get("issue") else "-"
+
+
 def render_state(prev_body, d):
     """The App State issue body after this run. `d` is the Build Run Report."""
     data = load(prev_body)
@@ -56,7 +62,7 @@ def render_state(prev_body, d):
     flags = {f["key"]: f for f in data.get("flags", [])}
     off = d.get("outcome") == "watchdog_disabled"
     for key in (d.get("release") or {}).get("released") or []:
-        flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "",
+        flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"),
                       "state": "switched off by the watchdog" if off else "released"}
     data = {"runs": runs, "flags": sorted(flags.values(), key=lambda f: f["date"])}
     last = runs[-1]
@@ -69,8 +75,8 @@ def render_state(prev_body, d):
     lines += ["", "## Flags released by Build Runs", "",
               "The state is as of the release (or the watchdog); the owner may have changed a flag in GrowthBook since.", ""]
     if data["flags"]:
-        lines += ["| Flag | Date | State |", "|---|---|---|"]
-        lines += [f"| `{cell(f['key'])}` | {cell(f['date'])} | {cell(f['state'])} |" for f in reversed(data["flags"])]
+        lines += ["| Flag | Date | State | Story |", "|---|---|---|---|"]
+        lines += [f"| `{cell(f['key'])}` | {cell(f['date'])} | {cell(f['state'])} | {story_link(f)} |" for f in reversed(data["flags"])]
     else:
         lines.append("None yet.")
     return "\n".join(lines) + "\n\n" + dump(data) + "\n"
