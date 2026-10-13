@@ -34,7 +34,12 @@ def main(argv):
     if status != 200:
         print(f"{key}: no such flag (HTTP {status}); nothing changed", file=sys.stderr)
         return 1
-    b.http("POST", f"{b.GROWTHBOOK_API}/features/{key}", token, {"environments": {"production": {"enabled": want}}})
+    prod = (((r.get("feature") or r) if isinstance(r, dict) else {}).get("environments") or {}).get("production") or {}
+    # The API wants the environment's rules with the switch (the watchdog sends rules too); send the current ones back unchanged.
+    code, reply = b.http("POST", f"{b.GROWTHBOOK_API}/features/{key}", token,
+                         {"environments": {"production": {"enabled": want, "rules": prod.get("rules") or []}}})
+    if code != 200:
+        print(f"{key}: the update answered HTTP {code}: {str(reply)[:300]}", file=sys.stderr)
     status, r = b.http("GET", f"{b.GROWTHBOOK_API}/features/{key}", token)
     now = (((r.get("feature") or r) if isinstance(r, dict) else {}).get("environments") or {}).get("production", {}).get("enabled")
     print(f"{key}: production is now {'on' if now else 'off'} (asked for {argv[3]})")
