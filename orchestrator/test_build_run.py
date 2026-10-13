@@ -903,5 +903,23 @@ class RetryOnTheSameIssue(unittest.TestCase):
         self.assertTrue(all(b.SLUG_RE.fullmatch(f) for f in retry["flags"]))
 
 
+class MisplacedFile(unittest.TestCase):
+    def test_a_report_written_in_the_working_directory_is_adopted_but_never_overwrites(self):
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        cwd, run = d / "tree", d / "run"
+        cwd.mkdir()
+        run.mkdir()
+        (cwd / "report.json").write_text('{"a": 1}')
+        self.assertTrue(b.adopt_misplaced_file(run / "report.json", cwd))
+        self.assertEqual((run / "report.json").read_text(), '{"a": 1}')
+        (cwd / "report.json").write_text('{"a": 2}')
+        self.assertFalse(b.adopt_misplaced_file(run / "report.json", cwd))  # the real file is never replaced
+        self.assertEqual((run / "report.json").read_text(), '{"a": 1}')
+        self.assertFalse(b.adopt_misplaced_file(run / "other.json", cwd))
+        self.assertFalse(b.adopt_misplaced_file(run / "x.json", None))
+        self.assertIn("exactly that absolute path", b.json_problem(run / "missing.json"))
+
+
 if __name__ == "__main__":
     unittest.main()

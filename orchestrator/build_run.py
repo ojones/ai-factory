@@ -732,13 +732,29 @@ def http(method, url, token=None, body=None, timeout=60):
         return 0, str(e)
 
 
+def adopt_misplaced_file(path, cwd):
+    """If `path` was not written but a file of the same name sits directly in the Agent's working directory, copy it to `path`. Returns True
+    when it did. Never overwrites an existing file."""
+    if not cwd or Path(path).exists():
+        return False
+    stray = Path(cwd) / Path(path).name
+    if stray.is_file():
+        try:
+            shutil.copyfile(stray, path)
+            log(f"The Agent wrote {stray.name} in its working directory instead of {path}; using that copy.")
+            return True
+        except OSError:
+            return False
+    return False
+
+
 def json_problem(path, check=None):
     """Why an Agent's output file cannot be used, in words the Agent can act on; None when it can. Used to tell the
     Agent on its second attempt what was wrong with its first."""
     try:
         text = Path(path).read_text()
     except OSError:
-        return f"the file {path} was not written"
+        return f"the file {path} was not written (write it at exactly that absolute path, not relative to your working directory)"
     if not text.strip():
         return f"the file {path} is empty"
     try:
@@ -1201,7 +1217,8 @@ class BuildRun:
         return usage
 
     def agent_json(self, role, label, values, path, extra_env=None, check=None, cwd=None, home=None, share=1.0):
-        """Run a role that writes a JSON file; one retry if the file is missing or malformed.
+        """Run a role that writes a JSON file; one retry if the file is missing or malformed. If the Agent wrote the file under its working
+        directory instead of the path it was given (it has done so, twice, with the right content), that copy is used.
         Returns (document, cost, token usage)."""
         total_cost, usage, note = 0.0, None, None
         for attempt in (1, 2):
@@ -1209,6 +1226,7 @@ class BuildRun:
             _, cost, used = self.invoke(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env, cwd, home, share, note=note)
             total_cost += cost
             usage = merge_usage(usage, used)
+            adopt_misplaced_file(path, cwd)
             doc = load_json(path)
             try:
                 if doc is not None and (check is None or check(doc) is not False):
