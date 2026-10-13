@@ -12,9 +12,7 @@ import type { RequestHandler, Response } from "express";
 export function appSlug(): string {
   const slug = process.env.FLY_APP_NAME ?? process.env.APP_SLUG;
   if (!slug) {
-    throw new Error(
-      "FLY_APP_NAME (set by Fly) or APP_SLUG (local runs) is required to scope flag keys."
-    );
+    throw new Error("FLY_APP_NAME (set by Fly) or APP_SLUG (local runs) is required to scope flag keys.");
   }
   return slug;
 }
@@ -23,8 +21,7 @@ export function appSlug(): string {
 export const killSwitchKey = (): string => `${appSlug()}.global-kill-switch`;
 
 /** Pinned flag-key naming convention: `<app-slug>.feature.<slug>`. */
-export const featureKey = (slug: string): string =>
-  `${appSlug()}.feature.${slug}`;
+export const featureKey = (slug: string): string => `${appSlug()}.feature.${slug}`;
 
 let initialized = false;
 
@@ -40,13 +37,9 @@ export async function initFeatureFlags(): Promise<void> {
 
   const clientKey = process.env.GROWTHBOOK_CLIENT_KEY;
   if (!clientKey) {
-    throw new Error(
-      "GROWTHBOOK_CLIENT_KEY is required to initialize feature flags."
-    );
+    throw new Error("GROWTHBOOK_CLIENT_KEY is required to initialize feature flags.");
   }
-  const apiHost =
-    process.env.GROWTHBOOK_API_HOST ??
-    "https://ai-factory-growthbook.fly.dev:3100";
+  const apiHost = process.env.GROWTHBOOK_API_HOST ?? "https://ai-factory-growthbook.fly.dev:3100";
 
   // pollingInterval keeps this long-running process's flags fresh without
   // a redeploy. `streaming: true` (SSE) was tried first, per the provider's
@@ -54,9 +47,7 @@ export async function initFeatureFlags(): Promise<void> {
   // require Node's `eventsource` package + setPolyfills(), which GrowthBook
   // only warns about at runtime rather than failing fast. Polling has no
   // such dependency and is simpler for what this needs.
-  await OpenFeature.setProviderAndWait(
-    new GrowthbookProvider({ apiHost, clientKey }, { pollingInterval: 5000 })
-  );
+  await OpenFeature.setProviderAndWait(new GrowthbookProvider({ apiHost, clientKey }, { pollingInterval: 5000 }));
   initialized = true;
 }
 

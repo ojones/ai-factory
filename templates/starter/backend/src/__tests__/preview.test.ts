@@ -42,16 +42,12 @@ describe("Preview Token", () => {
   });
 
   it("shows the feature with the X-Preview-Token header", async () => {
-    const res = await request(appWithProbe())
-      .get("/api/_probe")
-      .set("X-Preview-Token", TOKEN);
+    const res = await request(appWithProbe()).get("/api/_probe").set("X-Preview-Token", TOKEN);
     expect(res.body).toEqual({ enabled: true });
   });
 
   it("rejects a wrong token", async () => {
-    const res = await request(appWithProbe())
-      .get("/api/_probe")
-      .set("X-Preview-Token", "nope");
+    const res = await request(appWithProbe()).get("/api/_probe").set("X-Preview-Token", "nope");
     expect(res.body).toEqual({ enabled: false });
   });
 
@@ -62,25 +58,19 @@ describe("Preview Token", () => {
     const cookie = first.headers["set-cookie"]?.[0] ?? "";
     expect(cookie).toContain("HttpOnly");
 
-    const second = await request(app)
-      .get("/api/_probe")
-      .set("Cookie", cookie.split(";")[0]);
+    const second = await request(app).get("/api/_probe").set("Cookie", cookie.split(";")[0]);
     expect(second.body).toEqual({ enabled: true });
   });
 
   it("is disabled entirely when PREVIEW_TOKEN is unset", async () => {
     delete process.env.PREVIEW_TOKEN;
-    const res = await request(appWithProbe())
-      .get("/api/_probe")
-      .set("X-Preview-Token", "");
+    const res = await request(appWithProbe()).get("/api/_probe").set("X-Preview-Token", "");
     expect(res.body).toEqual({ enabled: false });
   });
 
   it("does not bypass the kill switch", async () => {
     OpenFeature.setProvider(flags(false, false));
-    const res = await request(appWithProbe())
-      .get("/api/_probe")
-      .set("X-Preview-Token", TOKEN);
+    const res = await request(appWithProbe()).get("/api/_probe").set("X-Preview-Token", TOKEN);
     expect(res.status).toBe(503);
   });
 

@@ -18,5 +18,5 @@ OpenFeature.setProvider(
       variants: { on: true, off: false },
       defaultVariant: "on",
     },
-  })
+  }),
 );

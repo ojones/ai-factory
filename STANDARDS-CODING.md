@@ -26,7 +26,7 @@ If the gate fails after a push, the same Build Run keeps watching the GitHub Act
 
 ## Style
 
-Purely mechanical — an auto-formatter is the entire style guide. No prose conventions (naming philosophy, comment density) for an Agent to probabilistically get wrong.
+Purely mechanical — an auto-formatter is the entire style guide. The Starter Template ships Prettier (`npm run format`) and ESLint (`npm run lint`, part of `npm run check` and so of the Test Gate); formatting itself is not a gate, so an old file is never failed for its layout, but the coder runs `npm run format` before committing. No prose conventions (naming philosophy, comment density) for an Agent to probabilistically get wrong.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
 ## Git workflow

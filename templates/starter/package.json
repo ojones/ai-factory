@@ -2,7 +2,7 @@
   "name": "starter-template",
   "private": true,
   "version": "0.0.0",
-  "description": "Factory Starter Template root — npm workspaces for backend and frontend.",
+  "description": "Factory Starter Template root \u2014 npm workspaces for backend and frontend.",
   "workspaces": [
     "backend",
     "frontend"
@@ -10,12 +10,22 @@
   "scripts": {
     "build": "npm run build --workspace frontend && npm run build --workspace backend",
     "test": "npm run test --workspace backend",
-    "check": "npm run check --workspaces",
+    "check": "npm run check --workspaces && npm run lint",
     "test:changed": "npm run test:changed --workspace backend",
     "test:file": "npm run test --workspace backend --",
     "verify": "npm run check && npm test",
     "dev:backend": "npm run dev --workspace backend",
     "dev:frontend": "npm run dev --workspace frontend",
-    "start": "npm run start --workspace backend"
+    "start": "npm run start --workspace backend",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "typescript-eslint": "^8.71.2"
   }
 }
