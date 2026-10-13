@@ -340,6 +340,18 @@ class Invariants(unittest.TestCase):
         self.assertGreater(PROFILES["limits"]["agent_stall_minutes"], 0)
         self.assertLess(PROFILES["limits"]["agent_stall_minutes"], PROFILES["limits"]["agent_timeout_minutes"])
 
+    def test_inv33_template_sync_is_an_intake_for_agent_changeable_files_once_per_target(self):
+        import template_sync as ts
+        applicable, protected, _ = ts.split_changes([("M", "package.json"), ("M", "fly.toml"), ("M", ".github/x.yml")])
+        self.assertEqual([p for _, p in applicable], ["package.json"])
+        self.assertEqual(len(protected), 2)
+        t, base = "a" * 40, "b" * 40
+        self.assertTrue(ts.should_sync(applicable, t, base, [], [], "a"))
+        self.assertFalse(ts.should_sync([], t, base, [], [], "a"))
+        self.assertFalse(ts.should_sync(applicable, t, t, [], [], "a"))
+        self.assertFalse(ts.should_sync(applicable, t, base, [f"a: template sync [sync {t[:7]}]"], [], "a"))
+        self.assertFalse(ts.should_sync(applicable, t, base, [], [{"number": 1}], "a"))
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

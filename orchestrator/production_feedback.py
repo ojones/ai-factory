@@ -149,24 +149,30 @@ def app_logs(app):
     return p.stdout or ""
 
 
-def intakes(repo, token, app, state="open"):
-    out = gh(["issue", "list", "--repo", repo, "--label", f"{LABEL},app:{app}", "--state", state, "--limit", "100",
+def intakes_with(repo, token, app, label, state="open"):
+    out = gh(["issue", "list", "--repo", repo, "--label", f"{label},app:{app}", "--state", state, "--limit", "100",
               "--json", "number,title,createdAt"], token).stdout
     return json.loads(out or "[]")
 
 
-def file_intake(repo, token, pat, app, title, request):
+def intakes(repo, token, app, state="open"):
+    return intakes_with(repo, token, app, LABEL, state)
+
+
+def file_intake(repo, token, pat, app, title, request, label=LABEL, label_desc="Filed and started by the Orchestrator from production feedback",
+                started_note="Started automatically from production feedback. The planner runs first."):
+    """Create an Update Intake for the app and start it. The PAT adds the start label, because an event made by the Actions token
+    does not start workflows. Returns the issue number, or None."""
     for name, color, desc in ((update_intake.FORM_LABEL, "1d76db", "A change request for an existing Managed App"), (f"app:{app}", "1d76db", ""),
-                              (LABEL, "fbca04", "Filed and started by the Orchestrator from production feedback"),
-                              (update_intake.GO, "0e8a16", "Start this change now")):
+                              (label, "fbca04", label_desc), (update_intake.GO, "0e8a16", "Start this change now")):
         update_intake.ensure_label(repo, name, token, color, desc)
-    out = gh(["issue", "create", "--repo", repo, "--title", title, "--label", f"{update_intake.FORM_LABEL},app:{app},{LABEL}",
+    out = gh(["issue", "create", "--repo", repo, "--title", title, "--label", f"{update_intake.FORM_LABEL},app:{app},{label}",
               "--body", fixrequest.intake_form(app, request)], token).stdout
     m = re.search(r"/issues/(\d+)", out or "")
     if not m:
         return None
     gh(["issue", "edit", m.group(1), "--repo", repo, "--add-label", update_intake.GO], pat)  # the PAT, so the label starts the run
-    gh(["issue", "comment", m.group(1), "--repo", repo, "--body", "Started automatically from production feedback. The planner runs first."], token)
+    gh(["issue", "comment", m.group(1), "--repo", repo, "--body", started_note], token)
     return int(m.group(1))
 
 

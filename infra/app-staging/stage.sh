@@ -199,6 +199,7 @@ if pgit ls-remote --exit-code --heads "$REMOTE" main >/dev/null 2>&1; then
 else
   work="$(mktemp -d)"
   git archive --format=tar HEAD:templates/starter | tar -x -C "$work"
+  git rev-parse HEAD >"$work/.factory-template"  # the ai-factory commit these template files came from (template_sync.py)
   {
     echo "# Intake"
     echo

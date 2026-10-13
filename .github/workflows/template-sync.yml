@@ -1,0 +1,39 @@
+name: Template sync
+
+# When the Starter Template changes (a push to main that touches templates/starter, plus a daily pass for changes merged by a
+# workflow, which GitHub does not turn into push events), file an Update Intake for each Managed App that was seeded before the
+# change, and start it. orchestrator/template_sync.py does the work; nothing here changes an app directly.
+on:
+  push:
+    branches: [main]
+    paths: ["templates/starter/**"]
+  schedule:
+    - cron: "47 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: template-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: File template-sync Intakes
+        env:
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          FACTORY_GH_TOKEN: ${{ github.token }}
+        run: python orchestrator/template_sync.py
