@@ -352,6 +352,14 @@ class Invariants(unittest.TestCase):
         self.assertFalse(ts.should_sync(applicable, t, base, [f"a: template sync [sync {t[:7]}]"], [], "a"))
         self.assertFalse(ts.should_sync(applicable, t, base, [], [{"number": 1}], "a"))
 
+    def test_inv34_agents_run_as_a_separate_account_and_the_run_proves_it(self):
+        cmd = b.agent_command(["openhands"], {"PATH": "/p", "LLM_API_KEY": "secret-jwt"}, "agent")
+        self.assertEqual(cmd[:4], ["sudo", "-n", "-u", "agent"])
+        self.assertNotIn("secret-jwt", " ".join(cmd))
+        self.assertIn("GIT_CONFIG_VALUE_0", b.git_auth_env("h"))
+        self.assertTrue(b.isolation_problems({"whoami": "runner", "environ": "SELF-CHECK-SECRET", "workspace": "x", "env_names": "FACTORY_PAT", "sudo": "yes"}))
+        self.assertEqual(PROFILES["limits"]["agent_isolation"], "user")
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

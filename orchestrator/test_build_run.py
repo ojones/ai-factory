@@ -751,5 +751,33 @@ class RunWatched(unittest.TestCase):
         self.assertEqual(rc, "timeout")
 
 
+class AgentIsolation(unittest.TestCase):
+    def test_without_a_user_the_command_is_unchanged(self):
+        self.assertEqual(b.agent_command(["openhands", "-t", "x"], {"PATH": "/bin"}, None), ["openhands", "-t", "x"])
+
+    def test_with_a_user_variables_go_by_name_and_never_by_value(self):
+        env = {"PATH": "/opt/bin", "LLM_API_KEY": "jwt-secret-value", "HOME": "/srv/agent/run/home-a"}
+        cmd = b.agent_command(["openhands", "-t", "x"], env, "agent", "/srv/agent/run/pgid.txt")
+        self.assertEqual(cmd[:5], ["sudo", "-n", "-u", "agent", "--preserve-env=LLM_API_KEY,HOME"])
+        self.assertNotIn("jwt-secret-value", " ".join(cmd))
+        self.assertIn("PATH=/opt/bin", cmd)
+        self.assertEqual(cmd[-3:], ["openhands", "-t", "x"])
+        self.assertIn("/srv/agent/run/pgid.txt", cmd)
+
+    def test_the_git_credential_travels_in_the_environment_not_the_arguments(self):
+        env = b.git_auth_env("Authorization: Basic abc")
+        self.assertEqual(env["GIT_CONFIG_KEY_0"], "http.extraheader")
+        self.assertEqual(env["GIT_CONFIG_VALUE_0"], "Authorization: Basic abc")
+
+    def test_the_self_check_finds_each_way_isolation_can_fail(self):
+        good = {"whoami": "agent\n", "environ": "", "workspace": "", "env_names": "", "sudo": "no\n"}
+        self.assertEqual(b.isolation_problems(good), [])
+        for bad, text in (({"whoami": "runner\n"}, "different account"), ({"environ": "ISOLATION_MARK=SELF-CHECK-SECRET"}, "environment"),
+                          ({"workspace": "app\nrun"}, "workspace"), ({"env_names": "FACTORY_PAT\n"}, "credential"), ({"sudo": "yes\n"}, "sudo")):
+            problems = b.isolation_problems({**good, **bad})
+            self.assertEqual(len(problems), 1)
+            self.assertIn(text, problems[0])
+
+
 if __name__ == "__main__":
     unittest.main()

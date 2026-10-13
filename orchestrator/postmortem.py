@@ -404,7 +404,7 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
                 ["git", "commit", "-qm", f"Post-mortem fix: {result.get('change_summary', 'proposed change')[:70]}\n\nFor #{issue_no}."]):
         b.sh(cmd, cwd=factory)
     auth = "AUTHORIZATION: basic " + __import__("base64").b64encode(f"x-access-token:{pat}".encode()).decode()
-    b.sh(["git", "-c", f"http.extraheader={auth}", "push", "-q", "origin", branch], cwd=factory)
+    b.sh(["git", "push", "-q", "origin", branch], cwd=factory, env={**os.environ, **b.git_auth_env(auth)})
     numstat = b.sh(["git", "diff", "--numstat", "HEAD~1", "HEAD"], cwd=factory).stdout
     fixture = lesson_has_fixture(keep)
     reason = (result.get("no_fixture_reason") or "").strip()

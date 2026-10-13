@@ -69,6 +69,11 @@ limits:
   # An Agent whose event stream has not grown for this long is killed and counts as a failed attempt (0 turns it off). A real run
   # sat the full 45 minutes twice with no output. The stream grows at every step, so a few quiet minutes means it is stuck.
   agent_stall_minutes: 8
+  # off: Agents run as the same account as the Orchestrator. user: the workflow creates an unprivileged account, the work
+  # directories live in /srv/agent, and every Agent runs as it through sudo, so it cannot read the Orchestrator's environment or
+  # files (where the PAT, Fly token and GrowthBook admin key are). The Orchestrator proves this with a self-check at the start of
+  # each run and stops if it does not hold.
+  agent_isolation: user
   # Waiting for Test Gate -> Build -> Deploy of one pushed commit.
   pipeline_timeout_minutes: 25
   # Re-runs of a failed pipeline step the Pipeline Agent diagnoses as flaky/infra.

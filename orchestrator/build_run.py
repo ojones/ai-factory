@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -499,18 +500,69 @@ def log(msg):
     print(msg, flush=True)
 
 
+def git_auth_env(header):
+    """Environment variables that make git send `header` to GitHub. Passed this way, not as `git -c http.extraheader=...`, because a
+    command line is readable by every user on the machine (`ps`, /proc/<pid>/cmdline) while an environment is not."""
+    return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraheader", "GIT_CONFIG_VALUE_0": header}
+
+
+def agent_command(cmd, env, user, pidfile=None):
+    """`cmd` as it is run for an Agent. With a `user` (limits.agent_isolation: user) it runs as that unprivileged account through
+    sudo: the variables in `env` are passed by name, so no value shows on a command line, and a wrapper records the process group
+    in `pidfile` so the runner (which cannot signal another user's processes) can kill it through sudo."""
+    if not user:
+        return cmd
+    names = ",".join(k for k in env if k != "PATH")
+    wrapper = []
+    if pidfile:
+        wrapper = ["bash", "-c", 'ps -o pgid= -p $$ | tr -d " " > "$0"; exec "$@"', str(pidfile)]
+    return ["sudo", "-n", "-u", user, f"--preserve-env={names}", "env", f"PATH={env.get('PATH', '')}", *wrapper, *cmd]
+
+
+def kill_agent(proc, user, pidfile):
+    """Kill an Agent's whole process group, whether it runs as the runner or, through sudo, as the Agent user."""
+    import signal
+    if user and pidfile:
+        try:
+            pgid = Path(pidfile).read_text().strip()
+            if pgid.isdigit():
+                subprocess.run(["sudo", "-n", "kill", "-KILL", "--", f"-{pgid}"], capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+
+
+def isolation_problems(outputs):
+    """What an isolation self-check found wrong, from {probe: output of the probe run as the Agent user}. Empty means isolated."""
+    problems = []
+    if outputs.get("whoami", "").strip() in ("", os.environ.get("USER", "runner"), "runner"):
+        problems.append("the Agent user is not a different account from the Orchestrator's")
+    if "SELF-CHECK-SECRET" in outputs.get("environ", ""):
+        problems.append("an Agent can read the Orchestrator's environment through /proc")
+    if outputs.get("workspace", "").strip():
+        problems.append("an Agent can list the runner's workspace")
+    if outputs.get("env_names", "").strip():
+        problems.append("the Agent's environment holds credential variables: " + outputs["env_names"].strip().replace("\n", ", "))
+    if outputs.get("sudo", "").strip() == "yes":
+        problems.append("the Agent user can use sudo")
+    return problems
+
+
 def silent_too_long(last_progress, now, stall_seconds):
     """True when an Agent's output has not grown for `stall_seconds` (0 turns the check off)."""
     return stall_seconds > 0 and now - last_progress >= stall_seconds
 
 
-def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0):
+def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0, user=None, pidfile=None):
     """Run an Agent writing its event stream to `out_path`. Returns its exit status, or "timeout" after `timeout_s` of wall time,
     or "stall" when the stream stops growing for `stall_s` seconds (the process group is killed either way). A real run once sat
     45 minutes twice with no output at all, so a silent Agent is cut off long before the overall timeout."""
-    import signal
     with open(out_path, "w") as f:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+        proc = subprocess.Popen(agent_command(cmd, env, user, pidfile), cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT,
+                                start_new_session=True)
         began = last_change = time.time()
         size = -1
         while True:
@@ -524,10 +576,7 @@ def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0):
                 size, last_change = current, now
             reason = "timeout" if now - began >= timeout_s else "stall" if silent_too_long(last_change, now, stall_s) else None
             if reason:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except OSError:
-                    proc.kill()
+                kill_agent(proc, user, pidfile)
                 proc.wait()
                 return reason
 
@@ -658,6 +707,7 @@ class State:
 
 
 class BuildRun:
+    agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
     def __init__(self):
         e = os.environ
         self.app = e["APP_NAME"]
@@ -683,6 +733,9 @@ class BuildRun:
         self.cap = None
         self.meter = None
         self._usage = None
+        # limits.agent_isolation: user -> the workflow created this unprivileged account and put the work directories where only it
+        # and the runner can reach them; every Agent then runs as it.
+        self.agent_user = e.get("AGENT_USER") or None
         self.lock = threading.Lock()  # guards the meter, the state and log output across parallel Agents
         self.preview = None
         self.build_kind = "first build"  # becomes "update" in setup() when the base commit has history
@@ -736,6 +789,7 @@ class BuildRun:
         self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
         self.state.save()
         self.check_daily_cap()
+        self.prepare_agent_user()
         provider_check(self.cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"], self.cfg["roles"]["coder"]["model"])
         self.wait_for_capacity()
         self.meter = Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
@@ -743,8 +797,9 @@ class BuildRun:
         print(f"::add-mask::{self.preview}", flush=True)
         # Clone with the PAT passed per command only, so the checkout stores no credential
         # and the coder (who runs in it) cannot push or read one.
-        sh(["git", "-c", f"http.extraheader={self.auth_header}", "clone", "-q",
-            f"https://github.com/{self.app_repo}.git", str(self.app_dir)])
+        sh(["git", "clone", "-q", f"https://github.com/{self.app_repo}.git", str(self.app_dir)],
+           env={**os.environ, **git_auth_env(self.auth_header)})
+        self.share_with_agent(self.app_dir)
         self.install_dependencies()
         self.git("config", "user.name", "ai-factory-coder")
         self.git("config", "user.email", "coder@ai-factory.local")
@@ -757,6 +812,48 @@ class BuildRun:
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
 
+    def prepare_agent_user(self):
+        """With isolation on: put the helper the tester calls where the Agent user can read it, and prove isolation holds before
+        any Agent runs. A run that cannot prove it stops, because an Agent next to the Orchestrator's secrets is what this prevents."""
+        if not self.agent_user:
+            return
+        tools = self.work / "tools"
+        tools.mkdir(parents=True, exist_ok=True)
+        shutil.copy(API_CHECK, tools / "api_check.py")
+        self.api_check_path = str(tools / "api_check.py")
+        problems = self.isolation_self_check()
+        self.state.d["isolation"] = {"user": self.agent_user, "problems": problems}
+        self.state.save()
+        if problems:
+            raise NeedsHuman("other", "Agent isolation is on but not effective: " + "; ".join(problems))
+        log(f"Agent isolation: Agents run as {self.agent_user}; self-check passed")
+
+    def isolation_self_check(self):
+        """Run probes as the Agent user (no model involved) and return what is wrong; see isolation_problems."""
+        marker = subprocess.Popen(["sleep", "60"], env={**os.environ, "ISOLATION_MARK": "SELF-CHECK-SECRET"}, start_new_session=True)
+        try:
+            env = {"PATH": os.environ.get("PATH", "")}
+            workspace = os.environ.get("GITHUB_WORKSPACE", "/home/runner/work")
+            probes = {"whoami": "id -un", "environ": f"cat /proc/{marker.pid}/environ 2>/dev/null | tr '\\0' '\\n'",
+                      "workspace": f"ls '{workspace}' 2>/dev/null",
+                      "env_names": "env | cut -d= -f1 | grep -E '^(FACTORY_|FLY_|GROWTHBOOK|DEEPINFRA|PREVIEW_MASTER|GITHUB_TOKEN|GH_TOKEN|ACTIONS_)' || true",
+                      "sudo": "sudo -n true 2>/dev/null && echo yes || echo no"}
+            outputs = {}
+            for name, script in probes.items():
+                p = subprocess.run(agent_command(["bash", "-c", script], env, self.agent_user), env=env, capture_output=True, text=True, timeout=60)
+                outputs[name] = p.stdout
+            return isolation_problems(outputs)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return [f"the self-check could not run: {type(e).__name__}: {e}"]
+        finally:
+            marker.kill()
+
+    def share_with_agent(self, path):
+        """Make `path` readable and writable by both the Agent user and this process (what was just cloned or installed was created
+        by one of them). No-op without isolation."""
+        if self.agent_user:
+            sh(["sudo", "-n", "setfacl", "-R", "-m", f"u:{self.agent_user}:rwX,u:{os.environ.get('USER', 'runner')}:rwX", str(path)], check=False)
+
     def install_dependencies(self):
         """Install once, here, so the coder starts with node_modules instead of spending agent turns on it.
         Later rounds reuse the checkout, and restore_tree/clean leave ignored node_modules alone. Runs with
@@ -767,7 +864,9 @@ class BuildRun:
         began = time.time()
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
         try:
-            code = sh(["npm", "ci", "--no-audit", "--no-fund"], cwd=self.app_dir, env=env, check=False, timeout=900).returncode
+            code = sh(agent_command(["npm", "ci", "--no-audit", "--no-fund"], env, self.agent_user), cwd=self.app_dir, env=env,
+                      check=False, timeout=900).returncode
+            self.share_with_agent(self.app_dir)
         except (subprocess.TimeoutExpired, OSError):
             code = "timeout"
         log(f"npm ci {'ok' if code == 0 else f'failed ({code}); the coder will install for itself'} in {time.time() - began:.0f}s")
@@ -844,6 +943,8 @@ class BuildRun:
         with self.lock:
             before = self.state.d["spent_usd"]
             jwt = self.meter.mint(model, share)
+        if self.agent_user and not home:
+            home = self.work / "home-agent"  # the runner's own home is closed to the Agent user
         if home:
             Path(home).mkdir(parents=True, exist_ok=True)
         jsonl = self.art / f"openhands-{role}-{label}.jsonl"
@@ -851,7 +952,8 @@ class BuildRun:
         began = time.time()
         rc = run_watched(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd or self.app_dir,
                          self.agent_env(role, jwt, extra_env, home, model), jsonl, self.lim["agent_timeout_minutes"] * 60,
-                         float(self.lim.get("agent_stall_minutes", 0)) * 60)
+                         float(self.lim.get("agent_stall_minutes", 0)) * 60, user=self.agent_user,
+                         pidfile=self.work / f"pgid-{role}-{label}.txt")
         if rc == "stall":
             with self.lock:
                 log(f"{role} ({label}): no output for {self.lim.get('agent_stall_minutes')} minutes; killed it so the attempt can restart")
@@ -961,8 +1063,7 @@ class BuildRun:
                 task = f"{problem}\n\nOriginal task:\n{task0}"
                 continue
             self.check_limits()
-            sh(["git", "-c", f"http.extraheader={self.auth_header}", "push", "-q", "origin", "HEAD:main"],
-               cwd=self.app_dir)
+            sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
             self.state.d["head_sha"] = head
             self.state.d["commits"].append(head)
             self.state.stage("Coder", "coder", label, cost, f"pushed {head[:8]}", self.take_usage())
@@ -1120,7 +1221,7 @@ class BuildRun:
                 return self.agent_json(
                     "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
                                           "report_path": self.work / f"test-report-{rnd}.json",
-                                          "previous_report": previous_report(self.work, rnd), "api_check": API_CHECK},
+                                          "previous_report": previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK)},
                     self.work / f"test-report-{rnd}.json",
                     {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
                      "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl")},
@@ -1564,12 +1665,12 @@ def revert_decision(d, mode, flags_added=()):
     return True, ""
 
 
-def revert_main_to_base(d, app_dir, git_auth=(), run_id="0"):
+def revert_main_to_base(d, app_dir, git_auth=None, run_id="0"):
     """Put `main` back to the run's starting tree with one new commit on top (history is kept, so there are no conflicts to
     resolve and nothing is force-pushed). Skips, and says why, if `main` has moved on since the run's last push: someone
     else's commit is there and is not ours to overwrite. Returns {"status": reverted|skipped|failed, ...}."""
     base, head = d["base_sha"], d["head_sha"]
-    git = lambda *a, check=True: sh(["git", *git_auth, *a], cwd=app_dir, check=check)
+    git = lambda *a, check=True: sh(["git", *a], cwd=app_dir, env={**os.environ, **(git_auth or {})}, check=check)
     try:
         git("fetch", "-q", "origin", "main")
         remote = git("rev-parse", "origin/main").stdout.strip()
@@ -1623,7 +1724,7 @@ def revert_failed_run(d, app_dir, pat, lim):
     if not Path(app_dir).is_dir():
         d["revert"] = {"status": "failed", "reason": "the app checkout is not there", "mode": mode}
         return
-    auth = ["-c", "http.extraheader=Authorization: Basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode()]
+    auth = git_auth_env("Authorization: Basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode())
     d["revert"] = {**revert_main_to_base(d, app_dir, auth, os.environ.get("GITHUB_RUN_ID", "0")), "mode": mode}
     if d["revert"]["status"] == "reverted":
         owner = os.environ["GITHUB_REPOSITORY"].split("/")[0]

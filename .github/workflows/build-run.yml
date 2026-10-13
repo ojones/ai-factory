@@ -30,8 +30,6 @@ concurrency:
 env:
   APP_NAME: ${{ inputs.app_name }}
   ISSUE_NUMBER: ${{ inputs.issue_number }}
-  BUILD_RUN_DIR: ${{ github.workspace }}/run
-  APP_DIR: ${{ github.workspace }}/app
 
 jobs:
   build-run:
@@ -55,6 +53,27 @@ jobs:
 
       - name: Install OpenHands and the orchestrator's dependencies
         run: pip install "openhands==$(cat factory/agents/openhands-version.txt)" pyyaml
+
+      # limits.agent_isolation in agents/profiles.yml. With `user`, Agents run as a separate unprivileged account, and the Build Run's
+      # directories move to /srv/agent (the runner's home is closed to other accounts), shared through ACLs.
+      - name: Working directories, and the Agent user if isolation is on
+        run: |
+          mode=$(python -c "import yaml; print(yaml.safe_load(open('factory/agents/profiles.yml'))['limits'].get('agent_isolation', 'off'))")
+          if [ "$mode" = user ]; then
+            sudo apt-get install -y -qq acl > /dev/null
+            sudo useradd -m -s /bin/bash agent
+            sudo mkdir -p /srv/agent
+            sudo chown agent:agent /srv/agent
+            sudo setfacl -R -m "u:$USER:rwx" /srv/agent
+            sudo setfacl -R -d -m "u:$USER:rwx" -m u:agent:rwx /srv/agent
+            git config --global --add safe.directory '*'
+            echo "AGENT_USER=agent" >> "$GITHUB_ENV"
+            echo "BUILD_RUN_DIR=/srv/agent/run" >> "$GITHUB_ENV"
+            echo "APP_DIR=/srv/agent/app" >> "$GITHUB_ENV"
+          else
+            echo "BUILD_RUN_DIR=$GITHUB_WORKSPACE/run" >> "$GITHUB_ENV"
+            echo "APP_DIR=$GITHUB_WORKSPACE/app" >> "$GITHUB_ENV"
+          fi
 
       - name: Unit-test the orchestrator's deterministic logic
         run: python -m unittest discover factory/orchestrator
@@ -91,11 +110,11 @@ jobs:
         with:
           name: build-run
           path: |
-            run/artifacts/
-            run/state.json
-            run/verdict-*.json
-            run/test-report-*.json
-            run/api-check-*.jsonl
-            run/diagnosis-*.json
-            run/findings-*.json
+            ${{ env.BUILD_RUN_DIR }}/artifacts/
+            ${{ env.BUILD_RUN_DIR }}/state.json
+            ${{ env.BUILD_RUN_DIR }}/verdict-*.json
+            ${{ env.BUILD_RUN_DIR }}/test-report-*.json
+            ${{ env.BUILD_RUN_DIR }}/api-check-*.jsonl
+            ${{ env.BUILD_RUN_DIR }}/diagnosis-*.json
+            ${{ env.BUILD_RUN_DIR }}/findings-*.json
           if-no-files-found: ignore
