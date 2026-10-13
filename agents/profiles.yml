@@ -78,6 +78,12 @@ limits:
   # Fly apps that are Factory infrastructure rather than Managed Apps (besides ai-factory-growthbook); the daily Fly audit
   # (orchestrator/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
   fly_infra_apps: []
+  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become Update Intakes that start themselves
+  # (orchestrator/production_feedback.py, scheduled by production-feedback.yml). min_occurrences: times one error must appear in a scan.
+  production_feedback:
+    enabled: true
+    min_occurrences: 3
+    max_per_app_per_day: 2
   # Build Runs allowed in flight across all Managed Apps (v1 stages one at a time).
   max_simultaneous_build_runs: 1
   # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to

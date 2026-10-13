@@ -320,6 +320,18 @@ class Invariants(unittest.TestCase):
         self.assertEqual(b.check_state(left_out["results"][-1]), "failed")
         self.assertIsNotNone(ac.validate([{"id": "a", "request": {"path": "https://other.example/"}, "expect": {"status": 200}}])[1])
 
+    def test_inv31_production_feedback_is_rate_limited_and_owner_only(self):
+        import production_feedback as pf
+        cfg = {"min_occurrences": 3, "max_per_app_per_day": 2}
+        groups = {"a" * 8: {"count": 9, "message": "m", "frame": ""}, "b" * 8: {"count": 8, "message": "n", "frame": ""},
+                  "c" * 8: {"count": 1, "message": "o", "frame": ""}}
+        self.assertEqual(pf.decide(groups, {}, 0, 0, cfg)[0], ["a" * 8])  # one at a time, below-threshold ignored
+        self.assertEqual(pf.decide(groups, {}, 1, 0, cfg)[0], [])         # one already open for the app
+        self.assertEqual(pf.decide(groups, {}, 0, 2, cfg)[0], [])         # the daily limit
+        self.assertEqual(pf.decide(groups, {"a" * 8: 5}, 1, 0, cfg), ([], ["a" * 8]))  # a repeat comments
+        import inspect
+        self.assertIn('!= owner', inspect.getsource(pf.scan_defect_labels))  # a defect label by anyone but the owner is skipped
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):
