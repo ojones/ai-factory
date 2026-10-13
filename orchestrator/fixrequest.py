@@ -104,7 +104,7 @@ def requirements(facts, result, revert, app_side=False):
     elif outcome == "crash":
         reqs.append(f"The run no longer crashes (it stopped with: {message}).")
     elif outcome == "watchdog_disabled":
-        reqs.append(f"The regression the watchdog found is fixed before the change is released again ({message}), and the change stays behind its flag until a clean pass.")
+        reqs.append(f"The regression the watchdog found is fixed ({message}). The flag it switched off is dead: remove it from flags.json together with the code it guarded, and deliver the corrected change behind a new flag of its own, which is released only after a clean pass.")
     else:
         reqs.append(f"Whatever stopped the run is resolved: {message}.")
     if recurring and outcome not in ("round_limit", "stuck"):

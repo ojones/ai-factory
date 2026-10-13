@@ -1,0 +1,40 @@
+name: Flag retirement
+
+# Once a day (and on demand): file an Update Intake that retires each Managed App's proven feature flag (released, and a later release
+# has come after it). The flag has done its job; the retirement keeps the behaviour on and removes the check. orchestrator/flag_retirement.py
+# does the work; `limits.flag_retirement` in agents/profiles.yml is the switch. `min_age_days` can be lowered for a test.
+on:
+  schedule:
+    - cron: "37 9 * * *"
+  workflow_dispatch:
+    inputs:
+      min_age_days:
+        description: Days a release must be old before its flag is retired (empty = the configured value)
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: flag-retirement
+  cancel-in-progress: false
+
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: File flag retirement Intakes
+        env:
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          FLAG_RETIRE_MIN_AGE_DAYS: ${{ inputs.min_age_days }}
+        run: python orchestrator/flag_retirement.py

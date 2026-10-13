@@ -272,6 +272,52 @@ def ui_section(wanted, helper_path):
             "\"expect\": {\"text\": [{\"role\": \"listitem\", \"contains\": \"factory-test-a\"}]}}]}`.")
 
 
+RETIRE_RE = re.compile(r"^retire-flag: ([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*$", re.M)
+
+
+class NothingToDo(Exception):
+    """The request is already satisfied (for example, the flag it would retire is already gone): end clean, spend nothing."""
+
+
+def retire_slug(task):
+    """The slug of the flag a retirement Intake asks to retire (its `retire-flag: <slug>` line), or None."""
+    m = RETIRE_RE.search(task or "")
+    return m.group(1) if m else None
+
+
+def manifest_slugs(flags_json):
+    try:
+        return {f["slug"] for f in json.loads(flags_json or "[]") if isinstance(f, dict) and isinstance(f.get("slug"), str)}
+    except ValueError:
+        return set()
+
+
+def removed_flag_slugs(base_flags_json, head_flags_json):
+    """Slugs that were in the manifest at the base and are not at the head: the flags a run retired."""
+    return sorted(manifest_slugs(base_flags_json) - manifest_slugs(head_flags_json))
+
+
+COMMENT_START = ("//", "/*", "*", "#", "<!--")
+
+
+def code_references(grep_lines):
+    """The `git grep -n <tree> -e slug` hits that are code, not comments. Format: <tree>:<path>:<line>:<text>."""
+    hits = []
+    for line in grep_lines:
+        parts = line.split(":", 3)
+        if len(parts) == 4 and not parts[3].strip().startswith(COMMENT_START):
+            hits.append(f"{parts[1]}:{parts[2]}")
+    return hits
+
+
+def retirement_problem(slug, hits):
+    if not hits:
+        return None
+    return (f"The flag `{slug}` is still referenced in code: {', '.join(hits[:8])}. A retirement removes the flag's check (keep the behaviour it "
+            "guarded, always on), its line in `flags.json`, and the tests of the flag-off behaviour; no code may mention the slug afterwards "
+            "(a comment may).")
+
+
 def derive_test(doc, expected_flags):
     """(passed, failures). passed is derived from the results, and every new flag needs a result.
     Only a check in the `passed` state passes: `failed`, `blocked` (something outside the app stopped
@@ -760,6 +806,7 @@ class State:
 
 
 class BuildRun:
+    retiring = None  # the slug a retirement Intake asks to retire (set in setup)
     agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
     def __init__(self):
         e = os.environ
@@ -863,6 +910,9 @@ class BuildRun:
         has_parent = bool(self.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:])
         self.build_kind = "update" if has_parent else "first build"
         self.state.d["build_kind"] = self.build_kind
+        self.retiring = retire_slug(self.task)
+        if self.retiring and self.retiring not in manifest_slugs(self.git("show", "HEAD:flags.json", check=False).stdout):
+            raise NothingToDo(f"the flag `{self.retiring}` is already gone from flags.json; there is nothing to retire")
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
 
@@ -1136,6 +1186,9 @@ class BuildRun:
                 if bad:
                     self.git("reset", "-q", "--hard", base)
                     problem = f"Your commits changed protected Starter Template files ({', '.join(bad)}). They were discarded. Redo the work without touching them."
+                elif self.retiring:
+                    problem = retirement_problem(self.retiring, code_references(
+                        self.git("grep", "-n", "-I", "-F", "-e", self.retiring, head, check=False).stdout.splitlines()))
             if problem:
                 attempts += 1
                 self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
@@ -1368,6 +1421,19 @@ class BuildRun:
     def gb(self, method, path, body=None):
         return http(method, f"{GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
 
+    def archive_retired_flags(self, base, head):
+        """Flags this run removed from flags.json are archived in GrowthBook (best effort), so a retired flag leaves nothing behind.
+        Only when the run ended well: an outcome that is not OK has been reverted, and its flags are still in use."""
+        if self.state.d.get("outcome") not in OK_OUTCOMES:
+            return
+        try:
+            gone = removed_flag_slugs(self.git("show", f"{base}:flags.json", check=False).stdout, self.git("show", f"{head}:flags.json", check=False).stdout)
+            for slug in gone:
+                status, _ = self.gb("POST", f"/features/{self.app}.feature.{slug}", {"archived": True})
+                log(f"archived retired flag {slug} in GrowthBook (HTTP {status})")
+        except Exception as e:  # noqa: BLE001
+            log(f"could not archive retired flags: {type(e).__name__}: {e}")
+
     def release(self, flags, head):
         project = self.gb("GET", "/projects?limit=100")[1]["projects"][0]["id"]
         released, kept = [], []
@@ -1493,6 +1559,8 @@ class BuildRun:
                              + ". Put the answers in the Update Intake issue, then add `proceed-with-change` again.")
         if len(sets) == 1:
             self.task = update_intake.render_change_set_task(sets[0], request=self.task)
+            if self.retiring:  # the coder and reviewer key on this first line
+                self.task = f"retire-flag: {self.retiring}\n\n{self.task}"
             self.spec = self.task
             return False
         made = update_intake.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
@@ -1542,6 +1610,7 @@ class BuildRun:
                         self.state.d.update(outcome="nothing_to_release", message=(
                             "First build deployed and live; it has no flags to release." if self.build_kind == "first build"
                             else "Clean, but the update added no flag, so there was nothing to release."))
+                    self.archive_retired_flags(base, head)
                     return
                 if rnd == self.lim["review_rounds"]:
                     raise NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
@@ -1550,6 +1619,8 @@ class BuildRun:
                                               "same findings open; more fix rounds are not changing anything")
                 summary = "\n".join(describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
+        except NothingToDo as e:
+            self.state.d.update(outcome="nothing_to_release", message=str(e))
         except ProviderBlocked as e:
             self.state.d.update(outcome="provider_blocked", message=str(e))
         except BudgetExhausted as e:

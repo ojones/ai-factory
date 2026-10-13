@@ -45,9 +45,13 @@ Every Managed App's flag wrapper honors a **Preview Token** so the tester can ex
 
 ## Release and retirement
 
-**Release** is the flag being enabled for all users. It is performed by a deterministic Orchestrator step after review and tests are clean, never by an Agent, and never re-enables a flag that already exists in GrowthBook (so an owner's manual rollback sticks).
+**Release** is the flag being enabled for all users. It is performed by a deterministic Orchestrator step after review and tests are clean, never by an Agent, and never re-enables a flag that already exists in GrowthBook.
 
-**Retirement** — deleting a flag and its code path — happens only on an explicit request from the owner. Agents never retire a flag on their own initiative. A released flag simply stays on, doubling as a rollback lever.
+**A flag has one job**: to stage a change dark and release it when it is safe. It belongs to the release pipeline end to end; nobody flips it by hand for any other purpose, and the Orchestrator may rely on that. It is short-lived by design.
+
+**Retirement** — deleting a flag's check and its line in `flags.json`, keeping the behaviour on — is automatic, under the owner's standing approval recorded here. A flag is retired when it was released, the watchdog never switched it off, a **later Build Run also ended `released`** (a run that ended `nothing_to_release` does not count), and it was released on an earlier day. A daily pass files an Update Intake (`retire-flag: <slug>`) for the oldest such flag of each app, one open at a time; the Build Run removes the check, leaves no code mentioning the slug (checked deterministically), and archives the flag in GrowthBook. The newest release therefore always keeps its flag. A retirement run that finds the flag already gone ends at once with nothing to do. Agents still never decide to retire a flag themselves. A flag the watchdog switched off is **dead**: the fix replaces it with a new flag of its own, removing the old one.
+
+**Built to be removed.** One change set has one flag, checked at the single entry point of the change with a plain string literal, so retiring it is deleting that one check. The reviewer flags a flag scattered across unrelated places.
 
 Unflagged changes (bug fixes, refactors, dependency bumps, retiring a flag) go live on deploy with the Test Gate as their only pre-live gate; the reviewer checks them after the fact. If the Build Run that pushed them ends without a clean pass, the Orchestrator takes them back out (see ARCHITECTURE.md: Revert on failure). On an update, a user-facing change with no flag around it is a blocking finding; on a first build it is not.
 → [issue #24](https://github.com/ojones/ai-factory/issues/24)

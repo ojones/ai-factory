@@ -384,6 +384,18 @@ class Invariants(unittest.TestCase):
         self.assertRegex((ROOT / "agents/playwright-version.txt").read_text().strip(), r"^\d+\.\d+\.\d+$")
         self.assertIn("playwright-version.txt", (ROOT / ".github/workflows/build-run.yml").read_text())
 
+    def test_inv37_flags_are_retired_by_the_pipeline_only_when_proven(self):
+        import flag_retirement as fr
+        released = lambda slug, run, state="released": {"key": f"a.feature.{slug}", "date": "2026-10-01", "run_url": f"https://x/runs/{run}", "state": state}
+        flags = [released("old", 1), released("new", 2), released("dead", 0, "switched off by the watchdog")]
+        got = fr.candidates(flags, {"old", "new", "dead"}, "2026-10-12", 1)
+        self.assertEqual([s for s, _ in got], ["old"])  # the newest release keeps its flag; a watchdog-off flag is dead, not retired
+        self.assertIsNone(fr.should_file(got, [f"x {fr.marker('old', 1)}"], [], 0, 2))
+        self.assertIsNone(fr.should_file(got, [], [{"number": 1}], 0, 2))
+        self.assertEqual(b.retire_slug(fr.retirement_request("a", "old")), "old")
+        self.assertIsNotNone(b.retirement_problem("old", b.code_references(['h:src/a.ts:3:  isFeatureEnabled(res, "old")'])))
+        self.assertEqual(b.removed_flag_slugs('[{"slug":"old"}]', "[]"), ["old"])
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

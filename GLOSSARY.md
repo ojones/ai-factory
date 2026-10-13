@@ -65,7 +65,7 @@ Enabling the flag that gates an update so the change is available to all users.
 _Avoid_: publish, go live
 
 **Retire**:
-Deleting a released flag and its code path after the change is permanently on. Only done on the owner's explicit request.
+Deleting a released flag's check and its line in `flags.json` once the change is proven and a later release has come after it, keeping the behaviour on. Automatic, under the owner's standing approval in STANDARDS-FEATURE-FLAGS.md; the flag is then archived in GrowthBook.
 _Avoid_: remove, clean up
 
 **Test Gate**:
