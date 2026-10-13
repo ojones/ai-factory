@@ -3,8 +3,10 @@
 
 A flag exists for one job: to stage a change dark and release it when it is safe (STANDARDS-FEATURE-FLAGS.md). Nobody uses it for
 anything else, so once a *later* Build Run has also released something, the earlier release has been replaced by a newer one and its
-flag has done its job. This daily pass finds those flags and files one Update Intake per flag that removes the check, keeps the
-behaviour always on, and removes the flag's line in `flags.json`; the Build Run then archives the flag in GrowthBook. Users see no
+flag has done its job. A retirement is never a run of its own (that would spend a planner, reviewer, tester, CI and a deploy on a change
+that only deletes a check): the next Update Intake for the same app carries it. At the start of that Build Run the Orchestrator picks
+the oldest eligible flag (`piggyback_slugs`) and adds a "retire these flags in the same change" block to the coder's task; the tester is
+told to check that the behaviour is still on for everyone, and the run archives the flag in GrowthBook when it ends well. Users see no
 change. The owner's standing approval is the standard; nobody reviews a retirement.
 
 A flag is a candidate when all of these hold, read from the app's State issue and `flags.json`:
@@ -14,8 +16,7 @@ A flag is a candidate when all of these hold, read from the app's State issue an
   - it was released on an earlier day than today (a soak of at least a day, so the production-feedback scans have looked at it).
 The newest release therefore always keeps its flag, and a run that ended `nothing_to_release` retires nothing.
 
-  python3 flag_retirement.py       Env: FACTORY_PAT, FACTORY_GH_TOKEN, GITHUB_REPOSITORY, optional FLAG_RETIRE_MIN_AGE_DAYS
-Switch and limits: `limits.flag_retirement` in agents/profiles.yml. One open retirement per app at a time, oldest first.
+Limits: `limits.flag_retirement` in agents/profiles.yml (`piggyback_max` flags per run, default 5, so a backlog clears; `min_age_days`).
 """
 import base64
 import json
@@ -28,10 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import appstate  # noqa: E402
 import build_run as b  # noqa: E402
-import production_feedback as pf  # noqa: E402
 
-LABEL = "flag-retirement"
-DEFAULTS = {"enabled": True, "min_age_days": 1, "max_per_app_per_day": 2}
 RUN_ID_RE = re.compile(r"/runs/(\d+)")
 
 
@@ -68,31 +66,30 @@ def candidates(state_flags, manifest, today, min_age_days):
     return sorted(set(out), key=lambda c: c[1])
 
 
-def marker(slug, rid):
-    return f"[retire {slug}@{rid}]"
+def piggyback_slugs(state_flags, manifest, today, min_age_days, limit):
+    """The flags this run retires in passing: the oldest eligible ones, at most `limit`."""
+    return [slug for slug, _ in candidates(state_flags, manifest, today, min_age_days)][:max(0, int(limit))]
 
 
-def should_file(cands, filed_titles, open_for_app, made_today, max_per_day):
-    """The first candidate that has not been filed before, or None. Nothing while one is open or today's limit is reached."""
-    if open_for_app or made_today >= max_per_day:
-        return None
-    for slug, rid in cands:
-        if not any(marker(slug, rid) in t for t in filed_titles):
-            return slug, rid
-    return None
+def retirement_block(slugs):
+    """The text added to a Build Run's task so the coder retires these flags in the same change. Empty for none."""
+    if not slugs:
+        return ""
+    lines = "\n".join(f"retire-flag: {s}" for s in slugs)
+    return ("\n\nAlso in this change, retire the feature flag(s) below. Each has done its job: its change was released and a later release has "
+            "come after it. Retire it so users notice no difference: remove the check of the flag and keep the behaviour it guarded, always on; "
+            "remove its entry from `flags.json`; delete the tests that assert the flag-off behaviour and keep the tests of the behaviour itself; "
+            "leave no code mentioning the slug (a comment may). Touch no other flag. Keep this separate from the main change (its own commit), "
+            "and add no flag for it.\n" + lines)
 
 
-def retirement_request(app, slug):
-    return (f"retire-flag: {slug}\n\n"
-            f"The feature flag `{slug}` has done its job: its change was released, a later release has come after it, and it has been in production "
-            "long enough. Retire it so users notice no difference:\n"
-            f"- remove the check of `{slug}` (the `isFeatureEnabled(res, \"{slug}\")` call or the wrapper around the change) and keep the behaviour it "
-            "guarded, always on;\n"
-            f"- remove the `{slug}` entry from `flags.json`;\n"
-            "- delete the tests that assert the flag-off behaviour (the route answering 404 or the control being hidden), and keep the tests of the "
-            "behaviour itself;\n"
-            f"- no code may mention `{slug}` afterwards (a comment may).\n\n"
-            "This is internal: it needs no feature flag of its own, and you add no behaviour. Do not touch other flags.")
+def retirement_note(slugs):
+    """What the tester and reviewer are told about the retired flags (added to the spec they check against)."""
+    if not slugs:
+        return ""
+    return ("\n\nThis change also retires the feature flag(s) " + ", ".join(f"`{s}`" for s in slugs) + ", so the behaviour each guarded is now simply on "
+            "for everyone. Check that it still works for an ordinary visitor with no Preview Token, exactly as it did when released, and that "
+            "nothing else changed. The task carries `retire-flag: <slug>` lines for them.\n" + "\n".join(f"retire-flag: {s}" for s in slugs))
 
 
 # --- GitHub (not unit-tested) -------------------------------------------------
@@ -113,40 +110,3 @@ def app_flags(owner, app, pat):
     except ValueError:
         return None, None
     return appstate.load(found[0]["body"]).get("flags", []), slugs
-
-
-def main():
-    repo = os.environ["GITHUB_REPOSITORY"]
-    owner, token, pat = repo.split("/")[0], os.environ["FACTORY_GH_TOKEN"], os.environ["FACTORY_PAT"]
-    cfg = {**DEFAULTS, **((b.load_config().get("limits") or {}).get("flag_retirement") or {})}
-    if not cfg["enabled"]:
-        b.log("flag retirement is off")
-        return 0
-    min_age = int(os.environ.get("FLAG_RETIRE_MIN_AGE_DAYS") or cfg["min_age_days"])
-    today = time.strftime("%Y-%m-%d", time.gmtime())
-    for app in pf.managed_apps(repo, token):
-        try:
-            state_flags, manifest = app_flags(owner, app, pat)
-            if state_flags is None:
-                b.log(f"{app}: no State issue or flags.json to read")
-                continue
-            cands = candidates(state_flags, manifest, today, min_age)
-            every = pf.intakes_with(repo, token, app, LABEL, "all")
-            open_now = pf.intakes_with(repo, token, app, LABEL, "open")
-            made_today = sum(1 for i in every if i["createdAt"][:10] == today)
-            pick = should_file(cands, [i["title"] for i in every], open_now, made_today, int(cfg["max_per_app_per_day"]))
-            if not pick:
-                b.log(f"{app}: {len(cands)} candidate(s); nothing to file")
-                continue
-            slug, rid = pick
-            n = pf.file_intake(repo, token, pat, app, f"{app}: retire flag {slug} {marker(slug, rid)}", retirement_request(app, slug), LABEL,
-                               "Filed and started by the Orchestrator to retire a proven feature flag",
-                               "Started automatically: the flag is proven and a later release has come after it. The planner runs first.")
-            b.log(f"{app}: retirement of {slug} filed as #{n}")
-        except Exception as e:  # noqa: BLE001 - one app's failure never stops the others
-            b.log(f"{app}: flag retirement failed: {type(e).__name__}: {e}")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

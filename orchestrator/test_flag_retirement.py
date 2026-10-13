@@ -1,8 +1,9 @@
-"""Tests for flag retirement. Run: python3 -m unittest discover orchestrator"""
+"""Tests for flag retirement (it rides along in an update run). Run: python3 -m unittest discover orchestrator"""
 import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
@@ -28,27 +29,30 @@ class Candidates(unittest.TestCase):
         self.assertEqual(fr.candidates(flags, {"b", "c"}, "2026-10-12", 1), [("b", 200)])
         self.assertEqual(fr.candidates(flags, {"c"}, "2026-10-12", 1), [])
 
-    def test_oldest_first(self):
-        flags = [entry("b", 200), entry("a", 100), entry("c", 300)]
-        self.assertEqual([s for s, _ in fr.candidates(flags, self.manifest, "2026-10-12", 1)], ["a", "b"])
+    def test_oldest_first_and_a_backlog_may_retire_several_up_to_the_limit(self):
+        flags = [entry("c", 300), entry("a", 100), entry("b", 200), entry("d", 400)]
+        manifest = {"a", "b", "c", "d"}
+        self.assertEqual(fr.piggyback_slugs(flags, manifest, "2026-10-12", 1, 5), ["a", "b", "c"])  # d is the newest release
+        self.assertEqual(fr.piggyback_slugs(flags, manifest, "2026-10-12", 1, 2), ["a", "b"])
+        self.assertEqual(fr.piggyback_slugs(flags, manifest, "2026-10-12", 1, 0), [])
 
 
-class Filing(unittest.TestCase):
-    def test_one_at_a_time_once_per_flag_and_a_daily_limit(self):
-        cands = [("a", 100), ("b", 200)]
-        self.assertEqual(fr.should_file(cands, [], [], 0, 2), ("a", 100))
-        self.assertEqual(fr.should_file(cands, [f"x [retire a@100]"], [], 0, 2), ("b", 200))
-        self.assertIsNone(fr.should_file(cands, [], [{"number": 1}], 0, 2))
-        self.assertIsNone(fr.should_file(cands, [], [], 2, 2))
-        self.assertIsNone(fr.should_file(cands, ["[retire a@100]", "[retire b@200]"], [], 0, 2))
+class Texts(unittest.TestCase):
+    def test_the_task_block_and_the_spec_note_carry_one_retire_line_per_flag(self):
+        self.assertEqual(fr.retirement_block([]), "")
+        self.assertEqual(fr.retirement_note([]), "")
+        block, note = fr.retirement_block(["a", "b"]), fr.retirement_note(["a", "b"])
+        for text in (block, note):
+            self.assertEqual(b.retire_slugs(text), ["a", "b"])
+        self.assertIn("its own commit", block)
+        self.assertIn("ordinary visitor", note)
+
+    def test_retire_slugs_reads_every_line_once(self):
+        self.assertEqual(b.retire_slugs("x\nretire-flag: a\nretire-flag: b-c\nretire-flag: a\n"), ["a", "b-c"])
+        self.assertEqual(b.retire_slugs("Add a button"), [])
 
 
 class BuildRunSide(unittest.TestCase):
-    def test_the_retirement_request_carries_the_slug_the_build_run_reads(self):
-        text = fr.retirement_request("app", "fast-thing")
-        self.assertEqual(b.retire_slug(text), "fast-thing")
-        self.assertIsNone(b.retire_slug("Add a button"))
-
     def test_removed_slugs_are_the_flags_a_run_retired(self):
         base = json.dumps([{"slug": "a"}, {"slug": "b"}])
         self.assertEqual(b.removed_flag_slugs(base, json.dumps([{"slug": "b"}])), ["a"])
@@ -63,6 +67,36 @@ class BuildRunSide(unittest.TestCase):
         self.assertEqual(hits, ["backend/src/routes/todos.ts:12", "backend/src/__tests__/todos.test.ts:5"])
         self.assertIn("still referenced", b.retirement_problem("old", hits))
         self.assertIsNone(b.retirement_problem("old", b.code_references([lines[1]])))
+
+
+class Choosing(unittest.TestCase):
+    """BuildRun.choose_flags_to_retire with the State issue and manifest mocked."""
+
+    def run_for(self, flags, *, update=True, fix=None, kind="update", task="Add a button", manifest="a,b,c,d", boom=False):
+        run = object.__new__(b.BuildRun)
+        run.update_intake, run.fix_meta, run.build_kind, run.task = update, fix or {}, kind, task
+        run.app, run.app_repo, run.pat, run.lim = "app", "o/app", "pat", {"flag_retirement": {"min_age_days": 1, "piggyback_max": 5}}
+        run.git = lambda *a, check=True: type("R", (), {"stdout": json.dumps([{"slug": s} for s in manifest.split(",")])})()
+        patched = mock.patch.object(fr, "app_flags", side_effect=RuntimeError("down") if boom else None, return_value=(flags, set(manifest.split(","))))
+        with patched, mock.patch.object(b.time, "strftime", return_value="2026-10-12"):
+            return run.choose_flags_to_retire()
+
+    flags = [entry("a", 100), entry("b", 200), entry("c", 300), entry("d", 400)]
+
+    def test_an_update_retires_the_whole_backlog_but_the_newest_release(self):
+        self.assertEqual(self.run_for(self.flags), ["a", "b", "c"])
+
+    def test_a_first_build_and_an_automatic_retry_retire_nothing(self):
+        self.assertEqual(self.run_for(self.flags, kind="first build"), [])
+        self.assertEqual(self.run_for(self.flags, fix={"origin": 1, "attempt": 1}), [])
+        self.assertEqual(self.run_for(self.flags, update=False), [])
+
+    def test_a_slug_gone_from_the_manifest_is_dropped_and_a_failed_lookup_does_not_stop_the_run(self):
+        self.assertEqual(self.run_for(self.flags, manifest="b,c,d"), ["b", "c"])
+        self.assertEqual(self.run_for(self.flags, boom=True), [])
+
+    def test_flags_the_owner_names_in_the_task_are_retired_too(self):
+        self.assertEqual(self.run_for(self.flags, task="Do it\nretire-flag: d\n", kind="update"), ["d", "a", "b", "c"])
 
 
 if __name__ == "__main__":

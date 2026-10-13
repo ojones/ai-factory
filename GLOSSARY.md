@@ -65,7 +65,7 @@ Enabling the flag that gates an update so the change is available to all users.
 _Avoid_: publish, go live
 
 **Retire**:
-Deleting a released flag's check and its line in `flags.json` once the change is proven and a later release has come after it, keeping the behaviour on. Automatic, under the owner's standing approval in STANDARDS-FEATURE-FLAGS.md; the flag is then archived in GrowthBook.
+Deleting a released flag's check and its line in `flags.json` once the change is proven and a later release has come after it, keeping the behaviour on. Automatic, under the owner's standing approval in STANDARDS-FEATURE-FLAGS.md, inside an Update Intake's Build Run that is already coming in for the same app (never a run of its own); the flag is then archived in GrowthBook.
 _Avoid_: remove, clean up
 
 **Test Gate**:

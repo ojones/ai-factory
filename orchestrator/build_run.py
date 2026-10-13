@@ -272,17 +272,16 @@ def ui_section(wanted, helper_path):
             "\"expect\": {\"text\": [{\"role\": \"listitem\", \"contains\": \"factory-test-a\"}]}}]}`.")
 
 
-RETIRE_RE = re.compile(r"^retire-flag: ([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*$", re.M)
+RETIRE_RE = re.compile(r"^retire-flag: ([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*$", re.M)  # one line per flag to retire
 
 
 class NothingToDo(Exception):
     """The request is already satisfied (for example, the flag it would retire is already gone): end clean, spend nothing."""
 
 
-def retire_slug(task):
-    """The slug of the flag a retirement Intake asks to retire (its `retire-flag: <slug>` line), or None."""
-    m = RETIRE_RE.search(task or "")
-    return m.group(1) if m else None
+def retire_slugs(task):
+    """The slugs a task asks to retire (its `retire-flag: <slug>` lines), in order, without repeats."""
+    return list(dict.fromkeys(RETIRE_RE.findall(task or "")))
 
 
 def manifest_slugs(flags_json):
@@ -806,7 +805,7 @@ class State:
 
 
 class BuildRun:
-    retiring = None  # the slug a retirement Intake asks to retire (set in setup)
+    retiring = ()  # the flags this run retires in passing (set in setup)
     agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
     def __init__(self):
         e = os.environ
@@ -910,9 +909,7 @@ class BuildRun:
         has_parent = bool(self.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:])
         self.build_kind = "update" if has_parent else "first build"
         self.state.d["build_kind"] = self.build_kind
-        self.retiring = retire_slug(self.task)
-        if self.retiring and self.retiring not in manifest_slugs(self.git("show", "HEAD:flags.json", check=False).stdout):
-            raise NothingToDo(f"the flag `{self.retiring}` is already gone from flags.json; there is nothing to retire")
+        self.retiring = self.choose_flags_to_retire()
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
 
@@ -940,6 +937,25 @@ class BuildRun:
             log("synced protected template files: " + ", ".join(changed))
         except Exception as e:  # noqa: BLE001
             log(f"could not sync protected template files: {type(e).__name__}: {e}")
+
+    def choose_flags_to_retire(self):
+        """The proven flags that ride along with this run (flag_retirement.py): none for a first build or an automatic retry. A task that
+        names flags itself (`retire-flag:` lines, from an owner's Intake) retires those too."""
+        named = retire_slugs(self.task)
+        picked = []
+        if self.update_intake and not self.fix_meta and self.build_kind == "update":
+            try:
+                import flag_retirement
+                owner = self.app_repo.split("/")[0]
+                state_flags, manifest = flag_retirement.app_flags(owner, self.app, self.pat)
+                if state_flags is not None:
+                    limits = self.lim.get("flag_retirement") or {}
+                    picked = flag_retirement.piggyback_slugs(state_flags, manifest, time.strftime("%Y-%m-%d", time.gmtime()),
+                                                             int(limits.get("min_age_days", 1)), limits.get("piggyback_max", 5))
+            except Exception as e:  # noqa: BLE001 - retiring is never a reason to stop the run
+                log(f"could not choose flags to retire: {type(e).__name__}: {e}")
+        in_repo = manifest_slugs(self.git("show", "HEAD:flags.json", check=False).stdout)
+        return [s for s in dict.fromkeys(named + picked) if s in in_repo]
 
     def prepare_agent_user(self):
         """With isolation on: put the helper the tester calls where the Agent user can read it, and prove isolation holds before
@@ -1186,9 +1202,12 @@ class BuildRun:
                 if bad:
                     self.git("reset", "-q", "--hard", base)
                     problem = f"Your commits changed protected Starter Template files ({', '.join(bad)}). They were discarded. Redo the work without touching them."
-                elif self.retiring:
-                    problem = retirement_problem(self.retiring, code_references(
-                        self.git("grep", "-n", "-I", "-F", "-e", self.retiring, head, check=False).stdout.splitlines()))
+                else:
+                    for slug in self.retiring:
+                        problem = retirement_problem(slug, code_references(
+                            self.git("grep", "-n", "-I", "-F", "-e", slug, head, check=False).stdout.splitlines()))
+                        if problem:
+                            break
             if problem:
                 attempts += 1
                 self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
@@ -1559,8 +1578,7 @@ class BuildRun:
                              + ". Put the answers in the Update Intake issue, then add `proceed-with-change` again.")
         if len(sets) == 1:
             self.task = update_intake.render_change_set_task(sets[0], request=self.task)
-            if self.retiring:  # the coder and reviewer key on this first line
-                self.task = f"retire-flag: {self.retiring}\n\n{self.task}"
+
             self.spec = self.task
             return False
         made = update_intake.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
@@ -1590,7 +1608,12 @@ class BuildRun:
             base = self.state.d["base_sha"]
             findings_path = self.work / "findings-0.json"
             findings_path.write_text(json.dumps({"blocking": [], "minor": []}))
-            task = self.task
+            import flag_retirement
+            task = self.task + flag_retirement.retirement_block(self.retiring)
+            self.spec = (getattr(self, "spec", None) or self.task) + flag_retirement.retirement_note(self.retiring)
+            if self.retiring:
+                log("retiring in passing: " + ", ".join(self.retiring))
+                self.state.d["retiring"] = list(self.retiring)
             head = self.coder("1", task, str(findings_path))
             for rnd in range(1, self.lim["review_rounds"] + 1):
                 head = self.pipeline(head)

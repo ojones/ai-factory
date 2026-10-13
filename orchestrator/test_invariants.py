@@ -384,17 +384,18 @@ class Invariants(unittest.TestCase):
         self.assertRegex((ROOT / "agents/playwright-version.txt").read_text().strip(), r"^\d+\.\d+\.\d+$")
         self.assertIn("playwright-version.txt", (ROOT / ".github/workflows/build-run.yml").read_text())
 
-    def test_inv37_flags_are_retired_by_the_pipeline_only_when_proven(self):
+    def test_inv37_flags_are_retired_inside_an_update_run_only_when_proven(self):
         import flag_retirement as fr
         released = lambda slug, run, state="released": {"key": f"a.feature.{slug}", "date": "2026-10-01", "run_url": f"https://x/runs/{run}", "state": state}
-        flags = [released("old", 1), released("new", 2), released("dead", 0, "switched off by the watchdog")]
-        got = fr.candidates(flags, {"old", "new", "dead"}, "2026-10-12", 1)
-        self.assertEqual([s for s, _ in got], ["old"])  # the newest release keeps its flag; a watchdog-off flag is dead, not retired
-        self.assertIsNone(fr.should_file(got, [f"x {fr.marker('old', 1)}"], [], 0, 2))
-        self.assertIsNone(fr.should_file(got, [], [{"number": 1}], 0, 2))
-        self.assertEqual(b.retire_slug(fr.retirement_request("a", "old")), "old")
+        flags = [released("old", 1), released("older", 2), released("new", 9), released("dead", 3, "switched off by the watchdog")]
+        got = fr.piggyback_slugs(flags, {"old", "older", "new", "dead"}, "2026-10-12", 1, 5)
+        self.assertEqual(got, ["old", "older"])  # oldest first; the newest release keeps its flag; a watchdog-off flag is dead, not retired
+        self.assertEqual(fr.piggyback_slugs(flags, {"old", "older", "new"}, "2026-10-12", 1, 1), ["old"])
+        self.assertEqual(fr.piggyback_slugs(flags, {"old", "older", "new"}, "2026-10-01", 1, 5), [])  # released today: not a day yet
+        self.assertEqual(b.retire_slugs(fr.retirement_block(["old", "older"])), ["old", "older"])
         self.assertIsNotNone(b.retirement_problem("old", b.code_references(['h:src/a.ts:3:  isFeatureEnabled(res, "old")'])))
         self.assertEqual(b.removed_flag_slugs('[{"slug":"old"}]', "[]"), ["old"])
+        self.assertGreaterEqual(PROFILES["limits"]["flag_retirement"]["piggyback_max"], 1)
 
 
 class Registry(unittest.TestCase):

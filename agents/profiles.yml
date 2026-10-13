@@ -95,12 +95,11 @@ limits:
   # (orchestrator/maintenance.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
   maintenance:
     enabled: true
-  # Daily: a released flag is retired (an Update Intake that removes its check and keeps the behaviour on) once a later Build Run has also
-  # released something and the flag is at least min_age_days old (orchestrator/flag_retirement.py, flag-retirement.yml).
+  # A proven flag is retired inside the next Update Intake's Build Run for the same app, never in a run of its own: once a later Build Run
+  # has also released something and the flag is at least min_age_days old, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_retirement.py).
   flag_retirement:
-    enabled: true
     min_age_days: 1
-    max_per_app_per_day: 2
+    piggyback_max: 5
   production_feedback:
     enabled: true
     min_occurrences: 3
