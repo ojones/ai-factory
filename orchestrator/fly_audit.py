@@ -50,7 +50,7 @@ def list_fly_apps(org, token):
 
 
 def main():
-    repo, org = os.environ["GITHUB_REPOSITORY"], os.environ.get("FLY_ORG", "personal")
+    repo, org = os.environ["GITHUB_REPOSITORY"], os.environ.get("FLY_ORG") or "personal"
     owner, pat, token = repo.split("/")[0], os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     infra = (b.load_config().get("limits") or {}).get("fly_infra_apps") or []
 
