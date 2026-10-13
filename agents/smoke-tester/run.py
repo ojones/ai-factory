@@ -289,13 +289,13 @@ def one_run(job):
         dest, home = root / name, root / f"home-{name}"
         head = build_checkout(base, data, fixture, dest)
         app = RunningApp(dest)
-        report = root / f"report-{name}.json"
+        report, api_log = root / f"report-{name}.json", root / f"api-check-{name}.jsonl"
         prompt = b.render(b.load_prompt(str(ROOT / "agents" / "prompts" / "tester.md")), {
             "app_name": "smoke-app", "build_kind": "update", "spec": spec_for(data, fixture), "app_url": app.url, "head_sha": head,
-            "report_path": report, "previous_report": "none (this is the first test pass)"})
+            "report_path": report, "previous_report": "none (this is the first test pass)", "api_check": b.API_CHECK})
         home.mkdir(parents=True, exist_ok=True)
         env = {**sc.minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": base_url, "LLM_API_KEY": key, "RUNTIME": "process",
-               "PREVIEW_TOKEN": TOKEN}
+               "PREVIEW_TOKEN": TOKEN, "API_CHECK_BASE": app.url, "API_CHECK_LOG": str(api_log)}
         began = time.time()
         try:
             with open(root / f"agent-{name}.log", "w") as log:  # kept: without it a run that quits at once cannot be diagnosed
@@ -309,6 +309,9 @@ def one_run(job):
             cost = sc.cost_of(json.loads(state_file.read_text()), prices.get(model, {}))
         result["cost"] = round(cost, 4)
         doc = b.load_json(report)
+        if doc is not None:  # the Orchestrator reads the report this way: the helper's observations outrank the tester's judgement
+            doc = b.reconcile_api_checks(doc, b.load_api_results(api_log))
+        result["helper_checks"] = len(b.load_api_results(api_log))
         result.update(judge(fixture, doc, data["flag"]))
         result["json_problem"] = b.json_problem(report) if doc is None else None
         if doc is None:  # say why, from the agent's own output

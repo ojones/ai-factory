@@ -126,7 +126,7 @@ class Prompts(unittest.TestCase):
         "coder": {"app_name", "round", "task", "findings_path", "build_kind"},
         "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind", "spec"},
         "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric", "build_kind"},
-        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec"},
+        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec", "api_check"},
         "planner": {"app_name", "build_kind", "task", "plan_path", "spec"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
         "postmortem": {"facts_path", "result_path", "categories"},
@@ -319,8 +319,8 @@ class ParallelReviewAndTest(unittest.TestCase):
         run = object.__new__(b.BuildRun)
         run.app, run.preview = "demo", "tok"
         run.cfg = {"roles": {"reviewer": {"mode": "agent"}}}
-        run.work = Path("/tmp/work-test")
-        run.state = b.State("/tmp/work-test/state.json", "demo", "1", "url")
+        run.work = Path(__import__("tempfile").mkdtemp(prefix="work-test-"))
+        run.state = b.State(run.work / "state.json", "demo", "1", "url")
         run.state.save = lambda: None
         shown = {"base": "[]", "head": head_flags}
 

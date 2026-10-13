@@ -309,6 +309,17 @@ class Invariants(unittest.TestCase):
         self.assertFalse(pm.records_stuck_issue("provider_blocked"))
         self.assertNotIn("provider_blocked", b.OK_OUTCOMES)
 
+    def test_inv30_the_api_check_helpers_observation_outranks_the_testers_judgement(self):
+        import api_check as ac
+        api = {"create": {"id": "create", "ok": False, "problems": ["status: expected 201, got 200"], "observed": {"status": 200}}}
+        passed = {"flag": "f", "check": "create", "status": "passed", "passed": True, "evidence": "ok", "api": ["create"]}
+        out = b.reconcile_api_checks({"results": [passed]}, api)
+        self.assertEqual(b.check_state(out["results"][0]), "failed")
+        self.assertEqual(b.check_state(b.reconcile_api_checks({"results": [passed]}, {})["results"][0]), "not_run")
+        left_out = b.reconcile_api_checks({"results": [{"flag": "f", "check": "x", "status": "passed", "passed": True, "evidence": "e"}]}, api)
+        self.assertEqual(b.check_state(left_out["results"][-1]), "failed")
+        self.assertIsNotNone(ac.validate([{"id": "a", "request": {"path": "https://other.example/"}, "expect": {"status": 200}}])[1])
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

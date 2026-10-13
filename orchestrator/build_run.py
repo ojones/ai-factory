@@ -42,6 +42,7 @@ PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to 
 # token, and the flag wrapper is the release gate's other half.
 PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the tester calls (see api_check.py)
 # How a Build Run can end well. `planned`: an update Intake was split into child issues, each its own Build Run.
 OK_OUTCOMES = ("released", "nothing_to_release", "planned")
 
@@ -163,6 +164,58 @@ def check_state(r):
     if state == "passed" and admits_unobserved(r.get("evidence")):
         return "not_run"
     return state
+
+
+def load_api_results(path):
+    """The api-check helper's own log (one JSON line per check it ran) as {id: result}; the last result for an id wins."""
+    out = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and isinstance(r.get("id"), str):
+                    out[r["id"]] = r
+    except OSError:
+        pass
+    return out
+
+
+def _api_ids(result):
+    ids = result.get("api")
+    return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else ([ids] if isinstance(ids, str) else [])
+
+
+def reconcile_api_checks(doc, api):
+    """The tester's report with the helper's observations ranking above its judgement. A result that cites an api-check which
+    failed cannot stay `passed`; one that cites a check the helper never ran cannot either; and a check the helper saw fail
+    that no result mentions is added as a failure, so the tester cannot leave out what it was shown. Results that cite no
+    api-check are untouched."""
+    results = [dict(r) for r in (doc.get("results") if isinstance(doc, dict) else None) or [] if isinstance(r, dict)]
+    cited = set()
+    for r in results:
+        ids = _api_ids(r)
+        cited.update(ids)
+        failing = [i for i in ids if i in api and not api[i].get("ok")]
+        unknown = [i for i in ids if i not in api]
+        if check_state(r) != "passed":
+            continue
+        if failing:
+            r.update(status="failed", passed=False, evidence=(f"{r.get('evidence', '')} | the api-check helper observed otherwise: "
+                     + "; ".join(f"{i}: {'; '.join(api[i].get('problems') or ['failed'])}" for i in failing)).strip(" |"))
+        elif unknown:
+            r.update(status="not_run", passed=False, evidence=(f"{r.get('evidence', '')} | cites api-check id(s) the helper never ran: "
+                     + ", ".join(unknown)).strip(" |"))
+    flag = next((r.get("flag") for r in results if r.get("flag")), "")
+    for i, res in api.items():
+        if not res.get("ok") and i not in cited:
+            observed = res.get("observed") or {}
+            results.append({"flag": flag, "check": f"api-check {i}: {res.get('name', i)}", "status": "failed", "passed": False, "api": [i],
+                            "evidence": "the api-check helper observed a failure the report did not mention: "
+                                        + "; ".join(res.get("problems") or ["failed"]) + f" (status {observed.get('status')})"})
+    return {**doc, "results": results}
 
 
 def derive_test(doc, expected_flags):
@@ -1035,8 +1088,10 @@ class BuildRun:
                 return self.agent_json(
                     "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
                                           "report_path": self.work / f"test-report-{rnd}.json",
-                                          "previous_report": previous_report(self.work, rnd)},
-                    self.work / f"test-report-{rnd}.json", {"PREVIEW_TOKEN": self.preview},
+                                          "previous_report": previous_report(self.work, rnd), "api_check": API_CHECK},
+                    self.work / f"test-report-{rnd}.json",
+                    {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
+                     "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl")},
                     check=lambda doc: derive_test(doc, flags) and None,
                     cwd=tester_tree, home=self.work / f"home-tester-{rnd}", share=share)
             finally:
@@ -1058,6 +1113,11 @@ class BuildRun:
         test_failures, tpassed = [], True
         try:
             tdoc, cost, usage = test_job.result()
+            tdoc = reconcile_api_checks(tdoc, load_api_results(self.work / f"api-check-{rnd}.jsonl"))
+            try:  # so the next round's tester sees the failures the helper added; best effort, never a reason to stop the run
+                (self.work / f"test-report-{rnd}.json").write_text(json.dumps(tdoc, indent=2))
+            except OSError as e:
+                log(f"could not rewrite the reconciled test report: {e}")
             tpassed, test_failures = derive_test(tdoc, flags)
             self.state.d["verification"] = {"round": rnd, "sha": head, **verification_record(tdoc, flags)}
             self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", usage)

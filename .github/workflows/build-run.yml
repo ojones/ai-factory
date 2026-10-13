@@ -95,6 +95,7 @@ jobs:
             run/state.json
             run/verdict-*.json
             run/test-report-*.json
+            run/api-check-*.jsonl
             run/diagnosis-*.json
             run/findings-*.json
           if-no-files-found: ignore
