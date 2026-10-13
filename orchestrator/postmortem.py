@@ -313,16 +313,30 @@ def record_minors(repo, token, app_repo, pat, facts):
     return recorded
 
 
-def mint_agent_key(cfg, parent_key):
-    """A single-model DeepInfra credential limited to `postmortem_cost_cap_usd`, so the Agent never holds the
-    parent key and one analysis cannot spend more than the cap. Returns None if one cannot be minted."""
+def mint_agent(cfg, parent_key):
+    """(credential, budget): a single-model DeepInfra credential limited to `postmortem_cost_cap_usd`, so the Agent never
+    holds the parent key and one analysis cannot spend more than the cap. (None, None) if one cannot be minted."""
     try:
         limits = cfg["limits"]
         budget = b.Budget(parent_key, float(limits.get("postmortem_cost_cap_usd", 0.5)), int(limits["jwt_ttl_seconds"]))
-        return budget.mint(cfg["roles"]["postmortem"]["model"])
+        return budget.mint(cfg["roles"]["postmortem"]["model"]), budget
     except Exception as e:  # noqa: BLE001 - never fail the run
         b.log(f"could not mint a scoped credential for the post-mortem Agent: {type(e).__name__}")
-        return None
+        return None, None
+
+
+def mint_agent_key(cfg, parent_key):
+    return mint_agent(cfg, parent_key)[0]
+
+
+def record_agent_spend(budget, key, repo, token, run_id):
+    """Add what the Agent actually spent to the spend ledger, so the daily cap sees it (best effort, never fails the run)."""
+    try:
+        spent = budget.refresh(key)
+        b.log(f"post-mortem agent spent ${spent:.4f}")
+        b.record_spend_in_ledger({"app": "postmortem", "spent_usd": spent}, repo, f"{run_id}-pm", token)  # own id: the ledger counts a run id once
+    except Exception as e:  # noqa: BLE001
+        b.log(f"could not record the post-mortem Agent's spend: {type(e).__name__}")
 
 
 def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
@@ -411,11 +425,12 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
 
 def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path, targets, run_id):
     """Run the Agent once for these lesson issues, comment its analysis on each, and open the PR."""
-    key = mint_agent_key(cfg, parent_key)
+    key, budget = mint_agent(cfg, parent_key)
     if not key:
         return None
     result_path.unlink(missing_ok=True)
     run_agent(factory, cfg, key, facts_path, result_path, int(cfg["limits"].get("postmortem_timeout_minutes", 15)))
+    record_agent_spend(budget, key, repo, token, run_id)
     result = b.load_json(result_path) or {}
     if result.get("category") not in CATEGORIES:
         for n in targets:

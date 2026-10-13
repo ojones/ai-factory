@@ -75,6 +75,9 @@ limits:
   # Refuse to start a Build Run once the Build Runs that finished today (UTC) have spent this much in total,
   # read from the spend-ledger issue in ai-factory. 0 disables it. Runs in flight count when they finish.
   daily_cost_cap_usd: 10.00
+  # Fly apps that are Factory infrastructure rather than Managed Apps (besides ai-factory-growthbook); the daily Fly audit
+  # (orchestrator/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
+  fly_infra_apps: []
   # Build Runs allowed in flight across all Managed Apps (v1 stages one at a time).
   max_simultaneous_build_runs: 1
   # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to
