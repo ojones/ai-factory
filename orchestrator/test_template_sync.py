@@ -19,9 +19,10 @@ class Changes(unittest.TestCase):
         changes = [("M", "package.json"), ("M", "package-lock.json"), ("M", "fly.toml"), ("M", ".github/workflows/ci.yml"),
                    ("M", "backend/src/feature-flags.ts"), ("A", "eslint.config.mjs")]
         applicable, protected, ignored = t.split_changes(changes)
-        self.assertEqual([p for _, p in applicable], ["package.json", "eslint.config.mjs"])
+        self.assertEqual([p for _, p in applicable], ["package.json"])  # the lint config is the Orchestrator's, not the coder's
         self.assertEqual(sorted(protected), [".github/workflows/ci.yml", "backend/src/feature-flags.ts", "fly.toml"])
         self.assertEqual(ignored, ["package-lock.json"])
+        self.assertEqual(t.orchestrator_applied(changes), ["eslint.config.mjs"])
 
     def test_files_the_build_run_copies_itself_are_in_no_agent_list(self):
         changes = [("M", ".github/dependabot.yml"), ("M", ".github/workflows/test-gate.yml"), ("M", ".github/workflows/build.yml"), ("M", "package.json")]

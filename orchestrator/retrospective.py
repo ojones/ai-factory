@@ -65,7 +65,7 @@ SLOW_STAGE_SECONDS = 900
 AUTO_MERGE_RE = re.compile(r"^templates/starter/(\.eslintrc[^/]*|eslint\.config\.[cm]?[jt]s|\.prettierrc[^/]*|"
                            r"prettier\.config\.[cm]?[jt]s|\.editorconfig)$")
 # A lesson's change should come with something that would have caught it: a smoke or replay case, a test.
-FIXTURE_RE = re.compile(r"^(agents/replay/cases\.json|agents/smoke-coder/tasks/|orchestrator/test_|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
+FIXTURE_RE = re.compile(r"^(agents/replay/cases\.json|agents/lint-fixtures/|agents/smoke-coder/tasks/|orchestrator/test_|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
 SMOKE_DIFF_RE = re.compile(r"^agents/smoke/fixtures/[^/]+\.diff$")
 SMOKE_EXPECTED = "agents/smoke/expected.json"
 # Emphasis a prompt change must not add: a louder sentence is not a fix, and a model that was told so still adds it.
@@ -565,7 +565,7 @@ def run_tests(factory, root, user):
     """The orchestrator's unit tests over the Factory tree as it will be proposed, run as the Agent user in a throwaway copy with no
     credential in its environment: the Agent may have edited test files, and a test is code. True when they pass."""
     verify = root / "verify"
-    shutil.copytree(factory, verify, ignore=shutil.ignore_patterns(".git"), symlinks=True)
+    shutil.copytree(factory, verify, ignore=shutil.ignore_patterns(".git", "node_modules"), symlinks=True)
     share_with(verify, user)
     env = {k: os.environ[k] for k in ("PATH", "LANG", "CI") if k in os.environ}
     env.update({"HOME": str(root / "home"), "TMPDIR": str(root / "tmp"), "PYTHONDONTWRITEBYTECODE": "1"})
@@ -594,7 +594,7 @@ def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
         work, io, home = root / "work", root / "io", root / "home"
         io.mkdir()
         home.mkdir()
-        shutil.copytree(factory, work, ignore=shutil.ignore_patterns(".git"), symlinks=True)
+        shutil.copytree(factory, work, ignore=shutil.ignore_patterns(".git", "node_modules"), symlinks=True)
         facts_copy, result_copy = io / "facts.json", io / "result.json"
         shutil.copyfile(facts_path, facts_copy)
         share_with(root, user)

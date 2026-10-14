@@ -41,6 +41,11 @@ jobs:
           npm ci
           npm run check
           npm test
+      - name: The custom lint rules report what their cases expect
+        working-directory: .
+        run: |
+          pip install pyyaml
+          python -m unittest orchestrator.test_starter_lint
 
   # Re-run the reviewer's seeded-bug fixtures when a prompt or a fixture changed. Spends a few cents.
   reviewer-smoke:

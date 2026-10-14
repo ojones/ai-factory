@@ -41,10 +41,15 @@ GROWTHBOOK_API = os.environ.get("GROWTHBOOK_API_HOST", "https://ai-factory-growt
 PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to Fly", "deploy-fly.yml")]
 # Starter Template files the coder must not change: the workflows hold the Fly
 # token, and the flag wrapper is the release gate's other half.
-PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md")
+PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md", "eslint.config.mjs", ".prettierrc.json", ".prettierignore")
 # Protected files a template-sync Build Run copies from the Starter Template itself, before any Agent runs (an Agent may not edit
 # them, and no Agent is involved). Only files that are safe to overwrite belong here: nobody but the template ever changes them.
 TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR = (".github/dependabot.yml", ".github/workflows/test-gate.yml", ".github/workflows/rollback-fly.yml")
+# The Starter's lint and formatter config is owned by the Orchestrator too, so the coder cannot loosen a rule to make a check pass. A tighter rule
+# can fail the app's existing code, so these are committed locally and pushed together with the coder's fixes (a push of the config alone would
+# put a red Test Gate on `main`); the coder, and only the coder, fixes what the new rules report.
+TEMPLATE_FILES_HELD = ("eslint.config.mjs", ".prettierrc.json", ".prettierignore")
+TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR = TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR + TEMPLATE_FILES_HELD
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the tester calls (see api_check.py)
 UI_CHECK = str(FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser counterpart (see ui_check.py)
@@ -720,6 +725,34 @@ def flag_findings(git, head, slugs):
     return out
 
 
+SUPPRESSION_RE = re.compile(r"eslint-disable|@ts-ignore|@ts-nocheck")
+
+
+def suppression_findings(git, base, head):
+    """A minor finding when the change adds a lint or type-check suppression (`eslint-disable`, `@ts-ignore`, `@ts-nocheck`). The lint config
+    is the Orchestrator's, so the coder cannot loosen a rule for the whole app; a suppression is the local way around one, so it is named
+    where the retrospective sees it and can ask for a better rule or default. Always minor: one is sometimes right. `git(*args)` returns a
+    git command's stdout ('' when it fails), run in the app checkout."""
+    hits, path, line = [], "", 0
+    for text in git("diff", "-U0", base, head, "--", "*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs").splitlines():
+        if text.startswith("+++ b/"):
+            path = text[6:]
+        elif text.startswith("@@"):
+            m = re.search(r"\+(\d+)", text)
+            line = int(m.group(1)) - 1 if m else 0
+        elif text.startswith("+"):
+            line += 1
+            if SUPPRESSION_RE.search(text):
+                hits.append(f"{path}:{line}: {text[1:].strip()[:100]}")
+    if not hits:
+        return []
+    first = hits[0].split(":")
+    return [{"severity": "minor", "category": "style", "evidence_kind": "cited",
+             "summary": f"The change adds {len(hits)} lint or type-check suppression(s)", "evidence": "; ".join(hits[:3]),
+             "file": first[0], "line": first[1], "requirement": "Fix the code the rule reports; the lint config is not the coder's to loosen.",
+             "suggested_fix": "Remove the suppression and satisfy the rule.", "repro": "", "source": "orchestrator"}]
+
+
 class ContextTooLarge(Exception):
     """The change does not fit in one prompt; the caller falls back to the exploring Agent."""
 
@@ -1149,8 +1182,10 @@ class BuildRun:
         self.install_dependencies()
         self.git("config", "user.name", "ai-factory-coder")
         self.git("config", "user.email", "coder@ai-factory.local")
-        self.apply_template_files({l["name"] for l in issue.get("labels", [])})
+        labels = {l["name"] for l in issue.get("labels", [])}
+        self.apply_template_files(labels)
         self.state.d["base_sha"] = self.head()
+        self.stage_template_config(labels)
         # The base of a first build is the seed commit, the repository's root. Any later Build Run
         # starts from a commit with history, so its change is an update that needs flags.
         has_parent = bool(self.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:])
@@ -1160,30 +1195,47 @@ class BuildRun:
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
 
-    def apply_template_files(self, labels):
-        """A template-sync Intake: copy the protected Starter Template files in TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR into the app
-        and push them before the planner and coder start, so the run's starting point already has them. No Agent touches them. A
-        failure is logged and the run goes on: the rest of the sync does not depend on these files."""
-        if "template-sync" not in labels:
-            return
-        try:
-            changed = []
-            for rel in TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR:
-                src, dst = FACTORY_DIR / "templates" / "starter" / rel, self.app_dir / rel
-                if src.is_file() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(src, dst)
-                    changed.append(rel)
-            if not changed:
-                return
+    def copy_template_files(self, group):
+        """Copy the Starter Template files in `group` that differ into the app checkout and commit them locally. Returns the paths changed."""
+        changed = []
+        for rel in group:
+            src, dst = FACTORY_DIR / "templates" / "starter" / rel, self.app_dir / rel
+            if src.is_file() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+                changed.append(rel)
+        if changed:
             self.git("add", "--", *changed)
             self.git("-c", "user.name=ai-factory-orchestrator", "-c", "user.email=orchestrator@ai-factory.local", "commit", "-q", "-m",
                      "chore: sync protected Starter Template files\n\n" + "\n".join(changed))
-            sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
             self.share_with_agent(self.app_dir)
-            log("synced protected template files: " + ", ".join(changed))
+        return changed
+
+    def apply_template_files(self, labels):
+        """A template-sync Intake: copy the protected Starter Template files in TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR into the app and
+        push them before the planner and coder start, so the run's starting point already has them. No Agent touches them. A failure is
+        logged and the run goes on: the rest of the sync does not depend on these files."""
+        if "template-sync" not in labels:
+            return
+        try:
+            changed = self.copy_template_files(TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR)
+            if changed:
+                sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
+                log("synced protected template files: " + ", ".join(changed))
         except Exception as e:  # noqa: BLE001
             log(f"could not sync protected template files: {type(e).__name__}: {e}")
+
+    def stage_template_config(self, labels):
+        """The lint and formatter config (TEMPLATE_FILES_HELD) is committed locally, after the run's base, and goes out with the coder's first
+        reviewed push: on its own it could turn the app's Test Gate red, and the coder, only the coder, fixes what the new rules report."""
+        if "template-sync" not in labels:
+            return
+        try:
+            changed = self.copy_template_files(TEMPLATE_FILES_HELD)
+            if changed:
+                log("staged protected lint config, pushed with the coder's work: " + ", ".join(changed))
+        except Exception as e:  # noqa: BLE001
+            log(f"could not stage the lint config: {type(e).__name__}: {e}")
 
     def choose_flags_to_retire(self):
         """The proven flags that ride along with this run (flag_retirement.py): none for a first build or an automatic retry. A task that
@@ -1640,7 +1692,8 @@ class BuildRun:
                 home=self.work / f"home-reviewer-{rnd}")
         self.restore_tree()
         clean, blocking, minor = derive_review(doc)
-        minor = minor + flag_findings(lambda *a: self.git(*a, check=False).stdout, head, self.run_flags(base, head))
+        git = lambda *a: self.git(*a, check=False).stdout
+        minor = minor + flag_findings(git, head, self.run_flags(base, head)) + suppression_findings(git, base, head)
         self.note_improvements(doc, "reviewer")
         self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking", usage)
         return clean, blocking, minor

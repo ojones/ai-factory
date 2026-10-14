@@ -26,7 +26,7 @@ If the gate fails after a push, the same Build Run keeps watching the GitHub Act
 
 ## Style
 
-Purely mechanical — an auto-formatter is the entire style guide. The Starter Template ships Prettier (`npm run format`) and ESLint (`npm run lint`, part of `npm run check` and so of the Test Gate); formatting itself is not a gate, so an old file is never failed for its layout, but the coder runs `npm run format` before committing. No prose conventions (naming philosophy, comment density) for an Agent to probabilistically get wrong.
+Purely mechanical — checks are the style guide, not prose. The Starter Template ships Prettier (`npm run format`) and ESLint (`npm run lint`, part of `npm run check` and so of the Test Gate); formatting itself is not a gate, so an old file is never failed for its layout, but the coder runs `npm run format` first, before the build and the tests. No prose conventions (naming philosophy, comment density) for an Agent to probabilistically get wrong. Beyond formatting, the lint config carries the Factory's own rules for what recurring review findings showed (a test must not assert on source text or on `flags.json`, no committed `.only`); each has failing and passing cases in `agents/lint-fixtures/cases.json`. The lint and formatter config belongs to the Orchestrator: the coder cannot edit it or suppress a rule to get past it, it fixes the code. New rules arrive through template sync and the coder fixes what they report in that Update Intake.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
 ## Git workflow

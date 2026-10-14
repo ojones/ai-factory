@@ -460,6 +460,79 @@ class ReviewBeforePushThenTest(unittest.TestCase):
         self.assertEqual([(i["source"], i["target"]) for i in kept], [("reviewer", "factory"), ("reviewer", "managed_app")])
 
 
+class SuppressionsAndLintConfig(unittest.TestCase):
+    DIFF = ("diff --git a/backend/src/a.ts b/backend/src/a.ts\n--- a/backend/src/a.ts\n+++ b/backend/src/a.ts\n@@ -3,0 +4,3 @@\n"
+            "+const ok = 1;\n+// eslint-disable-next-line @typescript-eslint/no-explicit-any\n+const x: any = 2;\n"
+            "diff --git a/frontend/src/b.tsx b/frontend/src/b.tsx\n--- a/frontend/src/b.tsx\n+++ b/frontend/src/b.tsx\n@@ -10 +10 @@\n"
+            "-old\n+// @ts-ignore\n")
+
+    def test_an_added_suppression_is_named_with_its_place_and_is_always_minor(self):
+        found = b.suppression_findings(lambda *a: self.DIFF, "base", "head")
+        self.assertEqual(len(found), 1)
+        f = found[0]
+        self.assertEqual((f["severity"], f["source"], f["file"], f["line"]), ("minor", "orchestrator", "backend/src/a.ts", "5"))
+        self.assertIn("2 lint or type-check suppression(s)", f["summary"])
+        self.assertIn("frontend/src/b.tsx:10", f["evidence"])
+
+    def test_no_suppression_means_no_finding(self):
+        self.assertEqual(b.suppression_findings(lambda *a: "+++ b/a.ts\n@@ -1 +1 @@\n+const x = 1;\n", "base", "head"), [])
+        self.assertEqual(b.suppression_findings(lambda *a: "", "base", "head"), [])
+
+    def run_with_template(self, files, labels=("template-sync",)):
+        """A real app checkout with a base commit, and a Starter Template folder holding `files`."""
+        import subprocess
+        import tempfile
+        tmp = Path(tempfile.mkdtemp())
+        starter = tmp / "factory" / "templates" / "starter"
+        for rel, text in files.items():
+            (starter / rel).parent.mkdir(parents=True, exist_ok=True)
+            (starter / rel).write_text(text)
+        app = tmp / "app"
+        origin = tmp / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+        subprocess.run(["git", "clone", "-q", str(origin), str(app)], check=True, capture_output=True)
+        (app / "eslint.config.mjs").write_text("// old\n")
+        (app / "a.txt").write_text("a\n")
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=app, check=True, capture_output=True, text=True).stdout.strip()
+        git("checkout", "-q", "-B", "main")
+        git("add", "-A")
+        git("commit", "-q", "-m", "seed")
+        git("push", "-q", "origin", "main")
+        run = object.__new__(b.BuildRun)
+        run.app_dir, run.agent_user, run.auth_header = app, None, "x"
+        return run, git, origin, tmp / "factory"
+
+    def test_the_lint_config_is_staged_after_the_base_and_pushed_only_with_the_coders_work(self):
+        from unittest import mock
+        run, git, origin, factory = self.run_with_template({"eslint.config.mjs": "// new rules\n", ".github/workflows/test-gate.yml": "name: gate\n"})
+        pushes = []
+        real_sh = b.sh
+
+        def fake_sh(cmd, cwd=None, env=None, check=True, timeout=None):
+            if cmd[:2] == ["git", "push"]:
+                pushes.append(cmd)
+                return real_sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=cwd, check=True)
+            return real_sh(cmd, cwd=cwd, env=env, check=check, timeout=timeout)
+        with mock.patch.object(b, "FACTORY_DIR", factory), mock.patch.object(b, "sh", fake_sh):
+            run.apply_template_files({"template-sync"})
+            base = run.head()
+            run.stage_template_config({"template-sync"})
+        self.assertEqual(len(pushes), 1)  # only the workflow went out at once
+        self.assertEqual(git("show", "origin/main:.github/workflows/test-gate.yml"), "name: gate")
+        self.assertEqual(git("show", "origin/main:eslint.config.mjs"), "// old")  # the config alone never reaches main
+        self.assertEqual((run.app_dir / "eslint.config.mjs").read_text(), "// new rules\n")
+        self.assertEqual(git("rev-parse", "HEAD~1"), base)  # the staged config commit sits after the run's base, so a rollback target was deployed
+        self.assertEqual(git("diff", "--name-only", base, "HEAD"), "eslint.config.mjs")
+
+    def test_without_the_template_sync_label_nothing_is_copied(self):
+        run, git, _, factory = self.run_with_template({"eslint.config.mjs": "// new\n"})
+        from unittest import mock
+        with mock.patch.object(b, "FACTORY_DIR", factory):
+            run.apply_template_files({"update-intake"})
+            run.stage_template_config({"update-intake"})
+        self.assertEqual((run.app_dir / "eslint.config.mjs").read_text(), "// old\n")
+
+
 class RoundLoop(unittest.TestCase):
     """The order of a Build Run's rounds with every stage stubbed: review the local commit, push only a clean one, wait for the deploy,
     then test it."""

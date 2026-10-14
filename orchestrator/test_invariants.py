@@ -39,7 +39,8 @@ class Invariants(unittest.TestCase):
         self.assertLessEqual(set(env), allowed)
 
     def test_inv02_a_protected_file_in_a_coder_commit_is_rejected(self):
-        files = [".github/workflows/deploy-fly.yml", "fly.toml", "fly/provision.sh", "backend/src/feature-flags.ts", "INTAKE.md"]
+        files = [".github/workflows/deploy-fly.yml", "fly.toml", "fly/provision.sh", "backend/src/feature-flags.ts", "INTAKE.md",
+                 "eslint.config.mjs", ".prettierrc.json", ".prettierignore"]
         self.assertEqual(b.protected_violations(files), files)
         self.assertEqual(b.protected_violations(["backend/src/routes/notes.ts", "flags.json"]), [])
 
@@ -544,6 +545,23 @@ class Invariants(unittest.TestCase):
         t.go(run)
         self.assertEqual(run.state.d["outcome"], "needs_human")
         self.assertEqual(run.calls.count("coder2"), 0)  # no coder round for checks nobody could run
+
+    def test_inv47_the_lint_config_is_the_orchestrators_and_a_stricter_rule_never_reaches_main_alone(self):
+        import inspect
+        for f in ("eslint.config.mjs", ".prettierrc.json", ".prettierignore"):
+            self.assertEqual(b.protected_violations([f]), [f])  # a coder commit that touches it is rejected
+            self.assertIn(f, b.TEMPLATE_FILES_HELD)
+            self.assertTrue((ROOT / "templates/starter" / f).is_file(), f)
+        self.assertEqual(set(b.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR), set(b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR) | set(b.TEMPLATE_FILES_HELD))
+        # staged after the run's base and never pushed on its own: the base is recorded before the config is staged
+        src = inspect.getsource(b.BuildRun.setup)
+        self.assertLess(src.index("apply_template_files(labels)"), src.index('self.state.d["base_sha"]'))
+        self.assertLess(src.index('self.state.d["base_sha"]'), src.index("stage_template_config(labels)"))
+        self.assertNotIn('"push"', inspect.getsource(b.BuildRun.stage_template_config) + inspect.getsource(b.BuildRun.copy_template_files))
+        found = b.suppression_findings(lambda *a: "+++ b/backend/src/a.ts\n@@ -1 +1 @@\n+// eslint-disable-next-line\n", "base", "head")
+        self.assertEqual([f["severity"] for f in found], ["minor"])
+        cases = json.loads((ROOT / "agents/lint-fixtures/cases.json").read_text())["cases"]
+        self.assertTrue(any(c["expect"] for c in cases) and any(not c["expect"] for c in cases))  # failing and passing cases exist
 
 
 class Registry(unittest.TestCase):

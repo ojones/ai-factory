@@ -47,15 +47,15 @@ def parse_name_status(text):
 
 
 def orchestrator_applied(changes):
-    """The changed paths the Build Run copies itself (b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR), which no Agent applies or reports."""
-    return [path for _, path in changes if path in b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR]
+    """The changed paths the Build Run copies itself (b.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR), which no Agent applies or reports."""
+    return [path for _, path in changes if path in b.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR]
 
 
 def split_changes(changes):
     """(applicable, protected, ignored) path lists from [(status, path)]. Files the Orchestrator applies itself are in none of them."""
     applicable, protected, ignored = [], [], []
     for status, path in changes:
-        if path in b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR:
+        if path in b.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR:
             continue
         if path in SKIP:
             ignored.append(path)

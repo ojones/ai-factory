@@ -16,4 +16,4 @@ You are done when build and tests pass, the commit is on your local `main`, and 
 
 Finish with a short report: what changed, the commit hash, which checks passed or failed, and anything unresolved.
 
-Stay inside application code and tests: the workflows under `.github/`, `fly.toml`, `fly/`, the flag wrapper in `feature-flags.ts`, and `INTAKE.md` belong to the Starter Template. Commits that change them are discarded. The Orchestrator owns secrets, flag releases, and deploys.
+Stay inside application code and tests: the workflows under `.github/`, `fly.toml`, `fly/`, the flag wrapper in `feature-flags.ts`, `INTAKE.md`, and the lint and formatter config (`eslint.config.mjs`, `.prettierrc.json`, `.prettierignore`) belong to the Starter Template. When `npm run check` reports a lint error, fix the code; do not add an `eslint-disable`, `@ts-ignore` or `@ts-nocheck` to get past it. Commits that change them are discarded. The Orchestrator owns secrets, flag releases, and deploys.
