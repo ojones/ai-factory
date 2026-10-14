@@ -22,11 +22,9 @@ import shutil
 import subprocess
 import sys
 import time
-import threading
 import traceback
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import appstate
@@ -46,7 +44,7 @@ PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to 
 PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md")
 # Protected files a template-sync Build Run copies from the Starter Template itself, before any Agent runs (an Agent may not edit
 # them, and no Agent is involved). Only files that are safe to overwrite belong here: nobody but the template ever changes them.
-TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR = (".github/dependabot.yml", ".github/workflows/test-gate.yml")
+TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR = (".github/dependabot.yml", ".github/workflows/test-gate.yml", ".github/workflows/rollback-fly.yml")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the tester calls (see api_check.py)
 UI_CHECK = str(FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser counterpart (see ui_check.py)
@@ -60,7 +58,7 @@ class BudgetExhausted(Exception):
 
 class ProviderBlocked(Exception):
     """The model provider refuses every request because the account has no balance (HTTP 402). Nothing a retry, a fix request
-    or a post-mortem Agent does can help until someone tops it up, and each of them would fail the same way."""
+    or a retrospective Agent does can help until someone tops it up, and each of them would fail the same way."""
 
 
 class NeedsHuman(Exception):
@@ -305,7 +303,20 @@ def flag_tags(issue, app):
 
 class Refused(Exception):
     """The request cannot be built here (a real secret in public text, or the planner judged it infeasible). The run ends `refused`: nothing
-    was built, so nothing is reverted, retried or filed as a failure."""
+    was built, so nothing is rolled back, retried or filed as a failure."""
+
+
+class Regression(Exception):
+    """The tester saw behaviour that was live before this change stop working (`test_impact`). finalize rolls the deploy back through CI."""
+
+
+class PipelineFix(Exception):
+    """CI or the deploy failed because of the code, and the coder has committed a fix locally. The fix goes through the reviewer
+    before it is pushed, like any other commit; `head` is that local commit."""
+
+    def __init__(self, head):
+        super().__init__(head)
+        self.head = head
 
 
 class NothingToDo(Exception):
@@ -367,6 +378,63 @@ def derive_test(doc, expected_flags):
             failures.append({"flag": slug, "check": "coverage", "passed": False, "status": "not_run",
                              "evidence": "the tester recorded no result for this flag"})
     return not failures, failures
+
+
+def test_impact(failures):
+    """What a test pass that did not pass means for production: `regression` when a check of behaviour released *before* this change
+    (`scope: existing`) failed and a helper observed it (the helper's log, not the model's word, is what makes it a regression),
+    `dark_only` when only the new, still-dark change fails, `ok` when nothing failed. A regression is the one case that takes
+    the live app back on the previous deployed version (never a git revert); a broken dark feature stays dark and is fixed forward."""
+    if not failures:
+        return "ok"
+    for r in failures:
+        if isinstance(r, dict) and r.get("scope") == "existing" and check_state(r) == "failed" and (r.get("api") or r.get("ui")):
+            return "regression"
+    return "dark_only"
+
+
+MAX_BUGS = 10
+
+
+def bugs_from(failures):
+    """The tester's failed checks as notes for the retrospective, which adds them to the story's own issue (the Update Intake that started
+    the run, so the retry sees them) and never opens a new issue for them:
+    [{kind, flag, check, evidence, repro}]. `regression` is a failed check of behaviour that was live before the change; `dark` is a failed
+    check of the new change, which stays dark. Only `failed` is a bug: a check that was blocked or not run was not seen to fail. The tester
+    only notes them; it files nothing, and nothing is taken out of git because of them."""
+    out = []
+    for r in failures:
+        if isinstance(r, dict) and check_state(r) == "failed":
+            out.append({"kind": "regression" if r.get("scope") == "existing" else "dark", "flag": str(r.get("flag") or ""),
+                        "check": " ".join(str(r.get("check") or "").split())[:200], "evidence": " ".join(str(r.get("evidence") or "").split())[:600],
+                        "repro": " ".join(str(r.get("repro") or "").split())[:300]})
+    return out[:MAX_BUGS]
+
+
+IMPROVEMENT_TARGETS = ("managed_app", "factory")
+MAX_IMPROVEMENTS = 5  # per reviewer or tester document, so one noisy model cannot flood the trackers
+
+
+def improvements_from(doc, source):
+    """The system improvements a reviewer or tester suggested: [{source, target, summary, evidence}]. `target` is `managed_app` (the app's
+    own backlog) or `factory` (prompts, template, orchestrator). Anything malformed is dropped; the Agents only suggest, the
+    retrospective decides what is filed."""
+    items = doc.get("improvements") if isinstance(doc, dict) else None
+    found = []
+    for i in items if isinstance(items, list) else []:
+        if not isinstance(i, dict) or i.get("target") not in IMPROVEMENT_TARGETS:
+            continue
+        summary = " ".join(str(i.get("summary") or "").split())
+        if summary:
+            found.append({"source": source, "target": i["target"], "summary": summary[:200],
+                          "evidence": " ".join(str(i.get("evidence") or "").split())[:500]})
+    return found[:MAX_IMPROVEMENTS]
+
+
+def merge_improvements(existing, new):
+    """`existing` plus the entries of `new` it does not already have (same target and summary, ignoring case and spacing)."""
+    seen = {(i["target"], i["summary"].lower()) for i in existing}
+    return existing + [i for i in new if not ((i["target"], i["summary"].lower()) in seen or seen.add((i["target"], i["summary"].lower())))]
 
 
 def verification_record(doc, expected_flags):
@@ -551,9 +619,14 @@ REVIEW_SCHEMA = {
                            "summary": {"type": "string"}, "evidence": {"type": "string"},
                            **{k: {"type": "string"} for k in DETAIL_FIELDS}},
             "required": ["severity", "summary", "evidence", *DETAIL_FIELDS], "additionalProperties": False}},
+        "improvements": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"target": {"type": "string", "enum": list(IMPROVEMENT_TARGETS)},
+                           "summary": {"type": "string"}, "evidence": {"type": "string"}},
+            "required": ["target", "summary", "evidence"], "additionalProperties": False}},
         "verdict": {"type": "string", "enum": ["clean", "changes_requested"]},
     },
-    "required": ["analysis", "findings", "verdict"],
+    "required": ["analysis", "findings", "improvements", "verdict"],
     "additionalProperties": False,
 }
 
@@ -648,6 +721,27 @@ def agent_command(cmd, env, user, pidfile=None):
     if pidfile:
         wrapper = ["bash", "-c", 'ps -o pgid= -p $$ | tr -d " " > "$0"; exec "$@"', str(pidfile)]
     return ["sudo", "-n", "-u", user, f"--preserve-env={names}", "env", f"PATH={env.get('PATH', '')}", *wrapper, *cmd]
+
+
+def run_isolation_probes(agent_user):
+    """Run probes as the Agent user (no model involved) and return what is wrong; see isolation_problems."""
+    marker = subprocess.Popen(["sleep", "60"], env={**os.environ, "ISOLATION_MARK": "SELF-CHECK-SECRET"}, start_new_session=True)
+    try:
+        env = {"PATH": os.environ.get("PATH", "")}
+        workspace = os.environ.get("GITHUB_WORKSPACE", "/home/runner/work")
+        probes = {"whoami": "id -un", "environ": f"cat /proc/{marker.pid}/environ 2>/dev/null | tr '\\0' '\\n'",
+                  "workspace": f"ls '{workspace}' 2>/dev/null",
+                  "env_names": "env | cut -d= -f1 | grep -E '^(FACTORY_|FLY_API|GROWTHBOOK|DEEPINFRA|PREVIEW_MASTER|GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL)' || true",
+                  "sudo": "sudo -n true 2>/dev/null && echo yes || echo no"}
+        outputs = {}
+        for name, script in probes.items():
+            p = subprocess.run(agent_command(["bash", "-c", script], env, agent_user), env=env, capture_output=True, text=True, timeout=60)
+            outputs[name] = p.stdout
+        return isolation_problems(outputs)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [f"the self-check could not run: {type(e).__name__}: {e}"]
+    finally:
+        marker.kill()
 
 
 def kill_agent(proc, user, pidfile):
@@ -802,10 +896,8 @@ class Budget:
         self.admin_key, self.cap, self.ttl = admin_key, cap, ttl
         self.tokens = {}  # jwt -> last read spending_current
 
-    def mint(self, model, share=1.0):
-        """`share` < 1 splits what is left between invocations that run at the same time, so
-        together they cannot spend past the cap."""
-        remaining = round((self.cap - self.spent_known()) * share, 6)
+    def mint(self, model):
+        remaining = round(self.cap - self.spent_known(), 6)
         if remaining <= 0:
             raise BudgetExhausted(f"${self.spent_known():.4f} spent against a ${self.cap:.2f} cap")
         status, r = http("POST", f"{DEEPINFRA}/v1/scoped-jwt", self.admin_key,
@@ -888,7 +980,6 @@ class BuildRun:
         # limits.agent_isolation: user -> the workflow created this unprivileged account and put the work directories where only it
         # and the runner can reach them; every Agent then runs as it.
         self.agent_user = e.get("AGENT_USER") or None
-        self.lock = threading.Lock()  # guards the meter, the state and log output across parallel Agents
         self.preview = None
         self.build_kind = "first build"  # becomes "update" in setup() when the base commit has history
         self.auth_header = "Authorization: Basic " + base64.b64encode(
@@ -915,10 +1006,9 @@ class BuildRun:
             raise NeedsHuman("time_limit", f"the {self.lim['time_limit_minutes']}-minute time limit was reached")
 
     def record_spend(self, jwt):
-        with self.lock:
-            self.state.d["spent_usd"] = round(self.meter.refresh(jwt), 6)
-            self.state.save()
-            return self.state.d["spent_usd"]
+        self.state.d["spent_usd"] = round(self.meter.refresh(jwt), 6)
+        self.state.save()
+        return self.state.d["spent_usd"]
 
     # --- setup
 
@@ -1077,24 +1167,7 @@ class BuildRun:
         log(f"Agent isolation: Agents run as {self.agent_user}; self-check passed")
 
     def isolation_self_check(self):
-        """Run probes as the Agent user (no model involved) and return what is wrong; see isolation_problems."""
-        marker = subprocess.Popen(["sleep", "60"], env={**os.environ, "ISOLATION_MARK": "SELF-CHECK-SECRET"}, start_new_session=True)
-        try:
-            env = {"PATH": os.environ.get("PATH", "")}
-            workspace = os.environ.get("GITHUB_WORKSPACE", "/home/runner/work")
-            probes = {"whoami": "id -un", "environ": f"cat /proc/{marker.pid}/environ 2>/dev/null | tr '\\0' '\\n'",
-                      "workspace": f"ls '{workspace}' 2>/dev/null",
-                      "env_names": "env | cut -d= -f1 | grep -E '^(FACTORY_|FLY_API|GROWTHBOOK|DEEPINFRA|PREVIEW_MASTER|GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL)' || true",
-                      "sudo": "sudo -n true 2>/dev/null && echo yes || echo no"}
-            outputs = {}
-            for name, script in probes.items():
-                p = subprocess.run(agent_command(["bash", "-c", script], env, self.agent_user), env=env, capture_output=True, text=True, timeout=60)
-                outputs[name] = p.stdout
-            return isolation_problems(outputs)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            return [f"the self-check could not run: {type(e).__name__}: {e}"]
-        finally:
-            marker.kill()
+        return run_isolation_probes(self.agent_user)
 
     def share_with_agent(self, path):
         """Make `path` readable and writable by both the Agent user and this process (what was just cloned or installed was created
@@ -1177,7 +1250,7 @@ class BuildRun:
         env.update(extra or {})
         return env
 
-    def invoke(self, role, label, values, extra_env=None, cwd=None, home=None, share=1.0, note=None):
+    def invoke(self, role, label, values, extra_env=None, cwd=None, home=None, note=None):
         """One headless OpenHands invocation. Safe to call from several threads at once when each
         has its own `home` (OpenHands keeps its conversations there) and `cwd`.
         Returns (exit status, 'timeout' if killed; cost; token usage)."""
@@ -1188,9 +1261,8 @@ class BuildRun:
         if note:
             prompt += (f"\n\nYour previous attempt was rejected: {note}. Do the work again as needed and write the file again. "
                        "Build the JSON with a short Python script and json.dump, not by typing it by hand.")
-        with self.lock:
-            before = self.state.d["spent_usd"]
-            jwt = self.meter.mint(model, share)
+        before = self.state.d["spent_usd"]
+        jwt = self.meter.mint(model)
         if self.agent_user and not home:
             home = self.work / "home-agent"  # the runner's own home is closed to the Agent user
         if home:
@@ -1203,19 +1275,15 @@ class BuildRun:
                          float(self.lim.get("agent_stall_minutes", 0)) * 60, user=self.agent_user,
                          pidfile=self.work / f"pgid-{role}-{label}.txt")
         if rc == "stall":
-            with self.lock:
-                log(f"{role} ({label}): no output for {self.lim.get('agent_stall_minutes')} minutes; killed it so the attempt can restart")
+            log(f"{role} ({label}): no output for {self.lim.get('agent_stall_minutes')} minutes; killed it so the attempt can restart")
         after = self.record_spend(jwt)
         blocked = scan_for_provider_block(jsonl)
         if blocked:  # the account ran dry (possibly mid-run): stop everything, do not count it as the Agent's failure
-            with self.lock:
-                log(f"{role} ({label}): {blocked}")
+            log(f"{role} ({label}): {blocked}")
             raise ProviderBlocked(blocked)
         usage = self.collect_usage(role, label, known, home)
         if usage:
             usage["seconds"] = round(time.time() - began, 1)  # wall time; minus llm_seconds is tool and wait time
-        # Spend is read from the shared total, so with two Agents running its delta would include
-        # the other's; the JWT's own spend is this invocation's exact cost.
         cost = self.meter.tokens[jwt]
         lines = [f"::group::{role} ({label})",
                  f"{role} ({label}) exited {rc}; cost ${cost:.4f}; run total ${after:.4f} of ${self.cap:.2f}", "::endgroup::"]
@@ -1224,9 +1292,8 @@ class BuildRun:
             lines.insert(2, f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens; "
                          f"{usage['seconds']:.0f}s wall, {usage['llm_seconds']:.0f}s in the model"
                          + (f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""))
-        with self.lock:  # one block, so parallel Agents' groups do not interleave
-            for line in lines:
-                log(line)
+        for line in lines:
+            log(line)
         return rc, cost, usage
 
     def run_agent(self, role, label, values, extra_env=None):
@@ -1257,14 +1324,14 @@ class BuildRun:
         usage, self._usage = self._usage, None
         return usage
 
-    def agent_json(self, role, label, values, path, extra_env=None, check=None, cwd=None, home=None, share=1.0):
+    def agent_json(self, role, label, values, path, extra_env=None, check=None, cwd=None, home=None):
         """Run a role that writes a JSON file; one retry if the file is missing or malformed. If the Agent wrote the file under its working
         directory instead of the path it was given (it has done so, twice, with the right content), that copy is used.
         Returns (document, cost, token usage)."""
         total_cost, usage, note = 0.0, None, None
         for attempt in (1, 2):
             Path(path).unlink(missing_ok=True)
-            _, cost, used = self.invoke(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env, cwd, home, share, note=note)
+            _, cost, used = self.invoke(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env, cwd, home, note=note)
             total_cost += cost
             usage = merge_usage(usage, used)
             adopt_misplaced_file(path, cwd)
@@ -1288,6 +1355,8 @@ class BuildRun:
     # --- coder + push
 
     def coder(self, label, task, findings_path):
+        """Run the coder until it leaves an acceptable commit (several attempts if the Orchestrator rejects one). It commits only: the
+        reviewer sees the commit before it is pushed (`push`)."""
         task0, attempts = task, 0
         base = self.head()
         while True:
@@ -1320,11 +1389,17 @@ class BuildRun:
                 task = f"{problem}\n\nOriginal task:\n{task0}"
                 continue
             self.check_limits()
-            sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
-            self.state.d["head_sha"] = head
-            self.state.d["commits"].append(head)
-            self.state.stage("Coder", "coder", label, cost, f"pushed {head[:8]}", self.take_usage())
+            self.state.stage("Coder", "coder", label, cost, f"committed {head[:8]}", self.take_usage())
             return head
+
+    def push(self, head):
+        """Push the reviewed commit to `main` (which deploys it, dark if it is flagged). Only the Orchestrator pushes, and only code the
+        reviewer has passed."""
+        self.check_limits()
+        sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
+        self.state.d["head_sha"] = head
+        self.state.d["commits"].append(head)
+        self.state.stage("Push", "-", "-", 0, f"pushed {head[:8]}")
 
     # --- CI / deploy
 
@@ -1379,8 +1454,9 @@ class BuildRun:
         return ctx
 
     def pipeline(self, sha):
-        """Wait for Test Gate → Build → Deploy on sha, handling failures; returns the final green SHA."""
-        retries, fixes, n = self.lim["pipeline_retries"], 0, 0
+        """Wait for Test Gate → Build → Deploy on sha, handling failures; returns the green SHA. A failure caused by the code raises
+        PipelineFix with the coder's local fix, which the caller reviews and pushes."""
+        retries, n = self.lim["pipeline_retries"], 0
         while True:
             failed = None
             for name, wf in PIPELINE:
@@ -1409,15 +1485,14 @@ class BuildRun:
                     self.gh(["run", "rerun", str(failed[1]["databaseId"]), "--repo", self.app_repo, "--failed"], check=False)
                 time.sleep(20)
                 continue
-            if cat == "code" and diag.get("fix_request") and fixes < self.lim["pipeline_fix_attempts"]:
-                fixes += 1
-                sha = self.coder(f"fix{fixes}", diag["fix_request"], str(self.work / "findings-none.json"))
-                continue
+            if cat == "code" and diag.get("fix_request") and getattr(self, "pipeline_fixes", 0) < self.lim["pipeline_fix_attempts"]:
+                self.pipeline_fixes = getattr(self, "pipeline_fixes", 0) + 1
+                raise PipelineFix(self.coder(f"fix{self.pipeline_fixes}", diag["fix_request"], str(self.work / "findings-none.json")))
             raise NeedsHuman("pipeline", f"{failed[0]} failed ({cat}): {diag.get('summary', '')[:500]}")
 
     # --- review + test
 
-    def fast_review(self, base, head, rnd, share):
+    def fast_review(self, base, head, rnd):
         """The reviewer as one model call over a prompt the Orchestrator assembles (no tools, no
         exploring). Returns (document, cost, usage) like agent_json, or raises ContextTooLarge or
         FastReviewFailed, in which case the caller uses the exploring Agent."""
@@ -1427,8 +1502,7 @@ class BuildRun:
                                        self.lim.get("review_context_max_chars", 200000),
                                        spec=self.spec if getattr(self, "update_intake", False) else None)
         system = render(load_prompt(role["fast_prompt"]), {"app_name": self.app, "build_kind": self.build_kind, "base_sha": base[:8], "head_sha": head[:8]})
-        with self.lock:
-            jwt = self.meter.mint(role["model"], share)
+        jwt = self.meter.mint(role["model"])
         start = time.time()
         try:
             doc, u = single_call_review(self.cfg["provider"]["base_url"], jwt, role["model"], system, context)
@@ -1439,111 +1513,94 @@ class BuildRun:
         prompt_tokens = u.get("prompt_tokens", 0)
         usage = {"calls": 1, "condenser_calls": 0, "peak_context": prompt_tokens, "last_context": prompt_tokens,
                  "prompt_tokens": prompt_tokens, "completion_tokens": u.get("completion_tokens", 0), "cache_read_tokens": 0}
-        with self.lock:
-            log(f"reviewer (r{rnd}) single call: {time.time() - start:.0f}s, {prompt_tokens:,} prompt and "
-                f"{usage['completion_tokens']:,} output tokens, cost ${cost:.4f}")
+        log(f"reviewer (r{rnd}) single call: {time.time() - start:.0f}s, {prompt_tokens:,} prompt and "
+            f"{usage['completion_tokens']:,} output tokens, cost ${cost:.4f}")
         return doc, cost, usage
 
-    def review_and_test(self, base, head, rnd):
-        """The reviewer reads the code and the tester drives the deployed app (every round: a first
-        build without flags is tested against the Intake); neither needs the other's result, so they
-        run at the same time. Each gets half of what is left of the
-        budget, its own HOME (OpenHands keeps its conversations there) and, for the tester, its
-        own checkout of `head`."""
-        d = self.state.d
-        d["review_passes"] = rnd
-        self.restore_tree()
+    def run_flags(self, base, head):
+        """The flags this change releases: new in `flags.json`, plus a retried story's own flag, which is already in the manifest (the failed
+        attempt's code stayed, dark) but is tested and released again like a new one."""
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
         flags = new_flag_slugs(base_flags, head_flags)
-        # A retried story keeps its flag: if it is already in flags.json (the failed attempt's code stayed, dark) it is not "new", but it is
-        # tested and released again like one.
         flags += [s for s in self.reuse_flags if s in manifest_slugs(head_flags) and s not in flags]
         self.state.d["flags"] = list(flags)
-        share = 0.5
+        return flags
+
+    def note_improvements(self, doc, source):
+        """Keep the improvements an Agent suggested for the Report; the retrospective files them."""
+        self.state.d["improvements"] = merge_improvements(self.state.d.get("improvements") or [], improvements_from(doc, source))
+
+    def review_before_push(self, base, head, rnd):
+        """The reviewer reads the local commit before anything is pushed or deployed, so code it blocks never reaches `main`. A single
+        model call over a prompt the Orchestrator assembles, or the exploring Agent when the change is too big or the call fails.
+        Returns (clean, blocking findings, minor findings)."""
+        self.state.d["review_passes"] = rnd
+        self.restore_tree()
+        role_mode = self.cfg["roles"]["reviewer"].get("mode", "agent")
+        doc = None
+        if role_mode == "single_call":
+            try:
+                doc, cost, usage = self.fast_review(base, head, rnd)
+            except (ContextTooLarge, FastReviewFailed) as e:
+                log(f"Single-call review not possible ({e}); using the exploring reviewer.")
+        if doc is None:
+            doc, cost, usage = self.agent_json(
+                "reviewer", f"r{rnd}", {"base_sha": base, "head_sha": head, "verdict_path": self.work / f"verdict-{rnd}.json"},
+                self.work / f"verdict-{rnd}.json", check=lambda d: derive_review(d) and None,
+                home=self.work / f"home-reviewer-{rnd}")
+        self.restore_tree()
+        clean, blocking, minor = derive_review(doc)
+        self.note_improvements(doc, "reviewer")
+        self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking", usage)
+        return clean, blocking, minor
+
+    def test_deployed(self, base, head, rnd, flags):
+        """The tester drives the deployed app (dark behind its flag, via the Preview Token; a first build without flags is tested against
+        the Intake) and says what a failure means: `regression`, `dark_only` or `ok` (`test_impact`). It has its own HOME for OpenHands
+        and its own checkout of `head`. Returns (passed, failures, impact)."""
         tester_tree = self.work / f"tester-tree-{rnd}"
         changed_files = self.git("diff", "--name-only", base, head, check=False).stdout.split()
         want_ui = bool(self.lim.get("ui_check", False)) and wants_ui_check(changed_files, getattr(self, "spec", None) or getattr(self, "task", ""))
-        role_mode = self.cfg["roles"]["reviewer"].get("mode", "agent")
-
-        def review():
-            if role_mode == "single_call":
-                try:
-                    return self.fast_review(base, head, rnd, share)
-                except (ContextTooLarge, FastReviewFailed) as e:
-                    with self.lock:
-                        log(f"Single-call review not possible ({e}); using the exploring reviewer.")
-            return self.agent_json(
-                "reviewer", f"r{rnd}", {"base_sha": base, "head_sha": head, "verdict_path": self.work / f"verdict-{rnd}.json"},
-                self.work / f"verdict-{rnd}.json", check=lambda doc: derive_review(doc) and None,
-                home=self.work / f"home-reviewer-{rnd}", share=share)
-
-        def test():
-            self.git("worktree", "add", "--detach", str(tester_tree), head)
+        self.git("worktree", "add", "--detach", str(tester_tree), head)
+        try:
             try:
-                try:
-                    return self.agent_json(
-                        "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
-                                              "report_path": self.work / f"test-report-{rnd}.json",
-                                              "previous_report": previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK),
-                                              "ui_section": ui_section(want_ui, getattr(self, "ui_check_path", UI_CHECK))},
-                        self.work / f"test-report-{rnd}.json",
-                        {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
-                         "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl"), "UI_CHECK_BASE": f"https://{self.app}.fly.dev",
-                         "UI_CHECK_LOG": str(self.work / f"ui-check-{rnd}.jsonl"), "UI_CHECK_DIR": str(self.work),
-                         **({"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {})},
-                        check=lambda doc: derive_test(doc, flags) and None,
-                        cwd=tester_tree, home=self.work / f"home-tester-{rnd}", share=share)
-                except NeedsHuman:
-                    # No usable report, but if a helper saw something fail that is a finding the coder can act on: use it
-                    # instead of stopping for a person. With nothing failed there is nothing to act on, so it stops as before.
-                    doc = report_from_helper_failures(load_api_results(self.work / f"api-check-{rnd}.jsonl"),
-                                                      load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
-                    if doc is None:
-                        raise
-                    with self.lock:
-                        log("The tester wrote no usable report; using what its helpers saw fail instead.")
-                    return doc, 0.0, None
-            finally:
-                self.git("worktree", "remove", "--force", str(tester_tree), check=False)
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            review_job = pool.submit(review)
-            test_job = pool.submit(test)
-        # The pool has waited for both. Collect the reviewer first, then the tester, so a failure
-        # in one still lets the other's cost reach the state.
-        errors = []
-        try:
-            reviewer_doc, cost, usage = review_job.result()
-            self.restore_tree()
-            clean, blocking, minor = derive_review(reviewer_doc)
-            self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking", usage)
-        except Exception as e:  # noqa: BLE001 - re-raised below, after the tester is recorded
-            errors.append(e)
-        test_failures, tpassed = [], True
-        try:
-            tdoc, cost, usage = test_job.result()
-            tdoc = reconcile_api_checks(tdoc, load_api_results(self.work / f"api-check-{rnd}.jsonl"))
-            tdoc = reconcile_ui_checks(tdoc, load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
-            try:  # so the next round's tester sees the failures the helper added; best effort, never a reason to stop the run
-                (self.work / f"test-report-{rnd}.json").write_text(json.dumps(tdoc, indent=2))
-            except OSError as e:
-                log(f"could not rewrite the reconciled test report: {e}")
-            tpassed, test_failures = derive_test(tdoc, flags)
-            self.state.d["verification"] = {"round": rnd, "sha": head, **verification_record(tdoc, flags)}
-            self.state.stage("Test", "tester", rnd, cost, "passed" if tpassed else f"{len(test_failures)} failed", usage)
-        except Exception as e:  # noqa: BLE001
-            errors.append(e)
-        if errors:
-            raise errors[0]
-        all_blocking = (
-            [finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in blocking]
-            + [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in test_failures])
-        self.state.d["blocking"] = all_blocking
-        self.state.save()
-        findings = {"round": rnd, "blocking": all_blocking,
-                    "minor": [finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in minor]}
-        return clean, tpassed, flags, findings
+                tdoc, cost, usage = self.agent_json(
+                    "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
+                                          "report_path": self.work / f"test-report-{rnd}.json",
+                                          "previous_report": previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK),
+                                          "ui_section": ui_section(want_ui, getattr(self, "ui_check_path", UI_CHECK))},
+                    self.work / f"test-report-{rnd}.json",
+                    {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
+                     "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl"), "UI_CHECK_BASE": f"https://{self.app}.fly.dev",
+                     "UI_CHECK_LOG": str(self.work / f"ui-check-{rnd}.jsonl"), "UI_CHECK_DIR": str(self.work),
+                     **({"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {})},
+                    check=lambda doc: derive_test(doc, flags) and None,
+                    cwd=tester_tree, home=self.work / f"home-tester-{rnd}")
+            except NeedsHuman:
+                # No usable report, but if a helper saw something fail that is a finding the coder can act on: use it
+                # instead of stopping for a person. With nothing failed there is nothing to act on, so it stops as before.
+                tdoc = report_from_helper_failures(load_api_results(self.work / f"api-check-{rnd}.jsonl"),
+                                                   load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
+                if tdoc is None:
+                    raise
+                log("The tester wrote no usable report; using what its helpers saw fail instead.")
+                cost, usage = 0.0, None
+        finally:
+            self.git("worktree", "remove", "--force", str(tester_tree), check=False)
+        tdoc = reconcile_api_checks(tdoc, load_api_results(self.work / f"api-check-{rnd}.jsonl"))
+        tdoc = reconcile_ui_checks(tdoc, load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
+        try:  # so the next round's tester sees the failures the helper added; best effort, never a reason to stop the run
+            (self.work / f"test-report-{rnd}.json").write_text(json.dumps(tdoc, indent=2))
+        except OSError as e:
+            log(f"could not rewrite the reconciled test report: {e}")
+        passed, failures = derive_test(tdoc, flags)
+        impact = test_impact(failures)
+        self.state.d["bugs"] = bugs_from(failures)  # this pass's failures: a bug fixed by the next round is no longer a bug
+        self.note_improvements(tdoc, "tester")
+        self.state.d["verification"] = {"round": rnd, "sha": head, **verification_record(tdoc, flags)}
+        self.state.stage("Test", "tester", rnd, cost, "passed" if passed else f"{len(failures)} failed ({impact})", usage)
+        return passed, failures, impact
 
     def gb(self, method, path, body=None):
         return http(method, f"{GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
@@ -1573,7 +1630,7 @@ class BuildRun:
 
     def archive_retired_flags(self, base, head):
         """Flags this run removed from flags.json are archived in GrowthBook (best effort), so a retired flag leaves nothing behind.
-        Only when the run ended well: an outcome that is not OK has been reverted, and its flags are still in use."""
+        Only when the run ended well: an outcome that is not OK did not finish, and its flags are still in use."""
         if self.state.d.get("outcome") not in OK_OUTCOMES:
             return
         try:
@@ -1772,10 +1829,37 @@ class BuildRun:
                 self.state.d["retiring"] = list(self.retiring)
             head = self.coder("1", task, str(findings_path))
             for rnd in range(1, self.lim["review_rounds"] + 1):
-                head = self.pipeline(head)
-                self.state.d["head_sha"] = head
-                clean, tpassed, flags, findings = self.review_and_test(base, head, rnd)
-                # Kept on a clean pass too: the minor findings of a run that ships are what the post-mortem learns from.
+                # The reviewer sees the commit before it is pushed, so code it blocks never reaches `main`; only reviewed code is pushed,
+                # and it deploys dark behind its flag until the tester has passed it.
+                while True:
+                    clean, blocking, minor = self.review_before_push(base, head, rnd)
+                    flags = self.run_flags(base, head)
+                    if not clean:
+                        break
+                    self.push(head)
+                    try:
+                        head = self.pipeline(head)
+                    except PipelineFix as fix:
+                        head = fix.head
+                        continue
+                    self.state.d["head_sha"] = head
+                    break
+                tpassed, test_failures = False, []
+                if clean:
+                    tpassed, test_failures, impact = self.test_deployed(base, head, rnd, flags)
+                    if impact == "regression":
+                        broken = [r for r in test_failures if isinstance(r, dict) and r.get("scope") == "existing"]
+                        self.state.d["blocking"] = [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in broken]
+                        raise Regression("the tester found behaviour that was live before this change no longer working: "
+                                         + "; ".join(f"{r.get('check')}" for r in broken[:3]))
+                all_blocking = (
+                    [finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in blocking]
+                    + [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in test_failures])
+                self.state.d["blocking"] = all_blocking
+                self.state.save()
+                # Kept on a clean pass too: the minor findings of a run that ships are what the retrospective learns from.
+                findings = {"round": rnd, "blocking": all_blocking,
+                            "minor": [finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in minor]}
                 findings_path = self.work / f"findings-{rnd}.json"
                 findings_path.write_text(json.dumps(findings, indent=2))
                 self.record_round(rnd, head, findings["blocking"])
@@ -1801,6 +1885,8 @@ class BuildRun:
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
         except NothingToDo as e:
             self.state.d.update(outcome="nothing_to_release", message=str(e))
+        except Regression as e:
+            self.state.d.update(outcome="regression", message=str(e))
         except Refused as e:
             self.state.d.update(outcome="refused", message=str(e))
         except ProviderBlocked as e:
@@ -1828,6 +1914,7 @@ OUTCOME_TITLES = {
     "refused": "Build Run: request refused (the Factory cannot build it)",
     "stuck": "Build Run: needs human (no progress across rounds)",
     "watchdog_disabled": "Build Run: release switched off by the watchdog",
+    "regression": "Build Run: regression found by the tester (deploy rolled back)",
     "needs_human": "Build Run: needs human",
     "crash": "Build Run: crash",
     "running": "Build Run: crash (it ended without finishing)",
@@ -1860,10 +1947,11 @@ def render_summary(d):
         verdict = "over the goal" if top > goal else "under the goal"
         lines += ["", f"**Peak context this run**: {top:,} tokens ({who}), {verdict} of {goal:,}. "
                   "A peak is the largest prompt in a single LLM call, i.e. how big one Agent's context got."]
-    rev = d.get("revert")
+    rev = d.get("rollback")
     if rev and rev.get("status") != "skipped":
-        lines += ["", "**Revert**: " + (f"`main` restored to `{str(rev.get('restored', ''))[:8]}` in `{str(rev.get('sha', ''))[:8]}`; deploy {rev.get('deploy', 'not checked')}."
-                                      if rev["status"] == "reverted" else f"{rev['status']}: {rev.get('reason', '')}")]
+        lines += ["", "**Rollback**: " + (f"the live app was redeployed from `{str(rev.get('restored', ''))[:8]}` by the app's CI; deploy {rev.get('deploy', 'not checked')}. "
+                                       "The run's commits stay in `main` and are fixed forward."
+                                       if rev["status"] == "rolled_back" else f"{rev['status']}: {rev.get('reason', '')}")]
     ver = d.get("verification")
     if ver:
         c = ver["counts"]
@@ -1946,7 +2034,7 @@ def update_state_issues(d, factory_repo, pat, factory_token):
         print(f"could not update the state issues: {type(e).__name__}", flush=True)
 
 
-NEAR_CAP = 0.9  # an Agent is given only a share of what is left, so a run runs dry a little before the cap itself
+NEAR_CAP = 0.9  # spend at or above this share of the cap makes an Agent's failure a budget ending
 
 
 BLOCKED_MESSAGE = ("The model provider refused the request because the account has no balance (HTTP 402, \"You need positive balance to "
@@ -2014,91 +2102,103 @@ def ending_for(kind, message, spent, cap):
     return "needs_human", message
 
 
-def revert_decision(d, mode, flags_added=()):
-    """(revert, reason). A Build Run that ends badly leaves the commits it pushed on `main`, and every push deploys.
-    Flagged commits are dark, but unflagged ones (a retirement, a refactor, a first build) are live. So a bad ending
-    puts `main` back where the run found it. `mode` is `all`, `unflagged` (only runs that added no flag) or `off`."""
+def rollback_decision(d, enabled=True):
+    """(rollback, reason). Code is fixed forward, never taken out of git: nothing is reverted, and `main` keeps every commit. A change that
+    only breaks itself is dark (its flag is never released) and a later run fixes it. The one exception is a regression, where the tester
+    saw behaviour that was live before the run stop working: the live app is then put back on the previous deployed version by the app's
+    own CI (`rollback-fly.yml` redeploys that version's image), because the broken behaviour is live for everyone. The commits stay."""
     outcome, commits = d.get("outcome"), d.get("commits") or []
-    if mode == "off":
-        return False, "reverting failed runs is switched off"
-    if outcome in OK_OUTCOMES:
-        return False, "the run ended well"
-    if outcome == "watchdog_disabled" or (d.get("release") or {}).get("released"):
-        return False, "contained: the flags it released are switched off, or it released and its state was not saved"
+    if outcome != "regression":
+        return False, "only a regression rolls the deploy back; every other ending is fixed forward"
+    if not enabled:
+        return False, "rolling back regressions is switched off"
     if not commits:
-        return False, "the run pushed nothing"
-    if not d.get("base_sha") or not d.get("head_sha") or d["base_sha"] == d["head_sha"]:
-        return False, "there is no earlier state to return to"
-    if mode == "unflagged" and flags_added:
-        return False, "flagged: its code is dark until released"
+        return False, "the run pushed nothing, so nothing new is deployed"
+    if not d.get("base_sha"):
+        return False, "there is no earlier deployed version to return to"
     return True, ""
 
 
-def revert_main_to_base(d, app_dir, git_auth=None, run_id="0"):
-    """Put `main` back to the run's starting tree with one new commit on top (history is kept, so there are no conflicts to
-    resolve and nothing is force-pushed). Skips, and says why, if `main` has moved on since the run's last push: someone
-    else's commit is there and is not ours to overwrite. Returns {"status": reverted|skipped|failed, ...}."""
-    base, head = d["base_sha"], d["head_sha"]
-    git = lambda *a, check=True: sh(["git", *a], cwd=app_dir, env={**os.environ, **(git_auth or {})}, check=check)
+ROLLBACK_WORKFLOW = "rollback-fly.yml"
+
+
+def run_ids(app_repo, env):
+    out = sh(["gh", "run", "list", "--repo", app_repo, "--workflow", ROLLBACK_WORKFLOW, "--limit", "10", "--json", "databaseId,status,conclusion"],
+             env=env, check=False).stdout
     try:
-        git("fetch", "-q", "origin", "main")
-        remote = git("rev-parse", "origin/main").stdout.strip()
-        if remote != head:
-            return {"status": "skipped", "reason": f"main is at {remote[:8]}, not at the run's last push {head[:8]}; not reverting over it"}
-        git("reset", "-q", "--hard")
-        git("clean", "-fdq")
-        git("checkout", "-q", "-B", f"revert-{run_id}", "origin/main")
-        git("read-tree", "--reset", "-u", base)
-        if git("diff", "--cached", "--quiet", "HEAD", check=False).returncode == 0:
-            return {"status": "skipped", "reason": "main already has the starting tree"}
-        git("-c", "user.name=ai-factory-orchestrator", "-c", "user.email=orchestrator@ai-factory.local", "commit", "-q", "-m",
-            f"Revert Build Run {run_id} ({d.get('outcome')}): restore {base[:8]}\n\n{d.get('message') or ''}\n\n"
-            f"The run pushed {len(d.get('commits') or [])} commit(s) and did not reach a clean pass, so its changes were taken back out. "
-            "They remain in the history.")
-        git("push", "-q", "origin", "HEAD:main")
-        return {"status": "reverted", "sha": git("rev-parse", "HEAD").stdout.strip(), "restored": base}
-    except Exception as e:  # noqa: BLE001 - reported, never raised: finalize must still write its Report
-        return {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[:300]}"}
+        return {r["databaseId"]: r for r in json.loads(out or "[]")}
+    except (ValueError, KeyError, TypeError):
+        return {}
 
 
-def wait_for_revert_deploy(app, app_repo, sha, pat, minutes):
-    """After a revert push: wait for the app's deploy of that commit and for /api/health. 'healthy', 'deploy_failed' or 'timeout'."""
+def rollback_deploy(d, app, app_repo, pat, minutes):
+    """Redeploy the previous version through the app's own CI: dispatch its `rollback-fly.yml` for the run's starting commit (whose image
+    the earlier deploy left in Fly's registry), wait for that run, then for /api/health. Nothing is committed. Returns
+    {"status": rolled_back|failed, "restored": sha, "deploy": healthy|deploy_failed|timeout, ...}; never raises."""
+    base = d["base_sha"]
     env = {**os.environ, "GH_TOKEN": pat}
-    end = time.time() + minutes * 60
-    while time.time() < end:
-        out = sh(["gh", "run", "list", "--repo", app_repo, "--workflow", "deploy-fly.yml", "--limit", "10", "--json",
-                  "headSha,status,conclusion"], env=env, check=False).stdout
-        runs = [r for r in json.loads(out or "[]") if r.get("headSha") == sha and r.get("status") == "completed"]
-        if any(r.get("conclusion") == "success" for r in runs):
-            status, _ = http("GET", f"https://{app}.fly.dev/api/health", timeout=20)
-            if status == 200:
-                return "healthy"
-        elif runs:
-            return "deploy_failed"
-        time.sleep(20)
-    return "timeout"
+    try:
+        before = set(run_ids(app_repo, env))
+        started = sh(["gh", "workflow", "run", ROLLBACK_WORKFLOW, "--repo", app_repo, "-f", f"sha={base}"], env=env, check=False)
+        if started.returncode != 0:
+            return {"status": "failed", "restored": base, "reason": f"could not start {ROLLBACK_WORKFLOW} in {app_repo} (an app built before it "
+                    f"existed gets it from template sync): {(started.stderr or started.stdout or '').strip()[:200]}"}
+        end = time.time() + minutes * 60
+        while time.time() < end:
+            time.sleep(10)
+            new = [r for i, r in run_ids(app_repo, env).items() if i not in before]
+            done = [r for r in new if r.get("status") == "completed"]
+            if done and all(r.get("conclusion") == "success" for r in done):
+                for _ in range(12):
+                    status, _ = http("GET", f"https://{app}.fly.dev/api/health", timeout=20)
+                    if status == 200:
+                        return {"status": "rolled_back", "restored": base, "deploy": "healthy"}
+                    time.sleep(5)
+                return {"status": "failed", "restored": base, "deploy": "unhealthy", "reason": "the rollback deployed but /api/health did not answer 200"}
+            if done:
+                return {"status": "failed", "restored": base, "deploy": "deploy_failed", "reason": "the rollback workflow failed"}
+        return {"status": "failed", "restored": base, "deploy": "timeout", "reason": f"the rollback did not finish within {minutes:g} minutes"}
+    except Exception as e:  # noqa: BLE001 - reported, never raised: finalize must still write its Report
+        return {"status": "failed", "restored": base, "reason": f"{type(e).__name__}: {str(e)[:300]}"}
 
 
-def revert_failed_run(d, app_dir, pat, lim):
-    """The finalize step: decide, revert, wait for the deploy, and record the outcome in the Report as d["revert"]."""
-    mode = str(lim.get("revert_failed_runs", "all"))
-    flags_added = []
-    if d.get("base_sha") and d.get("head_sha") and Path(app_dir).is_dir():
-        git = lambda *a: sh(["git", *a], cwd=app_dir, check=False).stdout
-        flags_added = new_flag_slugs(git("show", f"{d['base_sha']}:flags.json"), git("show", f"{d['head_sha']}:flags.json"))
-    go, why = revert_decision(d, mode, flags_added)
+def rollback_failed_run(d, pat, lim):
+    """The finalize step: decide, and for a regression roll the deploy back through CI; the outcome goes in the Report as d["rollback"]."""
+    go, why = rollback_decision(d, bool(lim.get("rollback_regressions", True)))
     if not go:
-        d["revert"] = {"status": "skipped", "reason": why, "mode": mode}
+        d["rollback"] = {"status": "skipped", "reason": why}
         return
-    if not Path(app_dir).is_dir():
-        d["revert"] = {"status": "failed", "reason": "the app checkout is not there", "mode": mode}
-        return
-    auth = git_auth_env("Authorization: Basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode())
-    d["revert"] = {**revert_main_to_base(d, app_dir, auth, os.environ.get("GITHUB_RUN_ID", "0")), "mode": mode}
-    if d["revert"]["status"] == "reverted":
-        owner = os.environ["GITHUB_REPOSITORY"].split("/")[0]
-        d["revert"]["deploy"] = wait_for_revert_deploy(d["app"], f"{owner}/{d['app']}", d["revert"]["sha"], pat,
-                                                       float(lim.get("revert_deploy_timeout_minutes", 15)))
+    owner = os.environ["GITHUB_REPOSITORY"].split("/")[0]
+    d["rollback"] = rollback_deploy(d, d["app"], f"{owner}/{d['app']}", pat, float(lim.get("rollback_timeout_minutes", 15)))
+
+
+DARK_BROKEN = "dark-broken"
+
+
+def is_dark_broken(d):
+    """Whether the run left a dark feature behind: it pushed code behind a flag and ended without releasing it (or with the watchdog
+    having switched the release off, or the tester having found a regression and the deploy been rolled back). The code stays in `main`,
+    behind a flag that is off, and is fixed forward. The flag is the identity of a dark feature, and its
+    story issue (`flag:<slug>`) carries this label; `flags.json` does not, because every edit to it deploys."""
+    return bool(d.get("flags") and d.get("commits")) and d.get("outcome") not in OK_OUTCOMES + ("refused", "provider_blocked")
+
+
+def label_dark_feature(d, repo, token):
+    """Mark the story issue `dark-broken` when the run left a dark feature, and take the mark off when the story is released at last.
+    Best effort: a label that cannot be set never changes the run's ending."""
+    number = d.get("issue_number")
+    try:
+        env = {**os.environ, "GH_TOKEN": token}
+        if is_dark_broken(d):
+            update_intake.ensure_label(repo, DARK_BROKEN, token, "b60205", "A dark feature that failed its checks; fixed forward behind its flag")
+            labels = [DARK_BROKEN] + [l for l in (flag_label(slug) for slug in d["flags"]) if l]  # the story names its flag, released or not
+            for name in labels[1:]:
+                update_intake.ensure_label(repo, name, token, "0e8a16", "The feature flag this story's change is behind")
+            sh(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", ",".join(labels)], env=env, check=False)
+        elif d.get("outcome") == "released":
+            sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", f"{DARK_BROKEN},bug"], env=env, check=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"could not label the dark feature: {type(e).__name__}", flush=True)
 
 
 def finish_update_intake(ok, repo, number, pat):
@@ -2130,11 +2230,11 @@ def finalize():
         d["message"] = d["message"] or "the Build Run process ended without recording an outcome (cancelled or killed)"
     d["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
-        revert_failed_run(d, os.environ.get("APP_DIR", ""), os.environ["FACTORY_PAT"], load_config()["limits"])
+        rollback_failed_run(d, os.environ["FACTORY_PAT"], load_config()["limits"])
     except Exception as e:  # noqa: BLE001
-        d["revert"] = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[:300]}"}
+        d["rollback"] = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[:300]}"}
     d["audit"] = audit.audit_report(d)
-    # The post-mortem reads state.json, so the final state (audit, revert) has to be saved there too.
+    # The retrospective reads state.json, so the final state (audit, rollback) has to be saved there too.
     (work / "state.json").write_text(json.dumps(d, indent=2))
     summary = render_summary(d)
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -2157,6 +2257,7 @@ def finalize():
     sh(["gh", "issue", "comment", d["issue_number"], "--repo", os.environ["GITHUB_REPOSITORY"], "--body",
         f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],
        env={**os.environ, "GH_TOKEN": ftoken}, check=False)
+    label_dark_feature(d, os.environ["GITHUB_REPOSITORY"], ftoken)
     if d.get("intake_kind") == "update":
         finish_update_intake(ok, os.environ["GITHUB_REPOSITORY"], d["issue_number"], pat)
     return 0 if ok else 1

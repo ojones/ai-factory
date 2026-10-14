@@ -1,7 +1,7 @@
 name: Factory checks
 
-# Checks on every pull request to ai-factory, including the learning PRs the post-mortem Agent opens
-# (orchestrator/postmortem.py). A learning PR labelled `auto-merge-candidate` merges itself at the end,
+# Checks on every pull request to ai-factory, including the learning PRs the retrospective Agent opens
+# (orchestrator/retrospective.py). A learning PR labelled `auto-merge-candidate` merges itself at the end,
 # but only if the diff is again an additive lint or formatter change (recomputed here, the label is not
 # trusted) and every check above passed. Everything else waits for a human to merge.
 #
@@ -89,7 +89,7 @@ jobs:
           python-version: "3.12"
       - run: pip install pyyaml
       - name: Is the diff still an additive lint or formatter change?
-        run: python orchestrator/postmortem.py auto-merge-check "origin/${{ github.base_ref }}" HEAD
+        run: python orchestrator/retrospective.py auto-merge-check "origin/${{ github.base_ref }}" HEAD
       - name: Merge
         env:
           GH_TOKEN: ${{ github.token }}

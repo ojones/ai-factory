@@ -34,7 +34,7 @@ The whole-run suite takes **1.4 to 3 hours** and **about $0.60 to $3.20** (five 
    - coder: `MODELS=<current>,<new> python3 agents/smoke-coder/run.py` and `agents/replay/coder_replay.py`
    - reviewer: `agents/smoke/run.py` (the seeded-bug fixtures; CI runs it when a prompt or the profile changes)
    - tester: `agents/smoke-tester/run.py` (seeded-bug notes API; about $1.8 a pass at 2 trials)
-   - planner, pipeline, post-mortem: no component benchmark yet; go straight to the whole-run suite.
+   - planner, pipeline, retrospective: no component benchmark yet; go straight to the whole-run suite.
 2. **Dry run the whole-run pass:** Actions, "Benchmark", leave `execute` off, `candidate` = `coder=<new-model-id>` (any `role=model` pairs, comma separated). It prints
    the plan and the estimate and spends nothing. Locally: `python3 orchestrator/benchmark.py plan --candidate coder=<new-model-id>`.
 3. **Run it:** the same workflow with `execute` on. The runner creates a branch with the candidate's `profiles.yml` (and the limits that keep passes comparable: no
@@ -54,7 +54,7 @@ The whole-run suite takes **1.4 to 3 hours** and **about $0.60 to $3.20** (five 
 ## What it does not cover (yet)
 
 First builds (they need a fresh app each time; the coder replay covers them), UI changes (the tester's `ui-check` has its own tests), multi-change-set plans, and the
-post-mortem Agent. Add a task to `suite.json` when a real failure shows a gap: start from real failures, with an expected outcome and an oracle, and include cases
+retrospective Agent. Add a task to `suite.json` when a real failure shows a gap: start from real failures, with an expected outcome and an oracle, and include cases
 that should be refused as well as built, so a cheaper model cannot win by being careless.
 
 ## Fallback and the nightly canary

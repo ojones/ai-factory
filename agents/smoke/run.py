@@ -22,39 +22,17 @@ WORKERS = int(os.environ.get("WORKERS", "6"))
 REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "")
 HERE = pathlib.Path(__file__).parent
 
-# Property order matters: generation follows it, so the model must write its
-# analysis and findings BEFORE it commits to a verdict. (A first attempt with
-# `verdict` first approved every diff, including an obvious command injection.)
-VERDICT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "analysis": {"type": "string"},
-        "findings": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "severity": {"type": "string", "enum": ["blocking", "minor"]},
-                    "summary": {"type": "string"},
-                    "evidence": {"type": "string"},
-                },
-                "required": ["severity", "summary", "evidence"],
-                "additionalProperties": False,
-            },
-        },
-        "verdict": {"type": "string", "enum": ["clean", "changes_requested"]},
-    },
-    "required": ["analysis", "findings", "verdict"],
-    "additionalProperties": False,
-}
+sys.path.insert(0, str(HERE.parent.parent / "orchestrator"))
+import build_run as orchestrator  # noqa: E402
+
+# The schema the Orchestrator's single-call reviewer sends, so the smoke test checks the model against what it will really be asked.
+VERDICT_SCHEMA = orchestrator.REVIEW_SCHEMA
 RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {"name": "review_verdict", "schema": VERDICT_SCHEMA, "strict": True},
 }
 # The real single-call reviewer prompt (agents/prompts/reviewer-fast.md plus the shared rubric), rendered
 # the way the Orchestrator renders it. A fixture is an update unless expected.json says "first build".
-sys.path.insert(0, str(HERE.parent.parent / "orchestrator"))
-import build_run as orchestrator  # noqa: E402
 
 def review_system(kind):
     return orchestrator.render(

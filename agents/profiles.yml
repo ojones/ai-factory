@@ -50,11 +50,11 @@ roles:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/planner.md
-  # After a Build Run that did not end clean: explains why and proposes a fix as a PR (orchestrator/postmortem.py).
-  postmortem:
+  # After every Build Run, released or not: reads what the run found and how it ended, files the improvements and proposes a fix as a PR (orchestrator/retrospective.py).
+  retrospective:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
-    prompt: prompts/postmortem.md
+    prompt: prompts/retrospective.md
 
 limits:
   review_rounds: 4
@@ -67,11 +67,11 @@ limits:
   jwt_ttl_seconds: 21600
   # Wall-clock budget for the whole Build Run; the Actions job limit is 6 hours.
   time_limit_minutes: 330
-  # The post-mortem Agent after a stuck run; one run, outside the Build Run's cost cap.
-  postmortem_timeout_minutes: 15
-  # The post-mortem Agent gets its own single-model credential limited to this much per analysis (it never
+  # The retrospective Agent after a run; one run, outside the Build Run's cost cap.
+  retrospective_timeout_minutes: 15
+  # The retrospective Agent gets its own single-model credential limited to this much per analysis (it never
   # holds the parent key), and no more than this many learning PRs may be open at once.
-  postmortem_cost_cap_usd: 0.50
+  retrospective_cost_cap_usd: 0.50
   max_open_learning_prs: 3
   # Per Agent invocation; a hung Agent is killed and counts as a failed attempt.
   agent_timeout_minutes: 45
@@ -122,11 +122,12 @@ limits:
   # for one Intake. Set planner_enabled false to run an Update Intake's request straight through as one change.
   planner_enabled: true
   planner_max_change_sets: 8
-  # A Build Run that ends badly (round limit, needs a person, budget, stuck, crash) took commits to `main`, and every push
-  # deploys. `all` puts `main` back to where the run started with one new commit; `unflagged` does so only for runs that added
-  # no flag (flagged code is dark); `off` leaves it. A run the watchdog switched off is never reverted (it is contained).
-  revert_failed_runs: all
-  revert_deploy_timeout_minutes: 15
+  # Nothing is ever reverted in git: code is fixed forward and `main` keeps every commit. The one exception is a regression (the tester
+  # finds behaviour that was live before the run stops working): the app's own CI then redeploys the previous version (the starting
+  # commit's image) with `rollback-fly.yml`. A change that only breaks itself stays dark, because its flag is never released, and is
+  # fixed by a later run.
+  rollback_regressions: true
+  rollback_timeout_minutes: 15
   # File a fix request issue for every run that ends badly: what happened, what was done, and numbered requirements, routed
   # to the Factory (a prompt, planner, template or orchestrator cause) or to the app (an Update Intake for you to start).
   fix_requests: true

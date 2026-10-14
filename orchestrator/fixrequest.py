@@ -1,11 +1,11 @@
 """A fix request: one GitHub issue for a Build Run that did not end well.
 
 The run's own failure issue (in the Managed App repo) says that it failed. This is the issue that says what has to be fixed:
-what happened, what the Orchestrator already did about it (the revert), an automated analysis, and numbered requirements
-that can be checked afterwards. It is routed by the cause the post-mortem named:
+what happened, what the Orchestrator already did about it (a deploy rollback, for a regression), an automated analysis, and numbered requirements
+that can be checked afterwards. It is routed by the cause the retrospective named:
 
   factory  a prompt, planner, Starter Template or orchestrator cause. An ai-factory issue labelled `factory-fix-request`.
-           Adding `ready-for-factory-run` gives it to the Factory Run (the post-mortem Agent), which proposes a PR for a person
+           Adding `ready-for-factory-run` gives it to the Factory Run (the retrospective Agent), which proposes a PR for a person
            to merge. The app planner is not used: it plans changes to Managed Apps, and this is a change to the Factory.
   app      the request itself was the problem (unclear, too big for the model, or a release the watchdog switched off). The
            story's OWN issue is updated, not a new one: a comment says it broke and why, and the retry state is hidden in it
@@ -31,19 +31,21 @@ APP_CATEGORIES = ("spec_ambiguity", "model_limit", "regression")
 MAX_ITEMS = 5
 
 
-def inferred_category(category, outcome):
+def inferred_category(category, outcome, has_bugs=False):
     """The cause to route by. A run that ran out of money or time was too big for its limits, which is the request's
-    problem: that decides the route unless the post-mortem named a Factory cause that is not a prompt (an Agent that fails
+    problem: that decides the route unless the retrospective named a Factory cause that is not a prompt (an Agent that fails
     because its credential ran dry looks like a prompt gap, which it is not). With no cause named, the same rule applies."""
     if outcome in ("budget_exhausted", "time_limit") and category in (None, "", "prompt_gap", "infra", "unknown", "model_limit"):
         return "model_limit"
-    if outcome == "watchdog_disabled" and category not in FACTORY_CATEGORIES:
+    if outcome in ("watchdog_disabled", "regression") and category not in FACTORY_CATEGORIES:
         return "regression"  # the change broke production: the story is retried, fixing the code behind the same flag
+    if has_bugs and category not in FACTORY_CATEGORIES and category != "spec_ambiguity":
+        return "regression"  # the tester saw checks fail: the story is retried on its own issue, with the bugs as notes
     return category or None
 
 
 def route(category):
-    """Where a fix request goes, from the cause the post-mortem named: factory, app or info."""
+    """Where a fix request goes, from the cause the retrospective named: factory, app or info."""
     if category in FACTORY_CATEGORIES:
         return "factory"
     if category in APP_CATEGORIES:
@@ -61,18 +63,18 @@ def clip(text, n=300):
     return " ".join(str(text or "").split())[:n]
 
 
-def revert_line(revert):
-    """The revert, in one sentence for the issue."""
-    if not revert:
-        return "No revert was attempted."
-    status = revert.get("status")
-    if status == "reverted":
-        deploy = revert.get("deploy", "not checked")
-        return (f"`main` was put back to `{str(revert.get('restored', ''))[:8]}` (the state before this run) in commit "
-                f"`{str(revert.get('sha', ''))[:8]}`; the deploy of that commit is **{deploy}**. The failed run's commits are still in the history.")
+def rollback_line(rollback):
+    """The rollback, in one sentence for the issue."""
+    if not rollback:
+        return "No rollback was attempted."
+    status = rollback.get("status")
+    if status == "rolled_back":
+        return (f"The live app was redeployed from `{str(rollback.get('restored', ''))[:8]}` (the version before this run) by the app's CI; "
+                f"the deploy is **{rollback.get('deploy', 'not checked')}**. Nothing was reverted in git: this run's commits are still in `main`, behind a flag that is off.")
     if status == "failed":
-        return f"**The automatic revert failed** ({clip(revert.get('reason'))}). `main` still has this run's commits, and any that were not behind a flag are live."
-    return f"Nothing was reverted: {clip(revert.get('reason'), 200)}."
+        return (f"**The automatic rollback failed** ({clip(rollback.get('reason'))}). The live app may still be running the regressing version; "
+                "redeploy the previous version by hand (run `rollback-fly.yml` for the commit before this run).")
+    return f"Nothing was rolled back: {clip(rollback.get('reason'), 200)}."
 
 
 def raised_cap(outcome, cap, ceiling=10.0):
@@ -84,20 +86,24 @@ def raised_cap(outcome, cap, ceiling=10.0):
     return new if new > float(cap) else None
 
 
-def requirements(facts, result, revert, app_side=False):
+def requirements(facts, result, rollback, app_side=False):
     """Numbered, checkable requirements: what must be true once this is fixed. `app_side` is for a retry of the app's own
     request, which carries no requirements about fixing the Factory."""
     outcome, message = facts.get("outcome"), clip(facts.get("message"), 200)
     reqs = []
-    status = (revert or {}).get("status")
+    status = (rollback or {}).get("status")
     if status == "failed":
-        reqs.append("`main` is back at the state before this run (the automatic revert failed and has to be done by hand), "
-                    "and the app answers every route as it did before the run.")
-    elif status == "reverted":
-        reqs.append("Confirm the app behaves exactly as before the run (the revert restored `main`; check the routes this run touched).")
-    elif facts.get("commits"):
-        reqs.append("Check that `main` and the live app are in the state you want: this run pushed commits and they were not reverted "
-                    f"({clip((revert or {}).get('reason'), 120) or 'no reason recorded'}).")
+        reqs.append("The live app is back on the version before this run (the automatic rollback failed and has to be done by hand), "
+                    "and it answers every route as it did before the run.")
+    elif status == "rolled_back":
+        reqs.append("Confirm the app behaves exactly as before the run (the previous version was redeployed; check the routes this run touched).")
+    elif facts.get("commits") and outcome == "regression":
+        reqs.append("Check that the live app is on the version you want: the tester found a regression and no rollback was done "
+                    f"({clip((rollback or {}).get('reason'), 120) or 'no reason recorded'}).")
+    for x in (facts.get("bugs") or [])[:MAX_ITEMS]:
+        reqs.append(f"Fix this bug the tester saw ({'behaviour that was live before the change' if x.get('kind') == 'regression' else 'the new change, still dark'}): "
+                    f"{clip(x.get('check'), 160)}. Evidence: {clip(x.get('evidence'), 200) or 'none given'}."
+                    + (f" Repro: {clip(x.get('repro'), 160)}." if x.get("repro") else "") + " Add a test that fails without the fix.")
     recurring = facts.get("recurring_findings") or []
     blocking = [clip(s, 160) for s in facts.get("final_blocking") or []][:MAX_ITEMS]
     if outcome in ("round_limit", "stuck"):
@@ -107,13 +113,15 @@ def requirements(facts, result, revert, app_side=False):
         reqs.append(f"The same request finishes inside its cost cap and time limit (it stopped because: {message}), or is split into smaller requests that each do.")
     elif outcome == "crash":
         reqs.append(f"The run no longer crashes (it stopped with: {message}).")
+    elif outcome == "regression":
+        reqs.append(f"The regression is fixed ({message}): the behaviour the tester found broken works again with the change in place, behind the same flag, and a test covers it. The code is still in `main` (nothing was reverted), so fix it forward; the flag is released only after a clean pass.")
     elif outcome == "watchdog_disabled":
         reqs.append(f"The regression the watchdog found is fixed ({message}). The flag it switched off is dead: remove it from flags.json together with the code it guarded, and deliver the corrected change behind a new flag of its own, which is released only after a clean pass.")
     else:
         reqs.append(f"Whatever stopped the run is resolved: {message}.")
     if recurring and outcome not in ("round_limit", "stuck"):
         reqs.append("These findings, which the coder did not resolve across rounds, stop recurring: " + "; ".join(clip(s, 100) for s in recurring[:MAX_ITEMS]) + ".")
-    # The post-mortem Agent's own requirements are about how to fix the Factory. They belong in a Factory fix request and
+    # The retrospective Agent's own requirements are about how to fix the Factory. They belong in a Factory fix request and
     # not in a retry of the app's request (a retry that was told to build tester helpers would go and build them).
     for r in ((result or {}).get("requirements") or []) if not app_side else []:
         if isinstance(r, str) and r.strip() and clip(r, 300) not in reqs:
@@ -186,8 +194,9 @@ GUIDANCE = {
                        "reading (keep existing data and behaviour, remove nothing permanently, keep the change behind its flag) and state the "
                        "choice as an assumption."),
     "model_limit": "The last attempt was too much for one pass. Plan the smallest independently valuable change sets and keep each one small.",
-    "regression": ("The change broke the app after its release and the watchdog switched its flag off. Find what regressed (the error lines, the diff and the "
-                   "tests), fix the code behind the same flag, and add a test that fails without the fix. Do not remove the flag or the feature."),
+    "regression": ("The change broke something: the watchdog switched its flag off, or the tester saw checks fail (they are listed under the requirements). "
+                   "Find what is wrong (the error lines or the failing checks, the diff and the tests), fix the code behind the same flag, and add a test that "
+                   "fails without the fix. Do not remove the flag or the feature."),
 }
 
 
@@ -196,7 +205,7 @@ def extract_original(text):
     return text.split(ORIGINAL_MARKER, 1)[1].strip() if ORIGINAL_MARKER in (text or "") else (text or "").strip()
 
 
-def render(facts, result, revert, target, intake_url="", auto=None, flags=()):
+def render(facts, result, rollback, target, intake_url="", auto=None, flags=()):
     """The issue body, or for the app route the comment on the story's own issue. `auto` is None, or {"attempt": n, "max": m, "started": bool}."""
     cat = (result or {}).get("category")
     lines = [f"## What happened", "",
@@ -207,17 +216,17 @@ def render(facts, result, revert, target, intake_url="", auto=None, flags=()):
         lines.append("- Feature flag of this story: " + ", ".join(f"`{f}`" for f in flags) + " (kept through the retries)")
     for s in [clip(x, 200) for x in facts.get("final_blocking") or []][:MAX_ITEMS]:
         lines.append(f"- Still blocking at the end: {s}")
-    lines += ["", "## What was done automatically", "", revert_line(revert), "", "## Analysis (automated, and may be wrong)", ""]
+    lines += ["", "## What was done automatically", "", rollback_line(rollback), "", "## Analysis (automated, and may be wrong)", ""]
     if cat:
-        lines.append(f"The post-mortem named the cause as **{cat}**: {clip((result or {}).get('root_cause'), 500)}")
+        lines.append(f"The retrospective named the cause as **{cat}**: {clip((result or {}).get('root_cause'), 500)}")
         if (result or {}).get("change_summary") and result["change_summary"] != "none":
             lines.append(f"\nIt proposed: {clip(result['change_summary'], 400)}")
     else:
-        lines.append("The post-mortem did not name a cause (it did not run or produced no usable analysis).")
-    lines += ["", "## Requirements", ""] + [f"{i}. {r}" for i, r in enumerate(requirements(facts, result, revert), 1)]
+        lines.append("The retrospective did not name a cause (it did not run or produced no usable analysis).")
+    lines += ["", "## Requirements", ""] + [f"{i}. {r}" for i, r in enumerate(requirements(facts, result, rollback), 1)]
     lines += ["", "## How this is picked up", ""]
     if target == "factory":
-        lines.append(f"This is a fault in the Factory itself ({cat}). Add the label `ready-for-factory-run` and the Factory Run (the post-mortem Agent) will try a fix "
+        lines.append(f"This is a fault in the Factory itself ({cat}). Add the label `ready-for-factory-run` and the Factory Run (the retrospective Agent) will try a fix "
                      "and open a pull request for you to review. Nothing changes until you merge it.")
     elif target == "app" and auto and auto.get("started"):
         lines.append(f"This is about the request, not the Factory ({cat}). **This same issue is being retried automatically** (retry {auto['attempt']} of at most "
@@ -233,15 +242,15 @@ def render(facts, result, revert, target, intake_url="", auto=None, flags=()):
     return "\n".join(lines) + "\n"
 
 
-def app_request(facts, result, revert, original, category=None, history=(), cap_note="", flags=()):
+def app_request(facts, result, rollback, original, category=None, history=(), cap_note="", flags=()):
     """The text of the Update Intake for the app route: what went wrong, what must be true this time, how to approach it,
     and the original request last (extracted, so a retry of a retry does not nest)."""
-    reqs = requirements(facts, result, revert, app_side=True)
+    reqs = requirements(facts, result, rollback, app_side=True)
     parts = [("A previous attempt at the request below did not complete, so it is being asked again with what was learned." if original is not None
               else "A previous attempt at this request did not complete, so it is being tried again with what was learned."), "",
              f"What happened: it ended {facts.get('outcome')}: {clip(facts.get('message'), 300)} ({facts.get('run_url')})"]
     if facts.get("outcome") in ("budget_exhausted", "time_limit"):
-        # Money or time ran out: say that, not the post-mortem's guess about which Agent happened to fail when it did.
+        # Money or time ran out: say that, not the retrospective's guess about which Agent happened to fail when it did.
         parts.append("Likely cause: the request was more than one pass could finish inside its limits.")
     elif category in APP_CATEGORIES:
         cause = clip((result or {}).get("root_cause"), 400)
@@ -287,11 +296,11 @@ def provider_alert_body(facts):
     return (f"## The model provider has no balance\n\nA Build Run for `{facts.get('app')}` stopped because the model provider refused "
             f"the request: the account has no balance (HTTP 402, \"You need positive balance to do inference\").\n\n"
             f"- Run: {facts.get('run_url')}\n- Request: #{facts.get('issue_number')}\n\n"
-            "## What was done automatically\n\n" + revert_line(facts.get("revert")) + "\n\n"
+            "## What was done automatically\n\n" + rollback_line(facts.get("rollback")) + "\n\n"
             "## What to do\n\n1. Add balance in the provider's dashboard (or turn on auto top-up).\n"
             "2. For an Update Intake that stopped, add `proceed-with-change` again (the Orchestrator removed it, so the label fires again). "
             "For a new app's Intake, add `ready-for-staging` again.\n\n"
-            "Every Build Run fails until this is done. Nothing was retried automatically, and no fix request or post-mortem was started, "
+            "Every Build Run fails until this is done. Nothing was retried automatically, and no fix request or retrospective was started, "
             "because they would fail the same way.\n")
 
 
@@ -321,7 +330,7 @@ def failing_story(repo, number, token):
     return {"body": doc.get("body") or "", "comments": [c.get("body", "") for c in doc.get("comments") or []], "url": doc.get("url") or ""}
 
 
-def file_app_retry(repo, token, pat, facts, result, revert, lim, category):
+def file_app_retry(repo, token, pat, facts, result, rollback, lim, category):
     """A failure of a story: the SAME issue is updated, never a new one. The failure, what was done about it and what to do next go in a
     comment, with the retry state hidden in it (the attempt, the story's flag, what earlier attempts found, the guidance for the next
     attempt). While attempts remain the PAT puts `proceed-with-change` back on the issue, so the same issue, with the same flag, runs
@@ -341,12 +350,12 @@ def file_app_retry(repo, token, pat, facts, result, revert, lim, category):
                 if new_cap else "")
     auto = {"attempt": attempt, "max": int(lim.get("fix_request_max_attempts", 2)), "started": autostart}
     new_state = {"attempt": attempt, "flags": flags, "history": history, "last_run": facts.get("run_url"), "cap": new_cap or state.get("cap"),
-                 "guidance": app_request(facts, result, revert, None, category, history, cap_note, flags)[:6000]}
+                 "guidance": app_request(facts, result, rollback, None, category, history, cap_note, flags)[:6000]}
     for name, color, desc in ((RETRYING, "fbca04", "This story failed and is being retried on the same issue and flag"),
                               ("needs-human", "b60205", "The Orchestrator stopped and needs a person"), (update_intake.GO, "0e8a16", "Start this change now")):
         update_intake.ensure_label(repo, name, token, color, desc)
     gh(["issue", "comment", str(number), "--repo", repo, "--body", f"## Attempt {attempt - 1 or 'zero'} did not complete\n\n"
-        + render(facts, result, revert, "app", story["url"], auto, flags) + "\n" + with_retry_state(new_state)], token)
+        + render(facts, result, rollback, "app", story["url"], auto, flags) + "\n" + with_retry_state(new_state)], token)
     if autostart:
         gh(["issue", "edit", str(number), "--repo", repo, "--add-label", RETRYING, "--remove-label", "needs-human"], token)
         gh(["issue", "edit", str(number), "--repo", repo, "--add-label", update_intake.GO], pat)  # the PAT: the Actions token would not start the workflow
@@ -355,16 +364,16 @@ def file_app_retry(repo, token, pat, facts, result, revert, lim, category):
     return {"target": "app", "url": story["url"], "started": autostart, "attempt": attempt}
 
 
-def file_fix_request(repo, token, pat, facts, result, revert, lim=None):
+def file_fix_request(repo, token, pat, facts, result, rollback, lim=None):
     """For the Factory and information routes, create the fix request (or comment on the open one for this attempt). For the app route,
     update the story's own issue and retry it (file_app_retry). `token` is the Actions token; `pat` adds the start label (events made by
     the Actions token do not start workflows). Returns {target, url, started, attempt}."""
     lim = lim or {}
-    category = inferred_category((result or {}).get("category"), facts.get("outcome"))
+    category = inferred_category((result or {}).get("category"), facts.get("outcome"), bool(facts.get("bugs")))
     result = dict(result or {}, category=category) if category else result
     target = route(category)
     if target == "app":
-        return file_app_retry(repo, token, pat, facts, result, revert, lim, category)
+        return file_app_retry(repo, token, pat, facts, result, rollback, lim, category)
     app, number = facts.get("app"), facts.get("issue_number")
     body_text = failing_issue(repo, number, token)
     origin, attempt, history = attempt_info(body_text, number)
@@ -377,11 +386,11 @@ def file_fix_request(repo, token, pat, facts, result, revert, lim=None):
     again = next((i for i in found if fp in i["title"]), None)
     if again:
         gh(["issue", "comment", str(again["number"]), "--repo", repo, "--body",
-            f"**Failed again** ({facts.get('outcome')}): {clip(facts.get('message'), 300)}\n{facts.get('run_url')}\n\n{revert_line(revert)}"], token)
+            f"**Failed again** ({facts.get('outcome')}): {clip(facts.get('message'), 300)}\n{facts.get('run_url')}\n\n{rollback_line(rollback)}"], token)
         return {"target": target, "url": again["url"], "started": False, "attempt": attempt}
     intake_url = f"https://github.com/{repo}/issues/{number}"
     labels = f"{LABEL},{FACTORY_LABEL}" if target == "factory" else LABEL
     out = gh(["issue", "create", "--repo", repo, "--title", f"Fix request [{fp}]: {category or 'unknown cause'} in {app}'s run for #{number}",
-              "--label", labels, "--body", render(facts, result, revert, target, intake_url)], token)
+              "--label", labels, "--body", render(facts, result, rollback, target, intake_url)], token)
     m = re.search(r"https://\S+/issues/(\d+)", out.stdout or "")
     return {"target": target, "url": m.group(0) if m else "", "started": False, "attempt": attempt}

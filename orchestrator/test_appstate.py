@@ -44,6 +44,18 @@ class AppState(unittest.TestCase):
         body = a.render_state(a.render_state("", report(outcome="watchdog_disabled")), report(day="2026-10-12", url="https://x/3"))
         self.assertEqual([(f["date"], f["state"]) for f in a.load(body)["flags"]], [("2026-10-12", "released")])
 
+    def test_a_dark_feature_is_listed_but_is_never_taken_for_a_released_flag_and_a_later_release_replaces_it(self):
+        dark = report(outcome="round_limit", released=(), flags=["pin"], commits=["h"], issue_number="12")
+        body = a.render_state("", dark)
+        self.assertIn("| `notes.feature.pin` | 2026-10-10 | dark (failed its checks", body)
+        self.assertEqual([f["state"].split(" ")[0] for f in a.load(body)["flags"]], ["dark"])  # not "released": nothing retires it
+        released = a.render_state(body, report(day="2026-10-11", released=("notes.feature.pin",), flags=["pin"], commits=["h2"], issue_number="12"))
+        self.assertEqual([(f["key"], f["state"]) for f in a.load(released)["flags"]], [("notes.feature.pin", "released")])
+        for outcome in ("refused", "provider_blocked"):  # never built: no dark feature remains
+            self.assertEqual(a.load(a.render_state("", dict(dark, outcome=outcome)))["flags"], [], outcome)
+        regressed = a.load(a.render_state("", dict(dark, outcome="regression")))["flags"]
+        self.assertEqual([f["state"].split(" ")[0] for f in regressed], ["dark"])  # rolled back, but its code stays in main
+
     def test_data_with_double_dashes_and_pipes_survives(self):
         url = "https://github.com/o/my--app/actions/runs/1"
         body = a.render_state("", report(app="my--app", url=url, outcome="a|b"))

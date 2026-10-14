@@ -1,7 +1,7 @@
 name: Factory Run
 
-# Analyse one lesson on demand (orchestrator/postmortem.py lesson <issue>): adding the label
-# `ready-for-factory-run` to a `factory-learning` issue runs the post-mortem Agent over that lesson and opens
+# Analyse one lesson on demand (orchestrator/retrospective.py lesson <issue>): adding the label
+# `ready-for-factory-run` to a `factory-learning` issue runs the retrospective Agent over that lesson and opens
 # a learning PR (or comments that it found nothing to change). Lessons from a Build Run are handled by the
 # Build Run workflow itself; this is for older lessons, ones marked fix-ineffective, and re-tries.
 on:
@@ -35,9 +35,25 @@ jobs:
         with:
           node-version: "22"
       - run: pip install "openhands==$(cat agents/openhands-version.txt)" pyyaml
+      # limits.agent_isolation in agents/profiles.yml: with `user`, the retrospective Agent runs as a separate unprivileged account, as in the
+      # Build Run, and works in a copy of the tree under /srv/agent (the runner's home is closed to other accounts), shared through ACLs.
+      - name: Working directory, and the Agent user if isolation is on
+        run: |
+          mode=$(python -c "import yaml; print(yaml.safe_load(open('agents/profiles.yml'))['limits'].get('agent_isolation', 'off'))")
+          if [ "$mode" = user ]; then
+            sudo apt-get install -y -qq acl > /dev/null
+            sudo useradd -m -s /bin/bash agent
+            sudo mkdir -p /srv/agent
+            sudo chown agent:agent /srv/agent
+            sudo setfacl -R -m "u:$USER:rwx" /srv/agent
+            sudo setfacl -R -d -m "u:$USER:rwx" -m u:agent:rwx /srv/agent
+            echo "AGENT_USER=agent" >> "$GITHUB_ENV"
+            echo "BUILD_RUN_DIR=/srv/agent/run" >> "$GITHUB_ENV"
+            mkdir -p /srv/agent/run
+          fi
       - name: Analyse the lesson
         env:
           FACTORY_GH_TOKEN: ${{ github.token }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
-        run: python orchestrator/postmortem.py lesson "${{ github.event.issue.number }}"
+        run: python orchestrator/retrospective.py lesson "${{ github.event.issue.number }}"

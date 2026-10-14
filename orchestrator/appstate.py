@@ -64,6 +64,14 @@ def render_state(prev_body, d):
     for key in (d.get("release") or {}).get("released") or []:
         flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"),
                       "state": "switched off by the watchdog" if off else "released"}
+    # A flagged change that was pushed and never released is a dark feature: it is listed (so a person can see it), and never taken for a
+    # released flag. Once it is released at last, the release above replaces the entry.
+    if d.get("flags") and d.get("commits") and d.get("outcome") not in OK + ("refused", "provider_blocked") and not off:
+        for slug in d["flags"]:
+            key = f"{d.get('app')}.feature.{slug}"
+            if key not in flags or str(flags[key].get("state", "")).startswith("dark"):
+                flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"),
+                              "state": "dark (failed its checks; fixed forward behind its flag)"}
     data = {"runs": runs, "flags": sorted(flags.values(), key=lambda f: f["date"])}
     last = runs[-1]
     lines = [f"# {d.get('app')}: Factory state", "",
@@ -72,8 +80,8 @@ def render_state(prev_body, d):
              "## Recent Build Runs", "", "| Date | Outcome | Kind | Rounds | Cost | Released |", "|---|---|---|---|---|---|"]
     lines += [f"| {cell(r['date'])} | {cell(r['outcome'])} | {cell(r['kind'])} | {r['rounds']} | ${r['cost']:.2f} | "
               f"{cell(', '.join(k.split('.feature.')[-1] for k in r['released']) or '-')} |" for r in reversed(runs)]
-    lines += ["", "## Flags released by Build Runs", "",
-              "The state is as of the release (or the watchdog); the owner may have changed a flag in GrowthBook since.", ""]
+    lines += ["", "## Flags from Build Runs", "",
+              "The state is as of the release (or the watchdog); the owner may have changed a flag in GrowthBook since. A dark flag was never released: its story is labelled `dark-broken` once its retries are used up.", ""]
     if data["flags"]:
         lines += ["| Flag | Date | State | Story |", "|---|---|---|---|"]
         lines += [f"| `{cell(f['key'])}` | {cell(f['date'])} | {cell(f['state'])} | {story_link(f)} |" for f in reversed(data["flags"])]

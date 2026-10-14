@@ -13,7 +13,7 @@ The ephemeral compute that runs a Build Run — scheduling its stages, dispatchi
 _Avoid_: the factory (when the runtime process specifically is meant), the runner
 
 **Agent**:
-A worker process, backed by an LLM, spawned by the Orchestrator to carry out one role's unit of work (coding, reviewing, testing, or diagnosing a failed pipeline) within a Build Run, or by the post-mortem step afterwards (analysing a run that did not end clean).
+A worker process, backed by an LLM, spawned by the Orchestrator to carry out one role's unit of work (coding, reviewing, testing, or diagnosing a failed pipeline) within a Build Run, or by the retrospective step after every Build Run (reading what the run found and how it ended).
 _Avoid_: bot, worker
 
 **Standards**:
@@ -80,11 +80,19 @@ The advice documents' name for what the Factory implements as the flag around on
 _Avoid_: feature flag (as a name for the gate itself; it is the underlying mechanism)
 
 **Lesson**:
-A `factory-learning` issue in ai-factory recording something a Build Run taught the Factory (a stuck run, a recurring minor finding), from which the post-mortem Agent may propose a change to prompts, the Starter Template or the Orchestrator as a PR.
-_Avoid_: post-mortem (that is the step and Agent that analyse it)
+A `factory-learning` issue in ai-factory recording something a Build Run taught the Factory (a stuck run, a recurring minor finding), from which the retrospective Agent may propose a change to prompts, the Starter Template or the Orchestrator as a PR.
+_Avoid_: retrospective (that is the step and Agent that read every run and may file or act on these)
+
+**Retrospective**:
+The step that runs after every Build Run, whether it released or not. It records what the run found (blocking findings, minor findings and the `improvements` the reviewer and tester suggest), files them as issues in the Managed App's repo or ai-factory, may propose a Factory fix as a PR, and posts a short summary on the issue that started the run.
+_Avoid_: post-mortem (it is not only for failures)
+
+**Dark feature**:
+A change whose flag has not been released. One that fails its checks stays dark and is fixed forward behind the same flag; it is tracked by its story issue (`flag:<slug>`, plus `dark-broken` once the run that built it could not get it through), not by `flags.json`. It is removed only after two failed retries and a person's approval (`approve-retire`).
+_Avoid_: dead flag
 
 **Fix request**:
-The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (the revert), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (a PR for a person to merge), to the app as an Update Intake that starts itself, or kept as information.
+The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (a deploy rollback, for a regression), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (a PR for a person to merge), to the app as an Update Intake that starts itself, or kept as information.
 _Avoid_: bug report, incident
 
 **Scoreboard**:

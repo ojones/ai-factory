@@ -105,5 +105,59 @@ class Choosing(unittest.TestCase):
         self.assertEqual(self.run_for(self.flags, task="Do it\nretire-flag: d\n", kind="update"), ["d", "a", "b", "c"])
 
 
+class DarkFeatureRetirement(unittest.TestCase):
+    LABELS = ["update-intake", "app:notes", "flag:pin-notes", "dark-broken", "needs-human"]
+
+    def test_a_person_can_approve_only_a_story_whose_retries_are_used_up(self):
+        self.assertEqual(fr.dark_removal_target(self.LABELS), ("notes", "pin-notes", None))
+        for missing, why in (("dark-broken", "no broken dark feature"), ("needs-human", "retries are not used up"),
+                             ("flag:pin-notes", "exactly one flag"), ("app:notes", "exactly one flag"), ("update-intake", "not an Update Intake")):
+            app, slug, reason = fr.dark_removal_target([l for l in self.LABELS if l != missing])
+            self.assertIsNone(app)
+            self.assertIn(why, reason, missing)
+
+    def test_more_than_one_flag_or_app_is_refused_rather_than_guessed(self):
+        self.assertIsNotNone(fr.dark_removal_target(self.LABELS + ["flag:other"])[2])
+        self.assertIsNotNone(fr.dark_removal_target(self.LABELS + ["app:other"])[2])
+
+    def test_the_removal_task_deletes_the_feature_and_adds_nothing(self):
+        task = fr.dark_removal_task("pin-notes", 12)
+        self.assertIn("#12", task)
+        self.assertIn("`flags.json`", task)
+        self.assertIn("never released", task)
+        self.assertEqual(b.retire_slugs(task), [])  # not the keep-it-on retirement of a released flag
+
+    def test_approving_files_and_starts_the_removal_and_closes_the_story(self):
+        calls = []
+
+        def fake_sh(cmd, cwd=None, env=None, check=True, timeout=None):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "issue", "view"]:
+                return mock.Mock(stdout=json.dumps({"title": "t", "labels": [{"name": l} for l in self.LABELS + ["approve-retire"]]}))
+            if cmd[:3] == ["gh", "issue", "create"]:
+                return mock.Mock(stdout="https://github.com/o/f/issues/90")
+            return mock.Mock(stdout="")
+        with mock.patch.object(fr.b, "sh", fake_sh), mock.patch("update_intake.ensure_label"):
+            self.assertEqual(fr.approve("o/f", "pat", 12), 0)
+        create = next(c for c in calls if c[:3] == ["gh", "issue", "create"])
+        self.assertIn("### App name\n\nnotes", create[create.index("--body") + 1])
+        self.assertTrue(any(c[:3] == ["gh", "issue", "edit"] and c[3] == "90" and "proceed-with-change" in c for c in calls))
+        self.assertTrue(any(c[:3] == ["gh", "issue", "close"] and c[3] == "12" for c in calls))
+
+    def test_a_refused_approval_says_why_and_starts_nothing(self):
+        calls = []
+
+        def fake_sh(cmd, cwd=None, env=None, check=True, timeout=None):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "issue", "view"]:
+                return mock.Mock(stdout=json.dumps({"title": "t", "labels": [{"name": "update-intake"}, {"name": "approve-retire"}]}))
+            return mock.Mock(stdout="")
+        with mock.patch.object(fr.b, "sh", fake_sh):
+            fr.approve("o/f", "pat", 12)
+        self.assertFalse(any(c[:3] == ["gh", "issue", "create"] for c in calls))
+        comment = next(c for c in calls if c[:3] == ["gh", "issue", "comment"])
+        self.assertIn("Retirement not started", comment[comment.index("--body") + 1])
+
+
 if __name__ == "__main__":
     unittest.main()

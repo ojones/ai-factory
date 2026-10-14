@@ -3,7 +3,7 @@
 The unit tests prove the code does what the rules say; this checks that a real run did. It reads only the
 Report (`state.json`, as `finalize` writes it) and returns the rules it finds broken, so a bug that only
 shows up in production, or a run that went around the code, still leaves a record. `finalize` stores the
-result in the Report (`audit`) and the Summary; the post-mortem turns a violation into a lesson.
+result in the Report (`audit`) and the Summary; the retrospective turns a violation into a lesson.
 
 Pure functions, no network. Usage: audit.py <build-run-report.json>   (exit 1 if anything is violated)
 """
@@ -63,12 +63,15 @@ def audit_report(d, overshoot=COST_OVERSHOOT_USD):
     if outcome in OK_OUTCOMES and outcome != "planned" and d.get("build_kind") == "update" and not commits:
         bad("A-05 an update changes something", "an update finished OK with no coder commit")
 
-    if (outcome not in OK_OUTCOMES and outcome != "watchdog_disabled" and d.get("commits") and not released):
-        rev = d.get("revert")
-        if rev is None:
-            bad("A-07 a failed run leaves main as it found it", "the run pushed commits and ended badly, but no revert was attempted or recorded")
-        elif rev.get("status") == "failed":
-            bad("A-07 a failed run leaves main as it found it", f"the revert failed ({rev.get('reason')}); main still has the failed run's commits")
+    if outcome == "regression" and d.get("commits"):
+        rb = d.get("rollback")
+        if rb is None:
+            bad("A-07 a regression rolls the deploy back", "the tester found a regression, but no rollback was attempted or recorded")
+        elif rb.get("status") == "failed":
+            bad("A-07 a regression rolls the deploy back", f"the rollback failed ({rb.get('reason')}); the live app is still on the regressing version")
+
+    if d.get("revert"):
+        bad("A-08 nothing is reverted in git", "the Report records a git revert; code is fixed forward and only the deploy is rolled back")
 
     if outcome == "planned" and len(((d.get("plan") or {}).get("change_sets")) or []) < 2:
         bad("A-06 a planned run has a plan to hand on", "outcome `planned` without two or more change sets in the plan")

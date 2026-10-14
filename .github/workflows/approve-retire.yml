@@ -1,0 +1,29 @@
+name: Approve retirement of a dark feature
+
+# A story whose change never passed its checks stays dark behind its flag and is fixed forward by automatic retries. When those are used
+# up the story is labelled `needs-human` and `dark-broken`. A person adds the label `approve-retire` to it to have the dark feature removed:
+# this workflow files an Update Intake that deletes the flag, its code and its tests, and starts it
+# (orchestrator/flag_retirement.py approve; STANDARDS-FEATURE-FLAGS.md: Dark features). Nothing removes a dark feature on its own.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  approve:
+    # Job-level so label events this job skips never queue behind a real one.
+    if: github.event.label.name == 'approve-retire'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: File and start the removal
+        env:
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          FACTORY_REPO: ${{ github.repository }}
+        run: python orchestrator/flag_retirement.py approve "${{ github.event.issue.number }}"

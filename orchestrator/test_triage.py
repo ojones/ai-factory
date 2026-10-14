@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
 import planner  # noqa: E402
-import postmortem as pm  # noqa: E402
+import retrospective as pm  # noqa: E402
 import triage as t  # noqa: E402
 
 

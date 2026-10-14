@@ -3,7 +3,7 @@
 The editable configuration for the Orchestrator's Agents, kept apart from the architecture and Standards so it can be tuned over time without touching them. Roles and stage order are defined in [ARCHITECTURE.md](../ARCHITECTURE.md#agents-and-build-run-stages); this directory holds only what is expected to change.
 
 - [profiles.yml](profiles.yml): which model, endpoint, and prompt each role uses, plus the run limits (review rounds, default and maximum cost cap, credential lifetime). Switching a role's model or the provider is an edit here and nowhere else.
-- `prompts/<role>.md`: one role prompt per Agent (`coder`, `reviewer`, `tester`, `pipeline`, `postmortem`), each edited independently.
+- `prompts/<role>.md`: one role prompt per Agent (`coder`, `reviewer`, `tester`, `pipeline`, `retrospective`), each edited independently.
 
 The Build Run workflow reads these files from ai-factory at run time. They are never copied into a Managed App repo, so the coder can't edit its reviewer's instructions, and changes apply to the next Build Run without touching any Managed App.
 
@@ -20,7 +20,7 @@ The Build Run replaces `{{name}}` placeholders before invoking OpenHands.
 | tester | `app_name`, `app_url`, `head_sha`, `report_path`, `previous_report`; env `PREVIEW_TOKEN` |
 | pipeline | `app_name`, `head_sha`, `failure_run_url`, `diagnosis_path`, `context_dir` |
 | planner | `app_name`, `build_kind`, `task`, `plan_path` (first stage of a Build Run for an Update Intake; `orchestrator/planner.py` checks its output) |
-| postmortem | `facts_path`, `result_path`, `categories` (run by `orchestrator/postmortem.py`, not the Build Run) |
+| retrospective | `facts_path`, `result_path`, `categories` (run by `orchestrator/retrospective.py`, not the Build Run) |
 
 ## Output contracts
 

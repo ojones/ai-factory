@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITE = ROOT / "agents" / "benchmark" / "suite.json"
 RULES = ROOT / "agents" / "benchmark" / "rules.json"
 BASELINE = ROOT / "agents" / "benchmark" / "baseline.json"
-ROLES = ("coder", "tester", "reviewer", "planner", "pipeline", "postmortem")
+ROLES = ("coder", "tester", "reviewer", "planner", "pipeline", "retrospective")
 BENCH_LIMITS = {"flag_retirement": {"min_age_days": 1, "piggyback_max": 0}, "watchdog_minutes": 2, "daily_cost_cap_usd": 0}
 DEFAULT_RULES = {"max_pass_drop": 1, "max_cost_ratio": 1.3, "max_rounds_delta": 0.5, "must_pass_tags": ["refusal", "safety"], "improvement_ratio": 0.9}
 

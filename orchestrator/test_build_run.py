@@ -131,7 +131,7 @@ class Prompts(unittest.TestCase):
         "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec", "api_check", "ui_section"},
         "planner": {"app_name", "build_kind", "task", "plan_path", "spec"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
-        "postmortem": {"facts_path", "result_path", "categories"},
+        "retrospective": {"facts_path", "result_path", "categories"},
     }
 
     def test_placeholders(self):
@@ -314,14 +314,15 @@ class CoderModelPerRound(unittest.TestCase):
         self.assertEqual(run.model_for("tester", "t2"), "t")
 
 
-class ParallelReviewAndTest(unittest.TestCase):
-    """The reviewer and the tester run at the same time. Agents are stubbed; git is faked."""
+class ReviewBeforePushThenTest(unittest.TestCase):
+    """The reviewer reads the local commit before the push; the tester drives the deployed app after it. Agents are stubbed; git is faked."""
 
     def make(self, head_flags, agent):
         run = object.__new__(b.BuildRun)
         run.app, run.preview = "demo", "tok"
         run.cfg = {"roles": {"reviewer": {"mode": "agent"}}}
         run.lim = {}
+        run.reuse_flags = []
         run.work = Path(__import__("tempfile").mkdtemp(prefix="work-test-"))
         run.state = b.State(run.work / "state.json", "demo", "1", "url")
         run.state.save = lambda: None
@@ -337,64 +338,177 @@ class ParallelReviewAndTest(unittest.TestCase):
         run.git, run.restore_tree, run.agent_json = git, lambda cwd=None: None, agent
         return run
 
-    CLEAN = {"analysis": "x", "findings": [], "verdict": "clean"}
+    CLEAN = {"analysis": "x", "findings": [], "improvements": [], "verdict": "clean"}
     PASS = {"passed": True, "results": [{"flag": "f", "check": "c", "passed": True, "evidence": "e"}]}
+    FLAGS = '[{"slug": "f", "description": "d"}]'
 
-    def test_reviewer_and_tester_overlap_and_split_the_budget(self):
-        both_running = threading.Barrier(2, timeout=5)  # only passes if both are in flight together
-        shares = {}
+    def test_the_reviewer_runs_alone_and_before_anything_is_pushed(self):
+        roles = []
 
-        def agent(role, label, values, path, *a, share=1.0, **k):
-            shares[role] = share
-            both_running.wait()
-            return (self.CLEAN if role == "reviewer" else self.PASS), 0.1, None
+        def agent(role, label, values, path, *a, **k):
+            roles.append(role)
+            return self.CLEAN, 0.1, None
 
-        run = self.make('[{"slug": "f", "description": "d"}]', agent)
-        clean, tpassed, flags, _ = run.review_and_test("base1", "head1", 1)
-        self.assertTrue(clean and tpassed)
-        self.assertEqual(flags, ["f"])
-        self.assertEqual(shares, {"reviewer": 0.5, "tester": 0.5})
-        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review", "Test"])
+        run = self.make(self.FLAGS, agent)
+        clean, blocking, minor = run.review_before_push("base1", "head1", 1)
+        self.assertEqual((clean, blocking, minor), (True, [], []))
+        self.assertEqual(roles, ["reviewer"])  # no tester, no deploy: nothing is live yet
+        self.assertEqual(run.run_flags("base1", "head1"), ["f"])
+        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review"])
+
+    def test_a_blocking_finding_is_returned_so_the_coder_can_fix_it_before_the_push(self):
+        doc = dict(self.CLEAN, verdict="clean", findings=[{"severity": "blocking", "summary": "injection", "evidence": "line 3"}])
+        run = self.make(self.FLAGS, lambda *a, **k: (doc, 0.1, None))
+        clean, blocking, _ = run.review_before_push("base1", "head1", 1)
+        self.assertFalse(clean)  # the model's own "clean" verdict is ignored
+        self.assertEqual(len(blocking), 1)
+
+    def test_the_tester_runs_after_the_push_and_says_what_a_failure_means(self):
+        run = self.make(self.FLAGS, lambda role, *a, **k: (self.PASS, 0.1, None))
+        self.assertEqual(run.test_deployed("base1", "head1", 1, ["f"])[::2], (True, "ok"))
+        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Test"])
 
     def test_with_no_flags_the_tester_still_runs_against_the_intake(self):
         seen = []
 
-        def agent(role, label, values, path, *a, share=1.0, **k):
+        def agent(role, label, values, path, *a, **k):
             seen.append(role)
-            return (self.CLEAN if role == "reviewer" else {"passed": True, "results": [
-                {"flag": "", "check": "requirement 1", "passed": True, "evidence": "e"}]}), 0.1, None
+            return {"passed": True, "results": [{"flag": "", "check": "requirement 1", "passed": True, "evidence": "e"}]}, 0.1, None
 
         run = self.make("[]", agent)
-        clean, tpassed, flags, _ = run.review_and_test("base1", "head1", 1)
-        self.assertEqual(sorted(seen), ["reviewer", "tester"])
-        self.assertTrue(clean and tpassed)
-        self.assertEqual(flags, [])
+        passed, failures, impact = run.test_deployed("base1", "head1", 1, run.run_flags("base1", "head1"))
+        self.assertEqual((seen, passed, failures, impact), (["tester"], True, [], "ok"))
 
-    def test_a_failing_tester_still_records_the_reviewer_and_then_raises(self):
-        def agent(role, label, values, path, *a, share=1.0, **k):
-            if role == "tester":
-                raise b.NeedsHuman("other", "the tester produced no valid output file twice")
-            return self.CLEAN, 0.1, None
+    def test_a_failure_of_the_new_change_is_dark_only_and_one_of_released_behaviour_is_a_regression(self):
+        broken_new = {"flag": "f", "check": "new route", "status": "failed", "evidence": "e", "scope": "new", "api": ["a1"]}
+        broken_old = {"flag": "", "check": "GET /api/notes", "status": "failed", "evidence": "e", "scope": "existing", "api": ["a2"]}
+        self.assertEqual(b.test_impact([]), "ok")
+        self.assertEqual(b.test_impact([broken_new]), "dark_only")
+        self.assertEqual(b.test_impact([broken_new, broken_old]), "regression")
+        # the model's word alone is not enough: no helper observation, no regression; and blocked or not_run is not "broken"
+        self.assertEqual(b.test_impact([dict(broken_old, api=[])]), "dark_only")
+        self.assertEqual(b.test_impact([dict(broken_old, status="blocked")]), "dark_only")
+        self.assertEqual(b.test_impact([dict(broken_old, status="not_run")]), "dark_only")
 
-        run = self.make('[{"slug": "f", "description": "d"}]', agent)
+    def test_a_failing_tester_with_nothing_seen_to_fail_raises_for_a_person(self):
+        def agent(role, *a, **k):
+            raise b.NeedsHuman("other", "the tester produced no valid output file twice")
+
+        run = self.make(self.FLAGS, agent)
         with self.assertRaises(b.NeedsHuman):
-            run.review_and_test("base1", "head1", 1)
-        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review"])
+            run.test_deployed("base1", "head1", 1, ["f"])
 
-    def test_the_reviewer_failing_raises_after_the_tester_finished(self):
-        done = []
+    def test_improvements_are_kept_deduplicated_and_only_the_known_kinds(self):
+        doc = dict(self.CLEAN, improvements=[
+            {"target": "factory", "summary": "The prompt never says  to trim input", "evidence": "e"},
+            {"target": "factory", "summary": "the prompt never says to trim input", "evidence": "again"},
+            {"target": "managed_app", "summary": "Add a test for empty text", "evidence": ""},
+            {"target": "nobody", "summary": "ignored"}, {"target": "factory", "summary": "  "}, "junk"])
+        run = self.make(self.FLAGS, lambda *a, **k: (doc, 0.1, None))
+        run.review_before_push("base1", "head1", 1)
+        run.note_improvements(doc, "reviewer")  # a second sighting adds nothing
+        kept = run.state.d["improvements"]
+        self.assertEqual([(i["source"], i["target"]) for i in kept], [("reviewer", "factory"), ("reviewer", "managed_app")])
 
-        def agent(role, label, values, path, *a, share=1.0, **k):
-            if role == "reviewer":
-                raise b.BudgetExhausted("cap")
-            done.append(role)
-            return self.PASS, 0.1, None
 
-        run = self.make('[{"slug": "f", "description": "d"}]', agent)
-        with self.assertRaises(b.BudgetExhausted):
-            run.review_and_test("base1", "head1", 1)
-        self.assertEqual(done, ["tester"])
-        self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Test"])
+class RoundLoop(unittest.TestCase):
+    """The order of a Build Run's rounds with every stage stubbed: review the local commit, push only a clean one, wait for the deploy,
+    then test it."""
+
+    def make(self, reviews, tests, pipeline_fix=False):
+        run = object.__new__(b.BuildRun)
+        run.app, run.build_kind, run.update_intake, run.plan_meta = "demo", "update", False, None
+        run.task, run.retiring, run.reuse_flags, run.retry_state = "do it", (), [], {}
+        run.lim = {"review_rounds": 3, "stuck_rounds": 0}
+        run.work = Path(__import__("tempfile").mkdtemp(prefix="loop-test-"))
+        run.art = run.work
+        run.state = b.State(run.work / "state.json", "demo", "1", "url")
+        run.state.d["base_sha"] = "base"
+        run.calls, run.heads = [], iter(["c1", "c2", "c3", "c4"])
+        run.setup = lambda: None
+        run.coder = lambda label, task, path: (run.calls.append(f"coder{label}"), next(run.heads))[1]
+        reviews, tests = iter(reviews), iter(tests)
+
+        def review(base, head, rnd):
+            run.calls.append(f"review {head}")
+            return next(reviews)
+        run.review_before_push = review
+        run.run_flags = lambda base, head: ["f"]
+        run.push = lambda head: (run.calls.append(f"push {head}"), run.state.d["commits"].append(head))
+        fixes = iter([pipeline_fix])
+
+        def pipeline(sha):
+            run.calls.append(f"pipeline {sha}")
+            if next(fixes, False):
+                run.last = "fix1"  # the coder's fix is now HEAD
+                raise b.PipelineFix("fix1")
+            return sha
+        run.pipeline = pipeline
+
+        def test(base, head, rnd, flags):
+            run.calls.append(f"test {head}")
+            return next(tests)
+        run.test_deployed = test
+        run.head = lambda: run.last
+        run.record_round = lambda *a: None
+        run.release = lambda flags, head: run.calls.append("release")
+        run.link_flags_to_issue = lambda flags: None
+        run.watch_release = lambda: None
+        run.archive_retired_flags = lambda base, head: None
+        run.check_limits = lambda: None
+        run.cap = 1.0
+        return run
+
+    def go(self, run):
+        # the coder's last commit is what HEAD points at
+        orig = run.coder
+        run.coder = lambda *a: setattr(run, "last", orig(*a)) or run.last
+        run.last = None
+        run.run()
+
+    CLEAN, BLOCKED = (True, [], []), (False, [{"summary": "bad", "evidence": "e"}], [])
+    PASSED, FAILED_NEW = (True, [], "ok"), (False, [{"flag": "f", "check": "new", "status": "failed", "scope": "new"}], "dark_only")
+
+    def test_a_clean_review_pushes_then_the_tester_runs_then_it_releases(self):
+        run = self.make([self.CLEAN], [self.PASSED])
+        self.go(run)
+        self.assertEqual(run.calls, ["coder1", "review c1", "push c1", "pipeline c1", "test c1", "release"])
+        self.assertEqual(run.state.d["outcome"], "released")
+
+    def test_a_blocked_review_sends_the_code_back_to_the_coder_and_nothing_is_pushed(self):
+        run = self.make([self.BLOCKED, self.CLEAN], [self.PASSED])
+        self.go(run)
+        self.assertEqual(run.calls[:4], ["coder1", "review c1", "coder2", "review c2"])
+        self.assertNotIn("push c1", run.calls)  # the blocked commit never reached main
+        self.assertEqual(run.state.d["commits"], ["c2"])
+        self.assertEqual(run.state.d["outcome"], "released")
+
+    def test_a_dark_failure_is_fixed_forward_in_the_next_round(self):
+        run = self.make([self.CLEAN, self.CLEAN], [self.FAILED_NEW, self.PASSED])
+        self.go(run)
+        self.assertEqual(run.calls, ["coder1", "review c1", "push c1", "pipeline c1", "test c1", "coder2",
+                                     "review c2", "push c2", "pipeline c2", "test c2", "release"])
+        self.assertEqual(run.state.d["outcome"], "released")
+
+    def test_a_regression_ends_the_run_at_once_so_finalize_can_roll_the_deploy_back(self):
+        broken = {"flag": "", "check": "GET /api/notes", "status": "failed", "scope": "existing", "api": ["a"]}
+        run = self.make([self.CLEAN], [(False, [broken], "regression")])
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "regression")
+        self.assertNotIn("release", run.calls)
+        self.assertEqual(run.calls.count("coder2"), 0)  # no more rounds on top of a regression
+
+    def test_a_fix_the_pipeline_needed_is_reviewed_before_it_is_pushed(self):
+        run = self.make([self.CLEAN, self.CLEAN], [self.PASSED], pipeline_fix=True)
+        self.go(run)
+        self.assertEqual(run.calls[:7], ["coder1", "review c1", "push c1", "pipeline c1", "review fix1", "push fix1", "pipeline fix1"])
+        self.assertEqual(run.state.d["outcome"], "released")
+
+    def test_rounds_that_never_pass_review_end_at_the_round_limit_with_nothing_pushed(self):
+        run = self.make([self.BLOCKED] * 3, [])
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "round_limit")
+        self.assertEqual(run.state.d["commits"], [])
 
 
 class BudgetAccounting(unittest.TestCase):
@@ -423,13 +537,6 @@ class BudgetAccounting(unittest.TestCase):
         post = [c[1] for c in self.calls if c[0] == "POST"]
         self.assertEqual([p["models"] for p in post], [["m1"], ["m2"]])
         self.assertEqual([p["spending_limit"] for p in post], [2.0, 1.25])
-
-    def test_a_share_splits_what_is_left_between_parallel_agents(self):
-        bud = b.Budget("admin", 2.0, 100)
-        bud.mint("m1", share=0.5)
-        bud.mint("m2", share=0.5)
-        post = [c[1] for c in self.calls if c[0] == "POST"]
-        self.assertEqual([p["spending_limit"] for p in post], [1.0, 1.0])
 
     def test_spend_sums_across_jwts_and_exhaustion_stops_minting(self):
         bud = b.Budget("admin", 1.0, 100)
@@ -704,7 +811,7 @@ class JsonOutput(unittest.TestCase):
         path = self.write(None)
         notes, attempts = [], []
 
-        def invoke(role, label, values, extra_env, cwd, home, share, note=None):
+        def invoke(role, label, values, extra_env, cwd, home, note=None):
             attempts.append(label)
             notes.append(note)
             path.write_text('{"results": [' if len(attempts) == 1 else '{"results": []}')
@@ -721,7 +828,7 @@ class JsonOutput(unittest.TestCase):
         run = object.__new__(b.BuildRun)
         path = self.write(None)
 
-        def invoke(role, label, values, extra_env, cwd, home, share, note=None):
+        def invoke(role, label, values, extra_env, cwd, home, note=None):
             path.write_text("{oops")
             return 0, 0.1, None
 

@@ -1,0 +1,47 @@
+name: Rollback Fly
+
+# Redeploys the image of an earlier commit, so the live app goes back to a version that worked. The Orchestrator runs this when the tester
+# finds that behaviour which was live before a Build Run stopped working. Nothing is changed in git: the commits stay in `main` and are
+# fixed forward. The image is the one the earlier deploy left in Fly's registry, tagged by commit SHA (see deploy-fly.yml).
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full SHA of the commit whose image to redeploy"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rollback
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP_NAME: ${{ github.event.repository.name }}
+      SHA: ${{ inputs.sha }}
+    steps:
+      - name: Check the SHA
+        run: |
+          echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::sha must be a full 40-character commit SHA"; exit 1; }
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Redeploy the earlier image
+        run: |
+          flyctl deploy --app "$FLY_APP_NAME" --image "registry.fly.io/${FLY_APP_NAME}:${SHA}"
+
+      - name: Write rollback summary
+        if: success()
+        run: |
+          {
+            echo "## Rollback Outcome"
+            echo
+            echo "**Status**: :white_check_mark: redeployed \`${SHA}\`"
+            echo
+            echo "**App URL**: https://${FLY_APP_NAME}.fly.dev"
+          } >> "$GITHUB_STEP_SUMMARY"

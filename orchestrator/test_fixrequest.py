@@ -13,7 +13,7 @@ FACTS = {"app": "demo", "outcome": "round_limit", "message": "4 review rounds us
          "issue_number": "66", "review_passes": 4, "spent_usd": 0.61, "cap_usd": 0.75, "commits": ["a", "b"],
          "final_blocking": ["the change is not behind the flag the spec names", "put still 404s while that flag is off"],
          "recurring_findings": ["flag the spec names"]}
-REVERT = {"status": "reverted", "sha": "abcdef123456", "restored": "0123456789ab", "deploy": "healthy", "mode": "all"}
+REVERT = {"status": "rolled_back", "restored": "0123456789ab", "deploy": "healthy"}
 RESULT = {"category": "plan_gap", "root_cause": "The planner invented a flag to retire a flag.", "change_summary": "Planner prompt: retiring is internal",
           "requirements": ["The planner marks retirement change sets internal_only"]}
 
@@ -48,17 +48,41 @@ class Content(unittest.TestCase):
             text = " ".join(fr.requirements(dict(FACTS, outcome=outcome), None, REVERT))
             self.assertIn(needle, text, outcome)
 
-    def test_a_failed_revert_is_the_first_requirement_and_said_plainly(self):
-        failed = {"status": "failed", "reason": "RuntimeError: push rejected"}
-        self.assertIn("revert failed", fr.requirements(FACTS, RESULT, failed)[0])
-        self.assertIn("**The automatic revert failed**", fr.revert_line(failed))
-        self.assertIn("were not reverted", fr.requirements(FACTS, RESULT, {"status": "skipped", "reason": "main moved on"})[0])
-        self.assertEqual(fr.revert_line(None), "No revert was attempted.")
+    def test_a_failed_rollback_is_the_first_requirement_and_said_plainly(self):
+        failed = {"status": "failed", "reason": "could not start rollback-fly.yml"}
+        self.assertIn("rollback failed", fr.requirements(FACTS, RESULT, failed)[0])
+        self.assertIn("**The automatic rollback failed**", fr.rollback_line(failed))
+        self.assertIn("run `rollback-fly.yml`", fr.rollback_line(failed))
+        regression = dict(FACTS, outcome="regression")
+        self.assertIn("no rollback was done", fr.requirements(regression, RESULT, {"status": "skipped", "reason": "switched off"})[0])
+        self.assertEqual(fr.rollback_line(None), "No rollback was attempted.")
+        self.assertIn("Nothing was reverted in git", fr.rollback_line(REVERT))
+
+    def test_a_regression_is_fixed_forward_on_its_own_story_behind_the_same_flag(self):
+        self.assertEqual(fr.route(fr.inferred_category(None, "regression")), "app")
+        self.assertEqual(fr.route(fr.inferred_category("prompt_gap", "regression")), "factory")
+        text = " ".join(fr.requirements(dict(FACTS, outcome="regression", message="old route broke"), None, REVERT))
+        self.assertIn("fix it forward", text)
+        self.assertNotIn("deliver it again", text)
+
+    def test_bugs_the_tester_saw_are_requirements_and_send_the_story_back_to_its_own_issue(self):
+        bugs = [{"kind": "dark", "flag": "pin", "check": "pin route answers 201", "evidence": "got 500", "repro": "curl -X POST /api/pins"}]
+        facts = dict(FACTS, bugs=bugs)
+        text = " ".join(fr.requirements(facts, None, None))
+        self.assertIn("Fix this bug the tester saw (the new change, still dark): pin route answers 201", text)
+        self.assertIn("Repro: curl -X POST /api/pins", text)
+        # a dark failure with no cause named, or an infra one, is retried on the story (not an information issue in the Factory)
+        for category in (None, "infra", "unknown", "model_limit"):
+            self.assertEqual(fr.route(fr.inferred_category(category, "round_limit", True)), "app", category)
+        self.assertEqual(fr.route(fr.inferred_category(None, "round_limit", False)), "info")
+        # a Factory cause still goes to the Factory
+        self.assertEqual(fr.route(fr.inferred_category("prompt_gap", "round_limit", True)), "factory")
+        self.assertIn("listed under the requirements", fr.GUIDANCE["regression"])
 
     def test_the_issue_explains_what_happened_what_was_done_and_what_to_do_next(self):
         body = fr.render(FACTS, RESULT, REVERT, "factory", "https://github.com/o/f/issues/66")
         for needle in ("## What happened", "ended **round_limit**", "https://x/run/9", "Still blocking at the end: the change is not behind",
-                       "## What was done automatically", "the deploy of that commit is **healthy**", "## Analysis (automated, and may be wrong)",
+                       "## What was done automatically", "the deploy is **healthy**", "## Analysis (automated, and may be wrong)",
                        "**plan_gap**", "invented a flag", "## Requirements", "1. ", "ready-for-factory-run"):
             self.assertIn(needle, body, needle)
         self.assertIn("proceed-with-change", fr.render(FACTS, RESULT, REVERT, "app"))
@@ -98,7 +122,7 @@ class Correction(unittest.TestCase):
         self.assertIsNone(fr.raised_cap("budget_exhausted", None))
 
     def test_the_app_retry_carries_no_requirements_about_fixing_the_factory(self):
-        # What the live retry (#81) got: the post-mortem's requirements about the tester, pasted into the app's request.
+        # What the live retry (#81) got: the retrospective's requirements about the tester, pasted into the app's request.
         result = dict(RESULT, category="model_limit", requirements=["The tester agent must produce a valid JSON test report", "Helper utilities should make it easier for AI agents"])
         app_side = fr.app_request(FACTS, result, REVERT, "Add a count endpoint.", "model_limit", [])
         self.assertNotIn("tester agent must produce", app_side)

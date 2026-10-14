@@ -30,18 +30,18 @@ class Ledger(unittest.TestCase):
     def test_the_post_mortem_agents_spend_counts_toward_the_daily_cap(self):
         import build_run as b
         line_run = b.ledger_line("2026-10-13", "app", 1.5, "99")
-        line_pm = b.ledger_line("2026-10-13", "postmortem", 0.25, "99-pm")
+        line_pm = b.ledger_line("2026-10-13", "retrospective", 0.25, "99-pm")
         self.assertEqual(b.ledger_total([line_run, line_pm], "2026-10-13"), 1.75)
 
     def test_record_agent_spend_writes_one_ledger_line_and_never_raises(self):
         from unittest import mock
         import build_run as b
-        import postmortem as pm
+        import retrospective as pm
         budget = mock.Mock()
         budget.refresh.return_value = 0.21
         with mock.patch.object(b, "record_spend_in_ledger") as rec:
             pm.record_agent_spend(budget, "jwt", "o/r", "tok", "7")
-        rec.assert_called_once_with({"app": "postmortem", "spent_usd": 0.21}, "o/r", "7-pm", "tok")
+        rec.assert_called_once_with({"app": "retrospective", "spent_usd": 0.21}, "o/r", "7-pm", "tok")
         budget.refresh.side_effect = RuntimeError("down")
         pm.record_agent_spend(budget, "jwt", "o/r", "tok", "7")
 

@@ -16,6 +16,11 @@ A flag is a candidate when all of these hold, read from the app's State issue an
   - it was released on an earlier day than today (a soak of at least a day, so the production-feedback scans have looked at it).
 The newest release therefore always keeps its flag, and a run that ended `nothing_to_release` retires nothing.
 
+A *dark* feature is the other case: a flagged change that never got through its checks. It stays dark, behind its flag, and is fixed forward
+by the story's automatic retries (`fix_request_max_attempts`). Only after those are used up (the story is labelled `needs-human` and
+`dark-broken`) and a person adds the label `approve-retire` to the story is it removed: `approve` files an Update Intake that deletes the
+flag's check, the code it guarded, its tests and its line in `flags.json`, and starts it. Nothing removes a dark feature on its own.
+
 Limits: `limits.flag_retirement` in agents/profiles.yml (`piggyback_max` flags per run, default 5, so a backlog clears; `min_age_days`).
 """
 import base64
@@ -103,6 +108,63 @@ def retirement_note(slugs):
             "nothing else changed. The task carries `retire-flag: <slug>` lines for them.\n" + "\n".join(f"retire-flag: {s}" for s in slugs))
 
 
+APPROVE = "approve-retire"
+
+
+def dark_removal_target(labels):
+    """(app, slug, None) when a person's approval can retire this story's dark feature, else (None, None, why not)."""
+    labels = set(labels)
+    if "update-intake" not in labels:
+        return None, None, "this is not an Update Intake story"
+    if b.DARK_BROKEN not in labels:
+        return None, None, f"the story has no broken dark feature (it is not labelled `{b.DARK_BROKEN}`)"
+    if "needs-human" not in labels:
+        return None, None, "the automatic retries are not used up yet (the story is not labelled `needs-human`); they fix it forward first"
+    slugs = sorted(l[5:] for l in labels if l.startswith("flag:"))
+    apps = sorted(l[4:] for l in labels if l.startswith("app:"))
+    if len(slugs) != 1 or len(apps) != 1:
+        return None, None, "the story must name exactly one flag (`flag:<slug>`) and one app (`app:<name>`)"
+    return apps[0], slugs[0], None
+
+
+def dark_removal_task(slug, story):
+    """The request an approved retirement files: remove the feature, since it never released. Users see no difference."""
+    return (f"Remove the dark feature behind the flag `{slug}`. It was built in #{story}, never passed its checks and was never released, "
+            "so no user has ever seen it and its flag is off. A person has approved removing it.\n\n"
+            f"Delete the check of `{slug}`, the code it guarded (routes, UI, helpers, migrations that only it used) and the tests that "
+            f"exercise it; remove its entry from `flags.json`. Leave no code that mentions the slug (a comment may). Touch no other flag and "
+            "change nothing else: the app must behave exactly as it does today.")
+
+
+def approve(repo, pat, number):
+    """The story #number got the label `approve-retire`: file the removal as an Update Intake and start it. Returns 0 either way (a refusal
+    is a comment on the story, not a failed workflow)."""
+    import update_intake as ui
+    env = {**os.environ, "GH_TOKEN": pat}
+    story = json.loads(b.sh(["gh", "issue", "view", str(number), "--repo", repo, "--json", "labels,title"], env=env).stdout)
+    labels = [l["name"] for l in story["labels"]]
+    app, slug, why = dark_removal_target(labels)
+    b.sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", APPROVE], env=env, check=False)
+    if why:
+        b.sh(["gh", "issue", "comment", str(number), "--repo", repo, "--body", f"**Retirement not started:** {why}."], env=env, check=False)
+        return 0
+    for name, color, desc in ((ui.FORM_LABEL, "1d76db", "A change request for an existing Managed App"), (ui.GO, "0e8a16", "Start this change now"),
+                              (f"app:{app}", "1d76db", f"Issues about the Managed App {app}")):
+        ui.ensure_label(repo, name, pat, color, desc)
+    body = (f"### App name\n\n{app}\n\n### What should change?\n\n{dark_removal_task(slug, number)}\n\n### Cost cap override (USD)\n\n_No response_\n")
+    out = b.sh(["gh", "issue", "create", "--repo", repo, "--title", f"{app}: Remove dark feature {slug}", "--body", body,
+                "--label", f"{ui.FORM_LABEL},app:{app}"], env=env).stdout
+    made = re.search(r"/issues/(\d+)", out)
+    if not made:
+        return 0
+    b.sh(["gh", "issue", "edit", made.group(1), "--repo", repo, "--add-label", ui.GO], env=env)  # the PAT: the Actions token would not start the workflow
+    b.sh(["gh", "issue", "comment", str(number), "--repo", repo, "--body",
+          f"**Retirement approved.** The dark feature `{slug}` is being removed by #{made.group(1)}. This story is closed; the removal "
+          "leaves the app exactly as it is today."], env=env, check=False)
+    b.sh(["gh", "issue", "close", str(number), "--repo", repo, "--reason", "not planned"], env=env, check=False)
+    return 0
+
+
 # --- GitHub (not unit-tested) -------------------------------------------------
 
 
@@ -121,3 +183,10 @@ def app_flags(owner, app, pat):
     except ValueError:
         return None, None
     return appstate.load(found[0]["body"]).get("flags", []), slugs
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "approve":
+        sys.exit(approve(os.environ["FACTORY_REPO"], os.environ["FACTORY_PAT"], int(sys.argv[2])))
+    print("usage: flag_retirement.py approve <story issue number>", file=sys.stderr)
+    sys.exit(2)

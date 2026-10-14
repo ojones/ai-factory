@@ -15,7 +15,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
-import postmortem as pm  # noqa: E402
+import retrospective as pm  # noqa: E402
 
 ROOT = b.FACTORY_DIR
 PROFILES = yaml.safe_load((ROOT / "agents/profiles.yml").read_text())
@@ -104,10 +104,10 @@ class Invariants(unittest.TestCase):
         with mock.patch.object(b, "http", return_value=(200, {"token": "jwt"})) as http:
             bud = b.Budget("admin", 2.0, 100)
             bud.tokens["earlier"] = 0.5
-            bud.mint("m/x", 0.5)
+            bud.mint("m/x")
         body = http.call_args[0][3]
         self.assertEqual(body["models"], ["m/x"])
-        self.assertAlmostEqual(body["spending_limit"], 0.75)
+        self.assertAlmostEqual(body["spending_limit"], 1.5)
 
     def test_inv10_a_cap_override_above_the_ceiling_or_not_above_zero_is_refused(self):
         form = "### What should be built?\n\nA thing\n\n### Cost cap override (USD)\n\n{}\n"
@@ -133,7 +133,7 @@ class Invariants(unittest.TestCase):
                     self.assertTrue((ROOT / "agents" / profile[key]).is_file(), f"{role}.{key} -> {profile[key]}")
         self.assertFalse((STARTER / "agents").exists())
 
-    def test_inv14_the_postmortem_agent_cannot_change_workflows_or_protected_files(self):
+    def test_inv14_the_retrospective_agent_cannot_change_workflows_or_protected_files(self):
         for bad in (".github/workflows/build-run.yml", "templates/starter/.github/workflows/build.yml", "templates/starter/fly.toml",
                     "templates/starter/fly/provision.sh", "agents/../.github/x.yml", "README.md"):
             self.assertFalse(pm.allowed_path(bad), bad)
@@ -156,10 +156,10 @@ class Invariants(unittest.TestCase):
         self.assertLess(health, kill)
         self.assertLess(kill, static)
 
-    def test_inv17_finalize_and_the_postmortem_always_run(self):
+    def test_inv17_finalize_and_the_retrospective_always_run(self):
         wf = yaml.safe_load((ROOT / ".github/workflows/build-run.yml").read_text())
         steps = next(iter(wf["jobs"].values()))["steps"]
-        for needle in ("build_run.py finalize", "postmortem.py"):
+        for needle in ("build_run.py finalize", "retrospective.py"):
             step = next(s for s in steps if needle in s.get("run", ""))
             self.assertEqual(str(step.get("if")).strip(), "always()", needle)
 
@@ -177,13 +177,13 @@ class Invariants(unittest.TestCase):
         self.assertTrue(b.stalled([dict(entry, round=i) for i in range(n)], n))
         self.assertFalse(b.stalled([dict(entry, round=i) for i in range(n - 1)], n))
 
-    def test_inv20_the_postmortem_agent_never_gets_the_parent_key(self):
-        cfg = {"limits": {"postmortem_cost_cap_usd": 0.5, "jwt_ttl_seconds": 60}, "roles": {"postmortem": {"model": "m/x"}}}
+    def test_inv20_the_retrospective_agent_never_gets_the_parent_key(self):
+        cfg = {"limits": {"retrospective_cost_cap_usd": 0.5, "jwt_ttl_seconds": 60}, "roles": {"retrospective": {"model": "m/x"}}}
         with mock.patch.object(pm.b, "http", return_value=(200, {"token": "scoped"})):
             self.assertEqual(pm.mint_agent_key(cfg, "parent-key"), "scoped")
         with mock.patch.object(pm.b, "http", return_value=(500, {})):
             self.assertIsNone(pm.mint_agent_key(cfg, "parent-key"))
-        source = (ROOT / "orchestrator/postmortem.py").read_text()
+        source = (ROOT / "orchestrator/retrospective.py").read_text()
         self.assertNotIn('"LLM_API_KEY": os.environ', source)
 
     def test_inv21_openhands_is_pinned_everywhere_it_is_installed(self):
@@ -235,24 +235,27 @@ class Invariants(unittest.TestCase):
         self.assertEqual(set(b.OK_OUTCOMES), set(audit.OK_OUTCOMES) & set(appstate.OK) & set(dashboard.OK))
         self.assertIn("planned", b.OK_OUTCOMES)
 
-    def test_inv25_a_failed_run_leaves_main_as_it_found_it(self):
-        from test_revert import Repo, git
-        r = Repo()
-        self.assertEqual(b.revert_main_to_base(r.d, r.work)["status"], "reverted")
-        self.assertEqual(git(r.origin, "diff", "--stat", r.base, "main"), "")
-        self.assertEqual(git(r.origin, "rev-list", "--count", "main"), "3")  # history kept, nothing rewritten
-        moved = Repo()
-        moved.other_pushes("someone else\n")
-        self.assertEqual(b.revert_main_to_base(moved.d, moved.work)["status"], "skipped")  # never over someone else's commit
+    def test_inv25_nothing_is_reverted_in_git_and_only_a_regression_rolls_the_deploy_back_through_ci(self):
+        import inspect
         d = {"commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
-        for outcome in ("released", "nothing_to_release", "planned", "watchdog_disabled"):
-            self.assertFalse(b.revert_decision(dict(d, outcome=outcome), "all")[0], outcome)
-        self.assertTrue(b.revert_decision(dict(d, outcome="round_limit"), "all")[0])
+        self.assertTrue(b.rollback_decision(dict(d, outcome="regression"))[0])
+        for outcome in ("released", "nothing_to_release", "planned", "watchdog_disabled", "round_limit", "needs_human", "stuck",
+                        "budget_exhausted", "time_limit", "crash", "provider_blocked"):
+            self.assertFalse(b.rollback_decision(dict(d, outcome=outcome))[0], outcome)
+        # the Orchestrator has no way to revert: no function, and the rollback runs the app's own workflow and touches no git
+        self.assertFalse(hasattr(b, "revert_main_to_base"))
+        src = inspect.getsource(b.rollback_deploy)
+        self.assertIn("ROLLBACK_WORKFLOW", src)
+        self.assertNotIn('"git"', src)
+        wf = yaml.safe_load((ROOT / "templates/starter/.github/workflows/rollback-fly.yml").read_text())
+        self.assertIn("workflow_dispatch", wf[True])
+        self.assertIn("rollback-fly.yml", b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR[-1])  # template sync gives existing apps the workflow
         import audit
-        self.assertTrue(audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "failed", "reason": "x"})))
+        self.assertTrue(audit.audit_report(dict(d, outcome="regression", stages=[], blocking=[], rollback={"status": "failed", "reason": "x"})))
+        self.assertTrue(audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
 
     def test_inv26_a_bad_ending_is_handled_on_the_stories_own_issue_or_as_one_fix_request(self):
-        import fixrequest as fr, postmortem as pm
+        import fixrequest as fr, retrospective as pm
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
             self.assertTrue(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release", "planned"):
@@ -298,7 +301,7 @@ class Invariants(unittest.TestCase):
         self.assertEqual(b.check_state({"status": "passed", "evidence": "Cannot see logs, but npm run test:file shows 1 passed"}), "passed")
 
     def test_inv29_a_provider_with_no_balance_stops_the_run_and_retries_nothing(self):
-        import fixrequest as fr, postmortem as pm
+        import fixrequest as fr, retrospective as pm
         event = '{"code": "LLMBadRequestError", "detail": "OpenAIException - You need positive balance to do inference", "kind": "ConversationErrorEvent"}'
         self.assertTrue(b.provider_blocked_text(event))
         self.assertFalse(b.provider_blocked_text("the spec mentions a positive balance"))
@@ -372,7 +375,7 @@ class Invariants(unittest.TestCase):
         self.assertTrue(mt.should_file(applicable, key, [], []))
         self.assertFalse(mt.should_file(applicable, key, [f"a: dependency updates [maint {key}]"], []))
         self.assertFalse(mt.should_file(applicable, key, [], [{"number": 9}]))
-        self.assertEqual(set(b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR), {".github/dependabot.yml", ".github/workflows/test-gate.yml"})
+        self.assertEqual(set(b.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR), {".github/dependabot.yml", ".github/workflows/test-gate.yml", ".github/workflows/rollback-fly.yml"})
 
     def test_inv36_the_browser_helpers_observation_outranks_the_testers_judgement(self):
         import ui_check as uc
@@ -427,7 +430,7 @@ class Invariants(unittest.TestCase):
 
     def test_inv40_an_impossible_request_is_refused_before_anything_is_built(self):
         import triage as tr
-        import postmortem as pm2
+        import retrospective as pm2
         self.assertEqual(tr.find_secrets("key sk-" + "x1y2z3w4v5u6t7s8r9q0p1o2"), ["an API key (sk- style)"])
         self.assertEqual(tr.find_secrets("add a password field"), [])
         self.assertTrue(tr.feasibility({"feasibility": {"status": "blocked", "category": "payments", "reasons": ["card"]}})[0])
@@ -457,6 +460,64 @@ class Invariants(unittest.TestCase):
                 mock.patch.dict(os.environ, {"DEEPINFRA_API_KEY": "k"}):
             run.check_models()
         self.assertEqual(run.cfg["roles"]["coder"]["model"], "ok")
+
+    def test_inv42_only_reviewed_code_is_pushed_and_the_reviewer_runs_before_the_push(self):
+        import inspect
+        self.assertNotIn('"push"', inspect.getsource(b.BuildRun.coder))  # the coder only commits
+        run_src = inspect.getsource(b.BuildRun.run)
+        self.assertLess(run_src.index("review_before_push"), run_src.index("self.push(head)"))
+        self.assertLess(run_src.index("self.push(head)"), run_src.index("test_deployed"))
+        self.assertIn("PipelineFix", run_src)  # a fix CI needed is reviewed again before it is pushed
+        # and the run's rounds, exercised end to end with the stages stubbed (test_build_run.RoundLoop)
+        from test_build_run import RoundLoop
+        t = RoundLoop()
+        run = t.make([t.BLOCKED, t.CLEAN], [t.PASSED])
+        t.go(run)
+        self.assertNotIn("push c1", run.calls)
+        self.assertLess(run.calls.index("review c2"), run.calls.index("push c2"))
+
+    def test_inv43_a_dark_feature_is_removed_only_after_the_retries_and_a_persons_approval(self):
+        import flag_retirement as fr
+        ready = ["update-intake", "app:notes", "flag:pin", "dark-broken", "needs-human"]
+        self.assertEqual(fr.dark_removal_target(ready), ("notes", "pin", None))
+        for missing in ("dark-broken", "needs-human"):  # while retries remain, or when nothing is dark-broken, the label does nothing
+            self.assertIsNotNone(fr.dark_removal_target([l for l in ready if l != missing])[2])
+        wf = yaml.safe_load((ROOT / ".github/workflows/approve-retire.yml").read_text())
+        self.assertEqual(wf[True]["issues"]["types"], ["labeled"])
+        self.assertIn("approve-retire", wf["jobs"]["approve"]["if"])
+        d = {"flags": ["pin"], "commits": ["h"], "outcome": "round_limit"}
+        self.assertTrue(b.is_dark_broken(d))  # a run that stops marks the feature; nothing deletes it
+        self.assertTrue(b.is_dark_broken(dict(d, outcome="regression")))  # rolled back, but its code stays in main behind the flag
+        self.assertFalse(b.is_dark_broken(dict(d, outcome="released")))
+
+    def test_inv44_the_tester_says_what_a_failure_means_and_only_what_a_helper_saw_is_a_regression(self):
+        new_check = {"flag": "f", "check": "c", "status": "failed", "scope": "new", "api": ["a"]}
+        old_check = {"flag": "", "check": "c", "status": "failed", "scope": "existing", "api": ["a"]}
+        self.assertEqual((b.test_impact([]), b.test_impact([new_check]), b.test_impact([old_check])), ("ok", "dark_only", "regression"))
+        self.assertEqual(b.test_impact([dict(old_check, api=[], ui=[])]), "dark_only")  # the model's word alone is not a regression
+        self.assertEqual(b.test_impact([dict(old_check, status="blocked")]), "dark_only")
+        doc = {"improvements": [{"target": "factory", "summary": "x", "evidence": ""}, {"target": "other", "summary": "y"}]}
+        self.assertEqual([i["target"] for i in b.improvements_from(doc, "tester")], ["factory"])  # the Agents suggest; they file nothing
+        import retrospective as pm
+        self.assertTrue(hasattr(pm, "note_bugs_on_story") and not hasattr(pm, "record_bugs"))  # bugs go on the story, never a new issue
+        self.assertGreaterEqual(len(pm.content_words("Coder prompt does not say to trim the input") & pm.content_words("The coder prompt never says to trim input")), 4)
+
+    def test_inv45_the_retrospective_agent_is_isolated_like_the_build_run_agents(self):
+        import inspect
+        import retrospective as pm
+        src = inspect.getsource(pm.run_agent)
+        self.assertIn("run_isolation_probes", src)
+        self.assertIn("user=user", src)
+        self.assertIn("apply_changes", src)
+        self.assertNotIn("subprocess.run", src)
+        self.assertNotIn('"git"', inspect.getsource(pm.run_tests) + inspect.getsource(pm.tree_changes) + inspect.getsource(pm.apply_changes))
+        self.assertIn("run_tests(", inspect.getsource(pm.open_pr))  # the tests of the proposal never run in the Orchestrator's own environment
+        self.assertNotIn("unittest", inspect.getsource(pm.open_pr).replace("run_tests", ""))
+        for name in ("build-run.yml", "factory-run.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text()
+            self.assertIn("useradd -m -s /bin/bash agent", text, name)
+            self.assertIn("AGENT_USER=agent", text, name)
+        self.assertEqual(pm.tree_changes.__module__, "retrospective")
 
 
 class Registry(unittest.TestCase):

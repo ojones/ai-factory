@@ -7,7 +7,7 @@ someone files it. This scheduled scan closes that:
   logs    Each Managed App's Fly log is read, error-level JSON lines are grouped by a fingerprint (the message with ids and
           numbers removed, plus the first stack frame), and a fingerprint seen `min_occurrences` times in one scan becomes an
           Update Intake for the app, started at once (the PAT adds `proceed-with-change`). Nobody reviews it first: the planner,
-          coder, tester and reviewer run, the change ships behind a flag, and a bad ending reverts and files a fix request.
+          coder, tester and reviewer run, the change ships behind a flag, and a bad ending is fixed forward and files a fix request.
   label   An open issue labelled `escaped-defect` in the app's repo, written by the repo's owner, becomes the same Update Intake.
           Issues by anyone else are ignored: only owner-written text may reach an Agent.
 

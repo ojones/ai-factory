@@ -91,7 +91,7 @@ def sync_request(app, target, base, applicable, protected, diff_text, by_orchest
     clipped = diff_text if len(diff_text) <= MAX_DIFF_CHARS else diff_text[:MAX_DIFF_CHARS] + "\n... (clipped; read the rest from the Factory repo)"
     parts += ["", "The template's own diff (from the Factory repository, not user input):", "", "```diff", clipped, "```", "",
               "How to apply it: keep the app's own code and behaviour. Where the app has changed the same file, merge by intent instead of "
-              "overwriting. If `package.json` changed, run `npm install`. Run `npm run format` and `npm run check`, and `npm test`. "
+              "overwriting. If `package.json` changed, run `npm install`. Run `npm run format` first, then `npm run check` and `npm test`. "
               f"Finally write the single line `{target}` to a file named `{STAMP}` at the repository root. This is a tooling change that "
               "users cannot see, so it needs no feature flag; do not add behaviour."]
     return "\n".join(parts)

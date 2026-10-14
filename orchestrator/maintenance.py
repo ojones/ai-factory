@@ -70,7 +70,7 @@ def maintenance_request(app, applicable, reported):
     parts = ["Dependabot found these updates for the app's dependencies. Apply them all in this change:", "", *lines, "",
              "How: update `package.json` and `package-lock.json` (run `npm install`) for the npm packages; change the `FROM` lines in "
              "the `Dockerfile` (both stages, keep the digest pin) for a Docker base image update. If an update is a major version, read "
-             "its release notes and fix what breaks. Then run `npm run format`, `npm run check` and `npm test`, and make sure the "
+             "its release notes and fix what breaks. Then run `npm run format`, then `npm run check` and `npm test`, and make sure the "
              "app still builds and its health route answers. If one update cannot be applied without breaking the app, leave that "
              "one out and say which and why in the commit message.",
              "", "This is maintenance that users cannot see, so it needs no feature flag; do not add behaviour."]

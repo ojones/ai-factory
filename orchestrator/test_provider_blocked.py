@@ -1,5 +1,5 @@
 """A model provider that refuses every request because the account has no balance (found when DeepInfra answered 402 mid-session).
-Nothing retries, files a self-starting fix request or runs a post-mortem Agent for it; one alert asks for a top-up."""
+Nothing retries, files a self-starting fix request or runs a retrospective Agent for it; one alert asks for a top-up."""
 import json
 import sys
 import tempfile
@@ -10,7 +10,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_run as b  # noqa: E402
 import fixrequest as fr  # noqa: E402
-import postmortem as pm  # noqa: E402
+import retrospective as pm  # noqa: E402
 
 # The event OpenHands printed, taken from the real log.
 REAL_EVENT = ('{"id": "af67", "timestamp": "2026-10-12T14:10:40", "source": "environment", "code": "LLMBadRequestError", '
@@ -89,14 +89,14 @@ class Run(unittest.TestCase):
         self.assertEqual(run.state.d["outcome"], "provider_blocked")
         self.assertIn("no balance", run.state.d["message"])
 
-    def test_it_is_not_a_good_ending_and_still_gets_reverted_if_it_pushed_something(self):
+    def test_it_is_not_a_good_ending_and_is_not_rolled_back_either(self):
         self.assertNotIn("provider_blocked", b.OK_OUTCOMES)
         d = {"outcome": "provider_blocked", "commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
-        self.assertTrue(b.revert_decision(d, "all")[0])
+        self.assertFalse(b.rollback_decision(d)[0])  # code is fixed forward; only a regression rolls the deploy back
 
 
 class AfterwardsOnlyOneAlert(unittest.TestCase):
-    FACTS = {"app": "demo", "run_url": "https://x/run/9", "issue_number": "66", "revert": {"status": "reverted", "sha": "abcdef12", "restored": "01234567", "deploy": "healthy"}}
+    FACTS = {"app": "demo", "run_url": "https://x/run/9", "issue_number": "66", "rollback": {"status": "rolled_back", "restored": "01234567", "deploy": "healthy"}}
 
     def test_no_self_starting_retry_no_lesson_no_stuck_issue(self):
         self.assertFalse(pm.wants_fix_request({"outcome": "provider_blocked"}, {}))
@@ -125,7 +125,7 @@ class AfterwardsOnlyOneAlert(unittest.TestCase):
         create = next(c for c in calls if c[:2] == ["issue", "create"])
         self.assertIn("provider-blocked", create[create.index("--label") + 1])
         body = create[create.index("--body") + 1]
-        for needle in ("no balance", "Add balance", "proceed-with-change", "ready-for-staging", "was put back", "no fix request or post-mortem"):
+        for needle in ("no balance", "Add balance", "proceed-with-change", "ready-for-staging", "redeployed", "no fix request or retrospective"):
             self.assertIn(needle, body)
 
     def test_later_blocked_runs_comment_on_the_open_alert_instead_of_filing_more(self):
