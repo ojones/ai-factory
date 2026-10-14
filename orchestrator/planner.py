@@ -43,6 +43,10 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, re
     problems, questions = [], []
     if not isinstance(plan, dict):
         return ["the plan is not a JSON object"], []
+    if isinstance(plan.get("feasibility"), dict) and plan["feasibility"].get("status") == "blocked":
+        if not plan["feasibility"].get("reasons"):
+            return ["a blocked request needs `reasons`: one plain sentence each, naming what in the request needs it"], []
+        return [], []  # a refusal has no change sets to check
 
     reqs = plan.get("requirements")
     sets = plan.get("change_sets")

@@ -425,6 +425,17 @@ class Invariants(unittest.TestCase):
         for fn in ("release", "disable_flags"):
             self.assertTrue(hasattr(b.BuildRun, fn))
 
+    def test_inv40_an_impossible_request_is_refused_before_anything_is_built(self):
+        import triage as tr
+        import postmortem as pm2
+        self.assertEqual(tr.find_secrets("key sk-" + "x1y2z3w4v5u6t7s8r9q0p1o2"), ["an API key (sk- style)"])
+        self.assertEqual(tr.find_secrets("add a password field"), [])
+        self.assertTrue(tr.feasibility({"feasibility": {"status": "blocked", "category": "payments", "reasons": ["card"]}})[0])
+        self.assertFalse(tr.feasibility({"feasibility": {"status": "ok"}})[0])
+        self.assertFalse(pm2.wants_fix_request({"outcome": "refused"}, {}))
+        self.assertNotIn("refused", b.OK_OUTCOMES)
+        self.assertTrue(issubclass(b.Refused, Exception))
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

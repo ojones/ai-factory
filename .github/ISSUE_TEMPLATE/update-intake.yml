@@ -20,7 +20,7 @@ body:
     id: description
     attributes:
       label: What should change?
-      description: What the app should do differently. Say what you want to see, not how to build it. Mention anything that must not change.
+      description: What the app should do differently. Say what you want to see, not how to build it. Mention anything that must not change. This issue is public: never paste a key, token or password. See docs/golden-intakes.md for examples.
     validations:
       required: true
   - type: input

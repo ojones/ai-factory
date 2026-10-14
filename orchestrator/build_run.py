@@ -33,6 +33,7 @@ import appstate
 import audit
 import fixrequest
 import planner
+import triage
 import update_intake
 from update_intake import form_section  # noqa: F401 - the Issue Form parser lives with Update Intake
 
@@ -300,6 +301,11 @@ def flag_description(issue_url, title):
 
 def flag_tags(issue, app):
     return [f"intake-{issue}", f"app-{app}"]
+
+
+class Refused(Exception):
+    """The request cannot be built here (a real secret in public text, or the planner judged it infeasible). The run ends `refused`: nothing
+    was built, so nothing is reverted, retried or filed as a failure."""
 
 
 class NothingToDo(Exception):
@@ -938,6 +944,9 @@ class BuildRun:
             self.task += "\n\n" + str(retry["guidance"])
             if retry.get("cap"):
                 self.cap = max(self.cap, min(float(retry["cap"]), float(self.lim["cost_cap_usd_ceiling"])))
+        secrets = triage.find_secrets(issue["body"] or "")
+        if secrets:
+            raise Refused(triage.secret_refusal(secrets))
         self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
         # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
         raw_cap = form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
@@ -1668,6 +1677,10 @@ class BuildRun:
             if problems:
                 raise NeedsHuman("other", "the planner's plan was rejected: " + "; ".join(problems))
             raise
+        blocked, category, reasons, possible = triage.feasibility(doc)
+        if blocked:
+            self.state.stage("Plan", "planner", "1", cost, f"refused ({category})", usage)
+            raise Refused(triage.refusal_text(category, reasons, possible))
         _, questions = planner.validate_plan(doc, self.build_kind, limit, self.reuse_flags)
         if questions and getattr(self, "fix_meta", None):
             # An automatic retry has no person to answer. Take the most conservative reading and say so, in the plan comment.
@@ -1756,6 +1769,8 @@ class BuildRun:
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
         except NothingToDo as e:
             self.state.d.update(outcome="nothing_to_release", message=str(e))
+        except Refused as e:
+            self.state.d.update(outcome="refused", message=str(e))
         except ProviderBlocked as e:
             self.state.d.update(outcome="provider_blocked", message=str(e))
         except BudgetExhausted as e:
@@ -1778,6 +1793,7 @@ OUTCOME_TITLES = {
     "round_limit": "Build Run: needs human (review round limit reached)",
     "time_limit": "Build Run: needs human (time limit reached)",
     "provider_blocked": "Build Run: model provider blocked (account has no balance)",
+    "refused": "Build Run: request refused (the Factory cannot build it)",
     "stuck": "Build Run: needs human (no progress across rounds)",
     "watchdog_disabled": "Build Run: release switched off by the watchdog",
     "needs_human": "Build Run: needs human",
@@ -2080,13 +2096,14 @@ def finalize():
     record_spend_in_ledger(d, os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_RUN_ID", "0"), os.environ["FACTORY_GH_TOKEN"])
     pat, ftoken = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     update_state_issues(d, os.environ["GITHUB_REPOSITORY"], pat, ftoken)
-    if not ok:
+    if not ok and d["outcome"] != "refused":  # a refusal is answered on the Intake issue; there is nothing in the app repo to report
         body = f"{d['message']}\n\n**Build Run**: {run_url}\n**Spent**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f}\n\n" + summary
         (work / "issue-body.md").write_text(body)
         sh(["gh", "issue", "create", "--repo", f"{owner}/{app}", "--title", OUTCOME_TITLES.get(d["outcome"], "Build Run: crash"),
             "--body-file", str(work / "issue-body.md")], env={**os.environ, "GH_TOKEN": pat}, check=False)
     retry = ("" if ok or d.get("intake_kind") != "update" else
              f"\n\nOnce the provider balance is topped up, add `{update_intake.GO}` again to retry." if d["outcome"] == "provider_blocked"
+             else "" if d["outcome"] == "refused"  # the refusal text already says how to try again
              else f"\n\nEdit this issue if the request needs to change, then add `{update_intake.GO}` again to retry.")
     sh(["gh", "issue", "comment", d["issue_number"], "--repo", os.environ["GITHUB_REPOSITORY"], "--body",
         f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],
