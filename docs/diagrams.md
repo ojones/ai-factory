@@ -147,7 +147,7 @@ flowchart TB
 
   subgraph AUTO["Automatic work that creates Update Intakes"]
     pf["<b>Production feedback</b> (every 6 h)<br/>repeated error lines in a Managed App's Fly logs,<br/>or an owner-written escaped-defect issue"]:::auto
-    ts["<b>Template sync</b> (on a Starter change, daily)<br/>brings older apps up to the Starter Template,<br/>including rollback-fly.yml"]:::auto
+    ts["<b>Template sync</b> (nightly)<br/>brings older apps up to the Starter Template,<br/>including rollback-fly.yml"]:::auto
     mt["<b>Maintenance</b> (daily)<br/>Dependabot pull requests become<br/>one Intake per app"]:::auto
     ui["<b>Update Intake</b><br/>starts itself; goes through the Build Run"]:::human
     pf --> ui

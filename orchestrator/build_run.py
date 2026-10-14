@@ -109,14 +109,49 @@ def identify_intake(issue, app, number):
     return True, update_intake.plan_meta(body)
 
 
-def derive_review(doc):
-    """(clean, blocking, minor). The verdict comes from the findings, never the model's own field."""
+FINDING_CATEGORIES = ("correctness", "security", "data_safety", "requirement_not_met", "flag_misuse", "test_quality", "style", "duplication", "other")
+BLOCKING_CATEGORIES = ("correctness", "security", "data_safety", "requirement_not_met", "flag_misuse", "test_quality")
+EVIDENCE_KINDS = ("repro", "cited", "opinion")
+
+
+def finding_support(f):
+    """Why a finding the reviewer called blocking cannot block, or None when its fields support it. It blocks only if its category is one
+    that can (not style, duplication or other) and its evidence is something to act on: a `repro` (a command or check that shows it) or
+    a citation (a file and line). An opinion never blocks."""
+    if f.get("category") not in BLOCKING_CATEGORIES:
+        return f"category `{f.get('category')}` cannot block"
+    kind = f.get("evidence_kind")
+    if kind == "repro" and str(f.get("repro") or "").strip():
+        return None
+    if kind == "cited" and str(f.get("file") or "").strip() and str(f.get("line") or "").strip():
+        return None
+    return f"evidence `{kind}` is not backed by a {'repro' if kind == 'repro' else 'file and line'}"
+
+
+def banded_findings(doc):
+    """The reviewer's findings with each one's band decided from its structured fields, never from the model's label alone. A finding
+    the reviewer called blocking keeps that only if `finding_support` finds the fields back it; otherwise it is minor, with the reason in
+    `downgraded`. A minor finding is never raised. A document whose findings lack the structure raises ValueError, so the caller asks again
+    instead of trusting a label (the same way a missing findings list is handled)."""
     findings = doc.get("findings") if isinstance(doc, dict) else None
     if not isinstance(findings, list):
         raise ValueError("reviewer output has no findings list")
-    # Whatever the reviewer marks blocking blocks, however much detail it gives.
-    blocking = [f for f in findings if isinstance(f, dict) and f.get("severity") == "blocking"]
-    minor = [f for f in findings if isinstance(f, dict) and f.get("severity") != "blocking"]
+    out = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        if f.get("category") not in FINDING_CATEGORIES or f.get("evidence_kind") not in EVIDENCE_KINDS:
+            raise ValueError(f"a reviewer finding has no valid category and evidence_kind: {str(f.get('summary'))[:80]!r}")
+        why = finding_support(f) if f.get("severity") == "blocking" else None
+        out.append(dict(f, severity="minor", downgraded=why) if why else dict(f))
+    return out
+
+
+def derive_review(doc):
+    """(clean, blocking, minor). The verdict comes from the findings and their structure, never the model's own field."""
+    findings = banded_findings(doc)
+    blocking = [f for f in findings if f.get("severity") == "blocking"]
+    minor = [f for f in findings if f.get("severity") != "blocking"]
     return not blocking, blocking, minor
 
 
@@ -396,6 +431,22 @@ def test_impact(failures):
 MAX_BUGS = 10
 
 
+def failed_checks(failures):
+    """The checks the tester saw fail, which the coder can act on. A check that was `blocked` (something outside the app stopped it) or
+    `not_run` was not seen to fail, and sending it to the coder as a fix costs a round for something it cannot change."""
+    return [r for r in failures if isinstance(r, dict) and check_state(r) == "failed"]
+
+
+def unverified_message(failures):
+    states = {}
+    for r in failures:
+        if isinstance(r, dict):
+            states[check_state(r)] = states.get(check_state(r), 0) + 1
+    names = "; ".join(str(r.get("check") or "?")[:80] for r in failures[:3] if isinstance(r, dict))
+    return (f"{len(failures)} check(s) could not be verified ({', '.join(f'{n} {k}' for k, n in sorted(states.items()))}), and none failed, "
+            f"so another coder round cannot help. Unverified: {names}")
+
+
 def bugs_from(failures):
     """The tester's failed checks as notes for the retrospective, which adds them to the story's own issue (the Update Intake that started
     the run, so the retry sees them) and never opens a new issue for them:
@@ -616,9 +667,11 @@ REVIEW_SCHEMA = {
         "findings": {"type": "array", "items": {
             "type": "object",
             "properties": {"severity": {"type": "string", "enum": ["blocking", "minor"]},
+                           "category": {"type": "string", "enum": list(FINDING_CATEGORIES)},
+                           "evidence_kind": {"type": "string", "enum": list(EVIDENCE_KINDS)},
                            "summary": {"type": "string"}, "evidence": {"type": "string"},
                            **{k: {"type": "string"} for k in DETAIL_FIELDS}},
-            "required": ["severity", "summary", "evidence", *DETAIL_FIELDS], "additionalProperties": False}},
+            "required": ["severity", "category", "evidence_kind", "summary", "evidence", *DETAIL_FIELDS], "additionalProperties": False}},
         "improvements": {"type": "array", "items": {
             "type": "object",
             "properties": {"target": {"type": "string", "enum": list(IMPROVEMENT_TARGETS)},
@@ -629,6 +682,42 @@ REVIEW_SCHEMA = {
     "required": ["analysis", "findings", "improvements", "verdict"],
     "additionalProperties": False,
 }
+
+
+FLAG_REF_RE = re.compile(r"^[\w.-]+/[\w.-]+#\d+:")
+TEST_FILE_RE = re.compile(r"(\.test\.|\.spec\.|/tests?/|/__tests__/)")
+
+
+def flag_findings(git, head, slugs):
+    """Findings about this change's own flags that need no judgement, so the reviewer is not asked for them and the severity is fixed:
+    a flag in `flags.json` that no code outside the tests reads (it would be released with nothing behind it), and a flag whose
+    description does not start with an issue reference (it must point back to its story). Both are minor. `git(*args)` returns a git
+    command's stdout ('' when it fails), run in the app checkout."""
+    try:
+        declared = {f["slug"]: f for f in json.loads(git("show", f"{head}:flags.json") or "[]") if isinstance(f, dict) and "slug" in f}
+    except ValueError:
+        return []
+    out = []
+
+    def finding(slug, summary, entry, requirement, fix):
+        return {"severity": "minor", "category": "flag_misuse", "evidence_kind": "cited", "summary": summary, "evidence": entry,
+                "file": "flags.json", "line": "", "requirement": requirement, "suggested_fix": fix, "repro": "", "source": "orchestrator"}
+    for slug in slugs:
+        entry = declared.get(slug)
+        if entry is None:
+            continue
+        shown = json.dumps(entry)
+        hits = [line for line in git("grep", "-n", "-I", "-F", "-e", f'"{slug}"', "-e", f"'{slug}'", head, "--", "backend", "frontend").splitlines()
+                if not TEST_FILE_RE.search(line.split(":")[1] if line.count(":") > 1 else line)]
+        if not hits:
+            out.append(finding(slug, f"Flag `{slug}` is declared in flags.json but no code outside the tests reads it", shown,
+                               "A declared flag must guard something, or it is released with nothing behind it.",
+                               "Check the flag with isFeatureEnabled(res, slug) at the change's entry point, or remove the entry."))
+        if not FLAG_REF_RE.match(str(entry.get("description") or "")):
+            out.append(finding(slug, f"Flag `{slug}` has no issue reference at the start of its description", shown,
+                               "A flag's description starts with the story it came from (`owner/repo#number:`).",
+                               "Start the description with the issue reference."))
+    return out
 
 
 class ContextTooLarge(Exception):
@@ -1551,6 +1640,7 @@ class BuildRun:
                 home=self.work / f"home-reviewer-{rnd}")
         self.restore_tree()
         clean, blocking, minor = derive_review(doc)
+        minor = minor + flag_findings(lambda *a: self.git(*a, check=False).stdout, head, self.run_flags(base, head))
         self.note_improvements(doc, "reviewer")
         self.state.stage("Review", "reviewer", rnd, cost, "clean" if clean else f"{len(blocking)} blocking", usage)
         return clean, blocking, minor
@@ -1846,15 +1936,25 @@ class BuildRun:
                     break
                 tpassed, test_failures = False, []
                 if clean:
-                    tpassed, test_failures, impact = self.test_deployed(base, head, rnd, flags)
-                    if impact == "regression":
-                        broken = [r for r in test_failures if isinstance(r, dict) and r.get("scope") == "existing"]
-                        self.state.d["blocking"] = [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in broken]
-                        raise Regression("the tester found behaviour that was live before this change no longer working: "
-                                         + "; ".join(f"{r.get('check')}" for r in broken[:3]))
+                    retests = int(self.lim.get("test_retries", 1))
+                    while True:
+                        tpassed, test_failures, impact = self.test_deployed(base, head, rnd, flags)
+                        if impact == "regression":
+                            broken = [r for r in test_failures if isinstance(r, dict) and r.get("scope") == "existing"]
+                            self.state.d["blocking"] = [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in broken]
+                            raise Regression("the tester found behaviour that was live before this change no longer working: "
+                                             + "; ".join(f"{r.get('check')}" for r in broken[:3]))
+                        if tpassed or failed_checks(test_failures):
+                            break
+                        # Nothing failed, but checks were blocked or not run. The coder cannot fix that, so it gets no round for it: the
+                        # tester looks again at the same deployed commit, and a run that still cannot verify it stops for a person.
+                        if retests <= 0:
+                            raise NeedsHuman("other", unverified_message(test_failures))
+                        retests -= 1
+                        log(f"{len(test_failures)} check(s) could not be verified; testing the same deployed commit again")
                 all_blocking = (
                     [finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in blocking]
-                    + [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in test_failures])
+                    + [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in failed_checks(test_failures)])
                 self.state.d["blocking"] = all_blocking
                 self.state.save()
                 # Kept on a clean pass too: the minor findings of a run that ships are what the retrospective learns from.

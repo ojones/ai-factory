@@ -85,6 +85,7 @@ def parse_verdict(resp):
     # The Orchestrator derives the verdict from the findings instead of
     # trusting the model's own field.
     v["model_verdict"] = v["verdict"]
+    v["findings"] = orchestrator.banded_findings(v)  # a blocking finding the fields do not back is minor, as at run time
     v["verdict"] = "changes_requested" if any(f["severity"] == "blocking" for f in v["findings"]) else "clean"
     return v
 

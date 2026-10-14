@@ -58,6 +58,9 @@ roles:
 
 limits:
   review_rounds: 4
+  # When the tester's checks were only blocked or not run (none failed), the coder cannot fix that: the tester looks again at the same
+  # deployed commit this many times, and a run that still cannot verify stops for a person instead of spending coder rounds.
+  test_retries: 1
   # Per-Build-Run LLM spend. The default applies when an Intake gives no
   # override; an Intake override may not exceed the ceiling. Starting values
   # to revise after the first real multi-agent run (issue #34).

@@ -1,12 +1,9 @@
 name: Template sync
 
-# When the Starter Template changes (a push to main that touches templates/starter, plus a daily pass for changes merged by a
-# workflow, which GitHub does not turn into push events), file an Update Intake for each Managed App that was seeded before the
-# change, and start it. orchestrator/template_sync.py does the work; nothing here changes an app directly.
+# Once a night (07:47 UTC), and by hand, file an Update Intake for each Managed App that was seeded before the latest Starter Template
+# change, and start it. A merge to main does not start it: a Starter change waits for the night pass, so no Build Run starts because of
+# a push. orchestrator/template_sync.py does the work; nothing here changes an app directly.
 on:
-  push:
-    branches: [main]
-    paths: ["templates/starter/**"]
   schedule:
     - cron: "47 7 * * *"
   workflow_dispatch:

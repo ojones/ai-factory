@@ -3,6 +3,7 @@
 The meta test at the bottom keeps the table and these tests in step: every INV-NN row has exactly one
 `test_invNN_...` here and every test here has a row.
 """
+import json
 import os
 import re
 import subprocess
@@ -50,11 +51,18 @@ class Invariants(unittest.TestCase):
             self.assertFalse(b.release_gate(*args, "a", "a"))
         self.assertFalse(b.release_gate(True, True, True, True, "a", "b"))
 
-    def test_inv04_the_verdict_comes_from_the_findings(self):
-        clean, blocking, _ = b.derive_review({"verdict": "clean", "findings": [{"severity": "blocking", "summary": "x"}]})
+    def test_inv04_the_verdict_comes_from_the_findings_and_their_structure(self):
+        backed = {"severity": "blocking", "category": "correctness", "evidence_kind": "cited", "summary": "x", "evidence": "e",
+                  "file": "backend/src/a.ts", "line": "3", "requirement": "", "suggested_fix": "", "repro": ""}
+        clean, blocking, _ = b.derive_review({"verdict": "clean", "findings": [backed]})
         self.assertFalse(clean)
         self.assertEqual(len(blocking), 1)
         self.assertTrue(b.derive_review({"verdict": "changes_requested", "findings": []})[0])
+        # a blocking label does not block unless its fields back it: an opinion, or a category that cannot block, is minor
+        self.assertTrue(b.derive_review({"findings": [dict(backed, evidence_kind="opinion")]})[0])
+        self.assertTrue(b.derive_review({"findings": [dict(backed, category="style")]})[0])
+        with self.assertRaises(ValueError):  # no structure at all: the reviewer is asked again, a label is not trusted
+            b.derive_review({"findings": [{"severity": "blocking", "summary": "x"}]})
 
     def test_inv05_only_a_passed_check_passes(self):
         for state in ("failed", "blocked", "not_run"):
@@ -356,6 +364,9 @@ class Invariants(unittest.TestCase):
         self.assertFalse(ts.should_sync(applicable, t, t, [], [], "a"))
         self.assertFalse(ts.should_sync(applicable, t, base, [f"a: template sync [sync {t[:7]}]"], [], "a"))
         self.assertFalse(ts.should_sync(applicable, t, base, [], [{"number": 1}], "a"))
+        triggers = yaml.safe_load((ROOT / ".github/workflows/template-sync.yml").read_text())[True]
+        self.assertNotIn("push", triggers)  # a merge to main never starts a Build Run: the nightly pass or a manual run does
+        self.assertIn("schedule", triggers)
 
     def test_inv34_agents_run_as_a_separate_account_and_the_run_proves_it(self):
         cmd = b.agent_command(["openhands"], {"PATH": "/p", "LLM_API_KEY": "secret-jwt"}, "agent")
@@ -518,6 +529,21 @@ class Invariants(unittest.TestCase):
             self.assertIn("useradd -m -s /bin/bash agent", text, name)
             self.assertIn("AGENT_USER=agent", text, name)
         self.assertEqual(pm.tree_changes.__module__, "retrospective")
+
+    def test_inv46_what_blocks_or_retries_is_decided_from_structure_not_labels(self):
+        from test_build_run import RoundLoop, finding
+        self.assertFalse(b.derive_review({"findings": [finding()]})[0])
+        for weak in (finding(evidence_kind="opinion"), finding(category="style"), finding(file="", line="")):
+            self.assertTrue(b.derive_review({"findings": [weak]})[0])
+        found = b.flag_findings(lambda *a: json.dumps([{"slug": "s", "description": "none"}]) if a[0] == "show" else "", "head", ["s"])
+        self.assertEqual({f["severity"] for f in found}, {"minor"})
+        failed = {"flag": "f", "check": "c", "status": "failed"}
+        self.assertEqual(b.failed_checks([failed, {"status": "blocked"}, {"status": "not_run"}]), [failed])
+        t = RoundLoop()
+        run = t.make([t.CLEAN], [t.UNVERIFIED_BLOCKED, t.UNVERIFIED_BLOCKED])
+        t.go(run)
+        self.assertEqual(run.state.d["outcome"], "needs_human")
+        self.assertEqual(run.calls.count("coder2"), 0)  # no coder round for checks nobody could run
 
 
 class Registry(unittest.TestCase):

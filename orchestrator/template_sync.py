@@ -8,7 +8,7 @@ used). When the template has changed since then, this files one Update Intake pe
 and starts it. The coder applies it to the app's corresponding files, keeps the app's own code, and writes the new commit into
 `.factory-template`.
 
-  python3 template_sync.py       (run from a full checkout of ai-factory; on a push that touches templates/starter, daily, or by hand)
+  python3 template_sync.py       (run from a full checkout of ai-factory; nightly by template-sync.yml, or by hand)
 
 Only files an Agent may change are synced. The protected ones (.github/, fly.toml, fly/, feature-flags.ts) are listed in the
 Intake as "not applied" for a person. One Intake per app and target commit (a failed one is not refiled; its fix request is), and one

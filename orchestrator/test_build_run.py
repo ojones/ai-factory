@@ -3,7 +3,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -34,17 +33,47 @@ class Intake(unittest.TestCase):
             b.parse_intake("### What should be built?\n\n_No response_\n", 2.0, 10.0)
 
 
+def finding(**over):
+    """A reviewer finding as the schema requires it: blocking, backed by a cited file and line."""
+    return {"severity": "blocking", "category": "correctness", "evidence_kind": "cited", "summary": "x", "evidence": "e",
+            "file": "backend/src/a.ts", "line": "3", "requirement": "", "suggested_fix": "", "repro": "", **over}
+
+
 class Verdicts(unittest.TestCase):
     def test_model_verdict_field_is_ignored(self):
-        doc = {"verdict": "clean", "findings": [{"severity": "blocking", "summary": "x"}]}
-        clean, blocking, _ = b.derive_review(doc)
+        clean, blocking, _ = b.derive_review({"verdict": "clean", "findings": [finding()]})
         self.assertFalse(clean)
         self.assertEqual(len(blocking), 1)
 
-    def test_a_blocking_finding_blocks_even_with_no_detail(self):
-        clean, blocking, _ = b.derive_review({"findings": [{"severity": "blocking", "summary": "x"}]})
-        self.assertFalse(clean)
-        self.assertEqual(len(blocking), 1)
+    def test_a_backed_blocking_finding_blocks(self):
+        for f in (finding(), finding(category="security", evidence_kind="repro", file="", line="", repro="curl -i /x"),
+                  finding(category="requirement_not_met"), finding(category="flag_misuse"), finding(category="data_safety"), finding(category="test_quality")):
+            clean, blocking, _ = b.derive_review({"findings": [f]})
+            self.assertEqual((clean, len(blocking)), (False, 1), f["category"])
+
+    def test_a_blocking_finding_the_fields_do_not_back_is_minor_with_the_reason(self):
+        for f, why in ((finding(evidence_kind="opinion"), "evidence `opinion`"),
+                       (finding(file="", line=""), "not backed by a file and line"),
+                       (finding(line=""), "not backed by a file and line"),
+                       (finding(evidence_kind="repro", repro=""), "not backed by a repro"),
+                       (finding(category="style"), "category `style` cannot block"),
+                       (finding(category="duplication"), "cannot block"), (finding(category="other"), "cannot block")):
+            clean, blocking, minor = b.derive_review({"findings": [f]})
+            self.assertEqual((clean, blocking), (True, []), why)
+            self.assertEqual(minor[0]["severity"], "minor")
+            self.assertIn(why, minor[0]["downgraded"])
+
+    def test_a_minor_finding_is_never_raised_whatever_its_fields(self):
+        clean, blocking, minor = b.derive_review({"findings": [finding(severity="minor", category="security")]})
+        self.assertEqual((clean, blocking, len(minor)), (True, [], 1))
+        self.assertNotIn("downgraded", minor[0])
+
+    def test_findings_without_the_structure_are_refused_so_the_reviewer_is_asked_again(self):
+        bad = finding()
+        del bad["category"]
+        for f in (bad, finding(category="nonsense"), finding(evidence_kind="vibes")):
+            with self.assertRaises(ValueError):
+                b.derive_review({"findings": [f]})
 
     def test_findings_reach_the_coder_with_whatever_detail_they_carry(self):
         raw = {"file": "backend/src/app.ts", "line": "12", "repro": "curl -i /x", "suggested_fix": "", "requirement": None}
@@ -57,7 +86,7 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(b.describe_finding(b.finding_view("tester", "a: b", "", {})), "- [tester] a: b")
 
     def test_minor_only_is_clean(self):
-        self.assertTrue(b.derive_review({"findings": [{"severity": "minor"}]})[0])
+        self.assertTrue(b.derive_review({"findings": [finding(severity="minor")]})[0])
 
     def test_review_without_findings_list_is_invalid(self):
         with self.assertRaises(ValueError):
@@ -351,17 +380,37 @@ class ReviewBeforePushThenTest(unittest.TestCase):
 
         run = self.make(self.FLAGS, agent)
         clean, blocking, minor = run.review_before_push("base1", "head1", 1)
-        self.assertEqual((clean, blocking, minor), (True, [], []))
+        self.assertEqual((clean, blocking), (True, []))
+        self.assertEqual({m["source"] for m in minor}, {"orchestrator"})  # the flag in this change has no use and no issue reference
         self.assertEqual(roles, ["reviewer"])  # no tester, no deploy: nothing is live yet
         self.assertEqual(run.run_flags("base1", "head1"), ["f"])
         self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review"])
 
     def test_a_blocking_finding_is_returned_so_the_coder_can_fix_it_before_the_push(self):
-        doc = dict(self.CLEAN, verdict="clean", findings=[{"severity": "blocking", "summary": "injection", "evidence": "line 3"}])
+        doc = dict(self.CLEAN, verdict="clean", findings=[finding(summary="injection", category="security")])
         run = self.make(self.FLAGS, lambda *a, **k: (doc, 0.1, None))
         clean, blocking, _ = run.review_before_push("base1", "head1", 1)
         self.assertFalse(clean)  # the model's own "clean" verdict is ignored
         self.assertEqual(len(blocking), 1)
+
+    def test_mechanical_flag_findings_come_from_the_orchestrator_and_are_always_minor(self):
+        shown = {"flags.json": json.dumps([{"slug": "used", "description": "o/r#4: used"}, {"slug": "idle", "description": "o/r#5: never read"},
+                                           {"slug": "bare", "description": "no reference"}, {"slug": "old", "description": "x"}])}
+
+        def git(*args):
+            if args[0] == "show":
+                return shown[args[1].split(":", 1)[1]]
+            hits = {'"used"': "head:backend/src/routes/n.ts:9:  if (isFeatureEnabled(res, 'used'))", '"bare"': "head:backend/src/n.ts:2:x('bare')\nhead:backend/src/n.test.ts:4:'bare'"}
+            return "\n".join(v for k, v in hits.items() if k in args)
+        found = b.flag_findings(git, "head", ["used", "idle", "bare", "gone"])
+        self.assertEqual([(f["summary"].split("`")[1], "no code outside the tests" in f["summary"]) for f in found],
+                         [("idle", True), ("bare", False)])
+        self.assertTrue(all(f["severity"] == "minor" and f["category"] == "flag_misuse" and f["source"] == "orchestrator" for f in found))
+        self.assertEqual(b.flag_findings(lambda *a: "not json", "head", ["used"]), [])  # an unreadable manifest is not a finding
+
+    def test_a_flag_read_only_by_a_test_counts_as_unused(self):
+        git = lambda *a: json.dumps([{"slug": "t", "description": "o/r#1: x"}]) if a[0] == "show" else "head:backend/src/x.test.ts:3:'t'"
+        self.assertIn("no code outside the tests", b.flag_findings(git, "head", ["t"])[0]["summary"])
 
     def test_the_tester_runs_after_the_push_and_says_what_a_failure_means(self):
         run = self.make(self.FLAGS, lambda role, *a, **k: (self.PASS, 0.1, None))
@@ -489,6 +538,42 @@ class RoundLoop(unittest.TestCase):
         self.assertEqual(run.calls, ["coder1", "review c1", "push c1", "pipeline c1", "test c1", "coder2",
                                      "review c2", "push c2", "pipeline c2", "test c2", "release"])
         self.assertEqual(run.state.d["outcome"], "released")
+
+    UNVERIFIED_BLOCKED = (False, [{"flag": "f", "check": "send mail", "status": "blocked", "scope": "new", "evidence": "app unreachable"}], "dark_only")
+    UNVERIFIED_NOT_RUN = (False, [{"flag": "f", "check": "coverage", "status": "not_run", "scope": "new", "evidence": "no result"}], "dark_only")
+
+    def test_checks_that_could_not_be_run_are_retested_not_sent_to_the_coder(self):
+        run = self.make([self.CLEAN], [self.UNVERIFIED_BLOCKED, self.PASSED])
+        self.go(run)
+        self.assertEqual(run.calls, ["coder1", "review c1", "push c1", "pipeline c1", "test c1", "test c1", "release"])
+        self.assertEqual(run.state.d["outcome"], "released")
+
+    def test_checks_that_still_cannot_be_verified_stop_the_run_for_a_person_with_no_coder_round(self):
+        run = self.make([self.CLEAN], [self.UNVERIFIED_BLOCKED, self.UNVERIFIED_NOT_RUN])
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "needs_human")
+        self.assertIn("could not be verified", run.state.d["message"])
+        self.assertIn("coverage", run.state.d["message"])
+        self.assertEqual(run.calls.count("coder2"), 0)
+        self.assertNotIn("release", run.calls)
+
+    def test_with_retests_switched_off_the_first_unverified_pass_stops_the_run(self):
+        run = self.make([self.CLEAN], [self.UNVERIFIED_BLOCKED])
+        run.lim["test_retries"] = 0
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "needs_human")
+        self.assertEqual(run.calls.count("test c1"), 1)
+
+    def test_only_the_failed_checks_reach_the_coder_when_some_failed_and_some_were_blocked(self):
+        failed = {"flag": "f", "check": "new route answers 201", "status": "failed", "scope": "new", "evidence": "got 500"}
+        run = self.make([self.CLEAN, self.CLEAN], [(False, [failed, self.UNVERIFIED_BLOCKED[1][0]], "dark_only"), self.PASSED])
+        tasks = []
+        orig = run.coder
+        run.coder = lambda label, task, path: (tasks.append(task), orig(label, task, path))[1]
+        self.go(run)
+        fix_list = next(t for t in tasks if "fix list" in t)
+        self.assertIn("new route answers 201", fix_list)
+        self.assertNotIn("send mail", fix_list)
 
     def test_a_regression_ends_the_run_at_once_so_finalize_can_roll_the_deploy_back(self):
         broken = {"flag": "", "check": "GET /api/notes", "status": "failed", "scope": "existing", "api": ["a"]}
