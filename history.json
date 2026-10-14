@@ -592,5 +592,141 @@
    "not_run": 0
   },
   "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38444009684",
+  "app": "ojones-todo",
+  "outcome": "nothing_to_release",
+  "kind": "update",
+  "started_at": "2026-10-13T18:07:52Z",
+  "minutes": 6.4,
+  "rounds": 1,
+  "cost_usd": 0.1294,
+  "cap_usd": 2.0,
+  "released": [],
+  "checks": {
+   "passed": 7,
+   "failed": 0,
+   "blocked": 0,
+   "not_run": 0
+  },
+  "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38447198656",
+  "app": "ojones-todo",
+  "outcome": "needs_human",
+  "kind": "update",
+  "started_at": "2026-10-13T18:32:06Z",
+  "minutes": 27.2,
+  "rounds": 1,
+  "cost_usd": 1.1569,
+  "cap_usd": 1.5,
+  "released": [],
+  "checks": {},
+  "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38451977319",
+  "app": "ojones-todo",
+  "outcome": "released",
+  "kind": "update",
+  "started_at": "2026-10-13T19:07:07Z",
+  "minutes": 21.9,
+  "rounds": 1,
+  "cost_usd": 0.2972,
+  "cap_usd": 1.5,
+  "released": [
+   "ojones-todo.feature.todo-ui"
+  ],
+  "checks": {
+   "passed": 15,
+   "failed": 0,
+   "blocked": 0,
+   "not_run": 0
+  },
+  "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38464095545",
+  "app": "ojones-todo",
+  "outcome": "nothing_to_release",
+  "kind": "update",
+  "started_at": "2026-10-13T20:38:13Z",
+  "minutes": 10.1,
+  "rounds": 1,
+  "cost_usd": 0.3603,
+  "cap_usd": 2.0,
+  "released": [],
+  "checks": {
+   "passed": 5,
+   "failed": 0,
+   "blocked": 0,
+   "not_run": 0
+  },
+  "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38471967106",
+  "app": "ojones-todo",
+  "outcome": "needs_human",
+  "kind": "update",
+  "started_at": "2026-10-13T21:39:47Z",
+  "minutes": 10.9,
+  "rounds": 1,
+  "cost_usd": 0.3835,
+  "cap_usd": 1.0,
+  "released": [],
+  "checks": {},
+  "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38474043910",
+  "app": "ojones-todo",
+  "outcome": "released",
+  "kind": "update",
+  "started_at": "2026-10-13T21:56:54Z",
+  "minutes": 40.4,
+  "rounds": 2,
+  "cost_usd": 0.4754,
+  "cap_usd": 1.0,
+  "released": [
+   "ojones-todo.feature.version-endpoint"
+  ],
+  "checks": {
+   "passed": 18,
+   "failed": 0,
+   "blocked": 0,
+   "not_run": 0
+  },
+  "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38520414187",
+  "app": "ojones-todo",
+  "outcome": "refused",
+  "kind": "update",
+  "started_at": "2026-10-14T06:10:04Z",
+  "minutes": 8.8,
+  "rounds": 0,
+  "cost_usd": 0.0778,
+  "cap_usd": 0.5,
+  "released": [],
+  "checks": {},
+  "audit": []
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/38520416765",
+  "app": "ojones-todo",
+  "outcome": "refused",
+  "kind": "",
+  "started_at": "2026-10-14T06:22:17Z",
+  "minutes": 0.0,
+  "rounds": 0,
+  "cost_usd": 0,
+  "cap_usd": null,
+  "released": [],
+  "checks": {},
+  "audit": []
  }
 ]
