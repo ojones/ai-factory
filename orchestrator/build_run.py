@@ -957,7 +957,7 @@ class BuildRun:
         self.state.save()
         self.check_daily_cap()
         self.prepare_agent_user()
-        provider_check(self.cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"], self.cfg["roles"]["coder"]["model"])
+        self.check_models()
         self.wait_for_capacity()
         self.meter = Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
         self.preview = preview_token(os.environ["PREVIEW_MASTER_SECRET"], self.app)
@@ -1025,6 +1025,38 @@ class BuildRun:
                 log(f"could not choose flags to retire: {type(e).__name__}: {e}")
         in_repo = manifest_slugs(self.git("show", "HEAD:flags.json", check=False).stdout)
         return [s for s in dict.fromkeys(named + picked) if s in in_repo]
+
+    def check_models(self):
+        """Before any work: a one-token request per distinct model this run will use. A model the provider no longer serves is replaced by the role's
+        `fallback_model` for this run (recorded in the Report), or stops the run with the reason if there is none, instead of failing after a clone,
+        a checkout and a planner call. Models get cheaper and are retired; this is how an unattended night survives a retirement. A balance of zero
+        raises ProviderBlocked as before."""
+        base, key = self.cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"]
+        seen, swapped = {}, {}
+
+        def status(model):
+            if model not in seen:
+                seen[model] = model_status(base, key, model)
+            return seen[model]
+
+        for role in ["coder", "tester", "reviewer"] + (["planner"] if self.update_intake else []):
+            profile = self.cfg["roles"].get(role)
+            if not profile:
+                continue
+            model = profile["model"]
+            if status(model) != "missing":
+                continue
+            fallback = profile.get("fallback_model")
+            if not fallback or status(fallback) == "missing":
+                raise NeedsHuman("other", f"the {role} model `{model}` is no longer served by the provider and "
+                                          + (f"its fallback `{fallback}` is not either" if fallback else "the role has no `fallback_model`")
+                                          + ": choose a model in agents/profiles.yml")
+            profile["model"] = fallback
+            swapped[role] = {"from": model, "to": fallback}
+            log(f"{role}: `{model}` is not served by the provider; using its fallback `{fallback}` for this run")
+        if swapped:
+            self.state.d["fallbacks"] = swapped
+            self.state.save()
 
     def prepare_agent_user(self):
         """With isolation on: put the helper the tester calls where the Agent user can read it, and prove isolation holds before
@@ -1941,6 +1973,23 @@ def scan_for_provider_block(path, tail_bytes=300_000):
     except OSError:
         return None
     return BLOCKED_MESSAGE if provider_blocked_text(text) else None
+
+
+MODEL_MISSING_RE = re.compile(r"(?i)model[^\"]{0,60}(not found|does not exist|not available|unknown|invalid|deprecated|unsupported|no longer)")
+
+
+def model_status(base_url, key, model):
+    """'ok', 'missing' (the provider no longer serves this model id) or 'unknown' (any other answer, left for the run to deal with), from a one-token
+    request. Raises ProviderBlocked when the account has no balance, exactly like provider_check."""
+    status, r = http("POST", f"{base_url}/chat/completions", key,
+                     {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}, timeout=30)
+    if status == 402 or (status == 400 and provider_blocked_text(f"BadRequestError {r}")):
+        raise ProviderBlocked(BLOCKED_MESSAGE)
+    if status == 200:
+        return "ok"
+    if status == 404 or (status in (400, 422) and MODEL_MISSING_RE.search(str(r))):
+        return "missing"
+    return "unknown"
 
 
 def provider_check(base_url, key, model):

@@ -10,6 +10,10 @@ roles:
     # replay results are in .wayfinder/coder-speed/tickets/14-*.md and 15-*.md. It missed one smoke task
     # (distinct todo ids) 3/3, so if real runs show it stuck in fix rounds, try `fix_model` below.
     model: deepseek-ai/DeepSeek-V4.1-Flash
+    # Used for a run when the provider no longer serves `model` (checked with a one-token request before any work; the nightly canary reports it first).
+    # Every role may name one; keep it a different, currently served model that was measured for the role. The benchmark (docs/benchmark-protocol.md) is how to
+    # choose and re-check it.
+    fallback_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     # Optional: a stronger model for every coder attempt after round 1 (fix rounds, pipeline fixes),
     # so round 1 can use a faster one. Unset, every attempt uses `model`.
     # fix_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
@@ -21,6 +25,7 @@ roles:
     # which keeps the tester independent of them. Not yet measured on the easy bugs (wrong status, flag leak) or the held-out
     # ones; if a run shows it missing those, switch back by restoring Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo here.
     model: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
+    fallback_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     prompt: prompts/tester.md
   reviewer:
     # Intended to be a different lab than the coder so they don't share blind spots, but the coder is
@@ -29,6 +34,7 @@ roles:
     # Build Runs, reasoning at ~40 tokens/s. Flash scored 50/50 on the smoke fixtures against
     # Pro's 48/50, at ~10s a review, so it is the reviewer (issue #41). Switch back by editing here.
     model: deepseek-ai/DeepSeek-V4.1-Flash
+    fallback_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     # single_call: one model call over a prompt the Orchestrator assembles (diff, changed files,
     # INTAKE.md, flag usage), fast_prompt. It falls back to the exploring Agent (prompt) when the change is too big for one prompt or the call fails.
     mode: single_call
@@ -36,15 +42,18 @@ roles:
     prompt: prompts/reviewer.md
   pipeline:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/pipeline.md
   # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planner.py checks the
   # plan). Runs first in a Build Run for an Update Intake. The model is a first guess, unmeasured.
   planner:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/planner.md
   # After a Build Run that did not end clean: explains why and proposes a fix as a PR (orchestrator/postmortem.py).
   postmortem:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/postmortem.md
 
 limits:

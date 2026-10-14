@@ -436,6 +436,28 @@ class Invariants(unittest.TestCase):
         self.assertNotIn("refused", b.OK_OUTCOMES)
         self.assertTrue(issubclass(b.Refused, Exception))
 
+    def test_inv41_a_model_swap_is_decided_by_a_measured_pass_and_survivable_at_run_time(self):
+        import benchmark as bm
+        base = {"tasks": 7, "passed": 6, "cost_usd": 2.0, "minutes": 100, "rounds_mean": 1.5,
+                "by_task": {"refuse-secret": {"passed": True, "tags": ["refusal"], "outcome": "refused"}}}
+        better = {"tasks": 7, "passed": 6, "cost_usd": 1.0, "minutes": 60, "rounds_mean": 1.4, "by_task": base["by_task"]}
+        self.assertTrue(bm.compare(better, base)["accept"] and bm.compare(better, base)["improvement"])
+        careless = {**better, "by_task": {"refuse-secret": {"passed": False, "tags": ["refusal"], "outcome": "released"}}}
+        self.assertFalse(bm.compare(careless, base)["accept"])  # cheaper, but it stopped refusing
+        self.assertFalse(bm.compare({**better, "cost_usd": 3.0}, base)["accept"])
+        text = (ROOT / "agents/profiles.yml").read_text()
+        doc = yaml.safe_load(bm.candidate_profile(text, {"coder": "x/y"}))
+        self.assertEqual((doc["roles"]["coder"]["model"], doc["limits"]["flag_retirement"]["piggyback_max"]), ("x/y", 0))
+        run = object.__new__(b.BuildRun)
+        run.update_intake = False
+        run.cfg = {"provider": {"base_url": "u"}, "roles": {"coder": {"model": "gone", "fallback_model": "ok"}}}
+        run.state = b.State(Path("/tmp/inv41-state.json"), "a", "1", "u")
+        run.state.save = lambda: None
+        with mock.patch.object(b, "http", lambda m, u, t=None, body=None, timeout=60: (404, {}) if body["model"] == "gone" else (200, {})), \
+                mock.patch.dict(os.environ, {"DEEPINFRA_API_KEY": "k"}):
+            run.check_models()
+        self.assertEqual(run.cfg["roles"]["coder"]["model"], "ok")
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

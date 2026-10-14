@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
@@ -919,6 +920,72 @@ class MisplacedFile(unittest.TestCase):
         self.assertFalse(b.adopt_misplaced_file(run / "other.json", cwd))
         self.assertFalse(b.adopt_misplaced_file(run / "x.json", None))
         self.assertIn("exactly that absolute path", b.json_problem(run / "missing.json"))
+
+
+class ModelFallback(unittest.TestCase):
+    def run_for(self, answers, roles=None, update=True):
+        """A BuildRun whose provider answers per model id (status, body)."""
+        run = object.__new__(b.BuildRun)
+        run.update_intake = update
+        run.cfg = {"provider": {"base_url": "https://llm"}, "roles": roles or {
+            "coder": {"model": "a/coder", "fallback_model": "z/fallback"}, "tester": {"model": "t/tester"}, "reviewer": {"model": "r/rev"}, "planner": {"model": "p/plan"}}}
+        run.state = b.State(Path("/tmp/x-state.json"), "app", "1", "u")
+        run.state.save = lambda: None
+        asked = []
+
+        def fake_http(method, url, token=None, body=None, timeout=60):
+            asked.append(body["model"])
+            return answers.get(body["model"], (200, {}))
+        return run, asked, fake_http
+
+    def test_a_missing_model_is_replaced_by_its_fallback_for_this_run_and_the_swap_is_recorded(self):
+        run, asked, fake = self.run_for({"a/coder": (404, {"error": {"message": "Model not found"}})})
+        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            run.check_models()
+        self.assertEqual(run.cfg["roles"]["coder"]["model"], "z/fallback")
+        self.assertEqual(run.state.d["fallbacks"]["coder"], {"from": "a/coder", "to": "z/fallback"})
+        self.assertEqual(run.cfg["roles"]["tester"]["model"], "t/tester")  # a role whose model is served is left alone
+
+    def test_a_missing_model_with_no_fallback_stops_the_run_with_the_reason(self):
+        run, _, fake = self.run_for({"r/rev": (400, {"error": {"message": "The model `r/rev` does not exist"}})})
+        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            with self.assertRaises(b.NeedsHuman) as ctx:
+                run.check_models()
+        self.assertIn("r/rev", str(ctx.exception))
+        self.assertIn("no `fallback_model`", str(ctx.exception))
+
+    def test_a_missing_fallback_is_also_a_stop_and_each_model_is_asked_once(self):
+        run, asked, fake = self.run_for({"a/coder": (404, {}), "z/fallback": (404, {})})
+        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            with self.assertRaises(b.NeedsHuman):
+                run.check_models()
+        self.assertEqual(len(asked), len(set(asked)))
+
+    def test_all_models_answering_changes_nothing_and_a_zero_balance_is_still_provider_blocked(self):
+        run, _, fake = self.run_for({})
+        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            run.check_models()
+        self.assertNotIn("fallbacks", run.state.d)
+        run, _, fake = self.run_for({"a/coder": (402, {})})
+        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            with self.assertRaises(b.ProviderBlocked):
+                run.check_models()
+
+    def test_a_first_build_does_not_check_the_planner(self):
+        run, asked, fake = self.run_for({}, update=False)
+        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            run.check_models()
+        self.assertNotIn("p/plan", asked)
+        run, asked, fake = self.run_for({})  # an update does ask for the planner's model
+        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            run.check_models()
+        self.assertIn("p/plan", asked)
+
+    def test_the_status_of_a_model_is_read_from_the_answer(self):
+        for answer, expected in (((200, {}), "ok"), ((404, "x"), "missing"), ((400, {"error": "model foo not found"}), "missing"),
+                                 ((500, "boom"), "unknown"), ((429, "slow"), "unknown")):
+            with mock.patch.object(b, "http", lambda *a, **k: answer):
+                self.assertEqual(b.model_status("https://llm", "k", "m"), expected, answer)
 
 
 if __name__ == "__main__":

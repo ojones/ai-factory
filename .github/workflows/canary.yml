@@ -1,0 +1,34 @@
+name: Model canary
+
+# Every night (and on demand): one one-token request per configured model (each role's model and its fallback), a fraction of a cent in all.
+# A model the provider no longer serves opens one `model-drift` issue; it closes itself when every model answers again. Changes nothing.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: model-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Check every configured model
+        env:
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          FACTORY_GH_TOKEN: ${{ github.token }}
+        run: python orchestrator/canary.py

@@ -1,0 +1,64 @@
+name: Benchmark
+
+# Manual: run the whole-run benchmark suite (agents/benchmark/suite.json) through the real Build Run against the bench app, optionally with
+# candidate models, and compare it with the accepted baseline. It costs real model spend (a few dollars) and takes hours, so it only runs when
+# a model or prompt change is actually pending. See docs/benchmark-protocol.md. Leave `execute` off for a dry run that prints the plan and estimate.
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: Name of this pass (for example baseline, or the candidate's short name)
+        required: true
+        default: baseline
+      candidate:
+        description: "Candidate models as role=model-id pairs, comma separated (for example coder=deepseek-ai/NewModel,tester=nvidia/Other). Empty = the current profile."
+        required: false
+      tasks:
+        description: Comma-separated task ids to run (empty = the whole suite)
+        required: false
+      execute:
+        description: Actually spend the money and run it (otherwise a dry run)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Run the pass
+        env:
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          GROWTHBOOK_ADMIN_PAT: ${{ secrets.GROWTHBOOK_ADMIN_PAT }}
+          PREVIEW_MASTER_SECRET: ${{ secrets.PREVIEW_MASTER_SECRET }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          LABEL: ${{ inputs.label }}
+          CANDIDATE: ${{ inputs.candidate }}
+          TASKS: ${{ inputs.tasks }}
+          EXECUTE: ${{ inputs.execute }}
+        run: |
+          args=(run --label "$LABEL" --candidate "$CANDIDATE" --tasks "$TASKS")
+          [ "$EXECUTE" = true ] && args+=(--execute)
+          python orchestrator/benchmark.py "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-result
+          path: benchmark-result-*
+          if-no-files-found: ignore
