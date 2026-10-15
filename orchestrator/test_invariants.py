@@ -625,7 +625,13 @@ class Invariants(unittest.TestCase):
         self.assertIsNotNone(triage.secret_name_problem("GITHUB_TOKEN"))
         self.assertIsNone(triage.secret_name_problem("WEATHER_API_KEY"))
         run.git = lambda *a, check=True, cwd=None: mock.Mock(returncode=0, stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
+        run.git = lambda *a, check=True, cwd=None: mock.Mock(
+            returncode=0 if not (a[0] == "show" and a[1].startswith("base:")) else 1,
+            stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
         self.assertIn("SNEAKY_KEY", run.secret_problem("base", "head"))
+        # a name the app already had at the run's base was accepted before: a later run that does not touch it is not rejected for it
+        run.git = lambda *a, check=True, cwd=None: mock.Mock(returncode=0, stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
+        self.assertIsNone(run.secret_problem("base", "head"))
         deploy = (STARTER / ".github/workflows/deploy-fly.yml").read_text()
         self.assertIn("flyctl secrets import --stage", deploy)
         self.assertIn("reserved", deploy)

@@ -1631,7 +1631,12 @@ class BuildRun:
             names = [x.get("name") for x in json.loads(listed.stdout).get("secrets", [])]
         except (ValueError, AttributeError):
             return "`secrets.json` is not valid JSON of the form {\"secrets\": [{\"name\": \"...\", \"purpose\": \"...\"}]}."
-        declared = set(self.state.d.get("secrets") or [])
+        earlier = self.git("show", f"{base}:secrets.json", check=False)
+        try:
+            known = {x.get("name") for x in json.loads(earlier.stdout).get("secrets", [])} if earlier.returncode == 0 else set()
+        except (ValueError, AttributeError):
+            known = set()
+        declared = set(self.state.d.get("secrets") or []) | known  # a name already in the app's secrets.json was accepted by an earlier run
         bad = [n for n in names if n not in declared or triage.secret_name_problem(n)]
         return (f"`secrets.json` lists {', '.join(map(str, bad))}, which the plan did not declare. List only the secrets named in the request's Secrets note."
                 if bad else None)
