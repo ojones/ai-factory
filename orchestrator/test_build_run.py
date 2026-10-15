@@ -591,6 +591,20 @@ class RoundLoop(unittest.TestCase):
     CLEAN, BLOCKED = (True, [], []), (False, [{"summary": "bad", "evidence": "e"}], [])
     PASSED, FAILED_NEW = (True, [], "ok"), (False, [{"flag": "f", "check": "new", "status": "failed", "scope": "new"}], "dark_only")
 
+    def test_a_second_failed_deployed_test_stops_the_run_before_a_third_round(self):
+        run = self.make([self.CLEAN, self.CLEAN, self.CLEAN], [self.FAILED_NEW, self.FAILED_NEW, self.PASSED])
+        run.lim["test_rounds"] = 2
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "round_limit")
+        self.assertEqual(run.calls.count("coder2"), 1)
+        self.assertNotIn("coder3", run.calls)
+
+    def test_blocked_reviews_do_not_use_up_the_test_rounds(self):
+        run = self.make([self.BLOCKED, self.BLOCKED, self.CLEAN], [self.PASSED])
+        run.lim["test_rounds"] = 1
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "released")
+
     def test_a_clean_review_pushes_then_the_tester_runs_then_it_releases(self):
         run = self.make([self.CLEAN], [self.PASSED])
         self.go(run)
@@ -976,6 +990,7 @@ class JsonOutput(unittest.TestCase):
             return 0, 0.1, None
 
         run.invoke, run.restore_tree = invoke, lambda cwd=None: None
+        run.art = Path(__import__("tempfile").mkdtemp())
         doc, cost, _ = run.agent_json("tester", "t1", {}, path)
         self.assertEqual(doc, {"results": []})
         self.assertEqual((attempts, notes[0]), (["t1", "t1b"], None))
@@ -991,10 +1006,46 @@ class JsonOutput(unittest.TestCase):
             return 0, 0.1, None
 
         run.invoke, run.restore_tree = invoke, lambda cwd=None: None
+        run.art = Path(__import__("tempfile").mkdtemp())
+        run.state = b.State(run.art / "state.json", "demo", "1", "url")
         with self.assertRaises(b.NeedsHuman) as cm:
             run.agent_json("tester", "t1", {}, path)
         self.assertIn("no valid output file twice", str(cm.exception))
         self.assertIn("last problem: it is not valid JSON", str(cm.exception))
+        # the money both attempts spent is in the Report as a stage of its own
+        failed = [s for s in run.state.d["stages"] if s["stage"] == "Tester failed"]
+        self.assertEqual(len(failed), 1)
+        self.assertAlmostEqual(failed[0]["cost_usd"], 0.2)
+        self.assertIn("2 attempt(s)", failed[0]["verdict"])
+
+    def test_an_agent_that_spent_its_whole_credential_is_not_given_a_second_attempt(self):
+        run = object.__new__(b.BuildRun)
+        path = self.write(None)
+        run.art = Path(__import__("tempfile").mkdtemp())
+        run.state = b.State(run.art / "state.json", "demo", "1", "url")
+        labels = []
+
+        def invoke(role, label, values, extra_env, cwd, home, note=None):
+            labels.append(label)
+            (run.art / f"openhands-{role}-{label}.jsonl").write_text(
+                '{"code": "LLMBadRequestError", "detail": "litellm.BadRequestError: OpenAIException - token spending limit exceeded"}\n')
+            return 0, 0.55, None
+
+        run.invoke, run.restore_tree = invoke, lambda cwd=None: None
+        with self.assertRaises(b.NeedsHuman) as cm:
+            run.agent_json("tester", "t1", {}, path)
+        self.assertEqual(labels, ["t1"])  # no "t1b"
+        self.assertIn("spent its whole credential", str(cm.exception))
+        self.assertIn("would only repeat it", str(cm.exception))
+        stage = run.state.d["stages"][-1]
+        self.assertEqual((stage["stage"], stage["cost_usd"]), ("Tester failed", 0.55))
+        self.assertIn("1 attempt(s)", stage["verdict"])
+
+    def test_the_spending_limit_message_is_found_at_the_end_of_a_stream_and_a_missing_file_is_not_a_hit(self):
+        p = self.write('x' * 400000 + 'token spending limit exceeded')
+        self.assertTrue(b.spending_limit_hit(p))
+        self.assertFalse(b.spending_limit_hit(self.write("all fine")))
+        self.assertFalse(b.spending_limit_hit(Path("/nonexistent/stream.jsonl")))
 
 
 class RunWatched(unittest.TestCase):
@@ -1251,6 +1302,37 @@ class ModelFallback(unittest.TestCase):
                                  ((500, "boom"), "unknown"), ((429, "slow"), "unknown")):
             with mock.patch.object(b, "http", lambda *a, **k: answer):
                 self.assertEqual(b.model_status("https://llm", "k", "m"), expected, answer)
+
+
+class CheckProblem(unittest.TestCase):
+    """The Orchestrator's own `npm run check` on the coder's commit, before the reviewer."""
+
+    def make(self, scripts, exit_code=0, output="src/a.ts(3,1): error TS2322"):
+        import tempfile
+        run = object.__new__(b.BuildRun)
+        run.agent_user = None
+        run.app_dir = Path(tempfile.mkdtemp(prefix="check-test-"))
+        (run.app_dir / "package.json").write_text(json.dumps({"scripts": scripts}))
+        run.restore_tree = lambda *a, **k: None
+        bin_dir = Path(tempfile.mkdtemp(prefix="npm-stub-"))
+        stub = bin_dir / "npm"
+        stub.write_text(f"#!/bin/sh\necho '{output}'\nexit {exit_code}\n")
+        stub.chmod(0o755)
+        self.patch = mock.patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ['PATH']}"})
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+        return run
+
+    def test_a_passing_check_is_no_problem(self):
+        self.assertIsNone(self.make({"check": "tsc"}).check_problem())
+
+    def test_a_failing_check_tells_the_coder_the_errors(self):
+        problem = self.make({"check": "tsc"}, exit_code=2).check_problem()
+        self.assertIn("npm run check", problem)
+        self.assertIn("TS2322", problem)
+
+    def test_an_app_without_a_check_script_is_skipped(self):
+        self.assertIsNone(self.make({"test": "x"}, exit_code=2).check_problem())
 
 
 if __name__ == "__main__":

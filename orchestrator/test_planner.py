@@ -117,6 +117,19 @@ class Plan(unittest.TestCase):
             plan["change_sets"][1]["title"] = title
             self.assertFalse(any("retires or removes a flag" in x for x in check(plan)[0]), title)
 
+    def test_the_recorded_planner_mistakes_are_caught_and_their_good_versions_pass(self):
+        # agents/planner-fixtures/cases.json: plans shaped like the real mistakes in the factory-learning issues.
+        cases = json.loads((Path(__file__).resolve().parent.parent / "agents" / "planner-fixtures" / "cases.json").read_text())
+        for case in cases:
+            plan = good()
+            plan["change_sets"] = [{**plan["change_sets"][0], **case["change_set"], "id": "CS-1", "requirements": ["REQ-1"], "depends_on": []}]
+            plan["requirements"] = plan["requirements"][:1]
+            problems = check(plan)[0]
+            if case["expect"] == "ok":
+                self.assertEqual(problems, [], case["name"])
+            else:
+                self.assertTrue(any(case["expect"] in x for x in problems), (case["name"], problems))
+
     def test_garbage_is_reported_not_raised(self):
         self.assertEqual(check([])[0], ["the plan is not a JSON object"])
         problems = check({})[0]

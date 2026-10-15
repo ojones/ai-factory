@@ -112,14 +112,8 @@ class Inference(unittest.TestCase):
 
 
 class Correction(unittest.TestCase):
-    def test_a_budget_failure_retries_with_twice_the_money_up_to_the_ceiling(self):
-        self.assertEqual(fr.raised_cap("budget_exhausted", 0.08, 10.0), 0.16)
-        self.assertEqual(fr.raised_cap("budget_exhausted", 2.0, 10.0), 4.0)
-        self.assertEqual(fr.raised_cap("budget_exhausted", 7.0, 10.0), 10.0)
-        self.assertIsNone(fr.raised_cap("budget_exhausted", 10.0, 10.0))  # already at the ceiling
-        for outcome in ("round_limit", "needs_human", "time_limit", "stuck", "crash"):
-            self.assertIsNone(fr.raised_cap(outcome, 0.08), outcome)
-        self.assertIsNone(fr.raised_cap("budget_exhausted", None))
+    def test_a_retry_never_gets_more_money_than_the_request_had(self):
+        self.assertFalse(hasattr(fr, "raised_cap"))
 
     def test_the_app_retry_carries_no_requirements_about_fixing_the_factory(self):
         # What the live retry (#81) got: the retrospective's requirements about the tester, pasted into the app's request.
@@ -133,10 +127,10 @@ class Correction(unittest.TestCase):
     def test_a_budget_ending_is_described_as_one_and_not_as_the_agent_that_happened_to_fail(self):
         facts = dict(FACTS, outcome="budget_exhausted", message="$0.0768 spent against a $0.08 cap, and then: the tester produced no file")
         text = fr.app_request(facts, dict(RESULT, root_cause="Tester agent failed to produce valid JSON"), REVERT, "x", "model_limit", [],
-                              "The cost cap for this attempt is raised from $0.08 to $0.16, because the last attempt ran out of money.")
+                              "The last attempt ran out of money, and the cost cap is not raised for this one: do less in one pass.")
         self.assertIn("more than one pass could finish inside its limits", text)
         self.assertNotIn("Tester agent failed to produce valid JSON", text)
-        self.assertIn("raised from $0.08 to $0.16", text)
+        self.assertIn("not raised for this one", text)
 
 
 class Retries(unittest.TestCase):
@@ -234,11 +228,12 @@ class Filing(unittest.TestCase):
         self.assertTrue(any(c[:3] == ["issue", "edit", "66"] and "retrying" in c for c in calls))
         self.assertFalse([c for c in calls if c[:2] == ["issue", "close"]])
 
-    def test_a_budget_failure_retries_the_same_issue_with_a_higher_cap(self):
+    def test_a_budget_failure_retries_the_same_issue_with_the_same_cap_and_a_note_to_do_less(self):
         _, calls = self.run_it(dict(RESULT, category="model_limit"), facts=dict(FACTS, outcome="budget_exhausted", cap_usd=0.75))
         _, state = self.state_of(calls)
-        self.assertEqual(state["cap"], 1.5)
-        self.assertIn("raised from $0.75 to $1.50", state["guidance"])
+        self.assertNotIn("cap", state)
+        self.assertIn("cost cap is not raised for this one", state["guidance"])
+        self.assertNotIn("raised from", state["guidance"])
 
     def test_a_watchdog_switch_off_retries_the_story_with_the_same_flag(self):
         out, calls = self.run_it(None, facts=dict(FACTS, outcome="watchdog_disabled", message="errors rose", flags=["todo-ui"]))

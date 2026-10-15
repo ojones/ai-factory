@@ -57,7 +57,14 @@ roles:
     prompt: prompts/retrospective.md
 
 limits:
+  # Rounds of review and fixing in all. A blocked review costs one model call and a coder round and never pushes.
   review_rounds: 4
+  # The Orchestrator runs the app's `npm run check` (type-check and lint) on each coder commit before the reviewer sees it; a failure goes
+  # back to the coder as a rejected commit (three attempts, like a protected-file violation), not as a review round. False turns it off.
+  precheck: true
+  # Deployed tests that may fail before the run stops for a person (0 turns it off). A failed deployed test costs a push, CI, a deploy
+  # and a tester pass, and the runs that needed a third round cost about four times the one-round runs, so only one fix gets a second test.
+  test_rounds: 2
   # When the tester's checks were only blocked or not run (none failed), the coder cannot fix that: the tester looks again at the same
   # deployed commit this many times, and a run that still cannot verify stops for a person instead of spending coder rounds.
   test_retries: 1

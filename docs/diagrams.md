@@ -37,7 +37,7 @@ flowchart TD
   setup --> plan --> code --> rev
   rev -. "blocking findings,<br/>nothing pushed" .-> code
   rev -- "clean: push" --> ci --> test --> gate
-  gate -. "dark failure: fix forward<br/>(max 4 rounds, stuck detector,<br/>cost cap, 330 min limit)" .-> code
+  gate -. "dark failure: fix forward<br/>(max 4 rounds, 2 failed deployed tests, stuck detector,<br/>cost cap, 330 min limit)" .-> code
   gate -- clean --> rel --> dog --> fin
   gate -.-> bad
   test -. regression .-> rb

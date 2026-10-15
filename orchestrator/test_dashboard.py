@@ -43,6 +43,16 @@ class Dashboard(unittest.TestCase):
         self.assertEqual(m["apps"]["a"]["total_cost_usd"], 1.2)
         self.assertEqual(list(m["apps"]), ["a", "b"])
 
+    def test_the_cost_target_is_tracked_as_runs_over_it_and_the_90th_percentile(self):
+        costs = [0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.5, 0.6, 1.1, 1.2]
+        rows = [db.summarize_run(report(app="a", url=str(i), cost=c)) for i, c in enumerate(costs)]
+        m = db.metrics(rows)
+        self.assertEqual((m["all"]["over_target"], m["all"]["p90_cost_usd"]), (2, 1.1))
+        digest = db.render_digest(rows, m, "2000-01-01T00:00:00Z")
+        self.assertIn("2 of 10 run(s) over it, 90th percentile $1.1", digest)
+        self.assertIn("Over $1", db.render_html(rows, m, "now"))
+        self.assertEqual(db.metrics([])["all"]["p90_cost_usd"], None)
+
     def test_no_runs_is_not_a_crash(self):
         m = db.metrics([])
         self.assertIsNone(m["all"]["ok_rate"])

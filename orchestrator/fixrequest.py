@@ -77,15 +77,6 @@ def rollback_line(rollback):
     return f"Nothing was rolled back: {clip(rollback.get('reason'), 200)}."
 
 
-def raised_cap(outcome, cap, ceiling=10.0):
-    """The cost cap for a retry. Money was the problem, so the retry gets twice as much, up to the Intake ceiling; any other
-    ending keeps the cap it had. Returns None when there is nothing to change."""
-    if outcome != "budget_exhausted" or not cap:
-        return None
-    new = min(float(ceiling), round(float(cap) * 2, 2))
-    return new if new > float(cap) else None
-
-
 def requirements(facts, result, rollback, app_side=False):
     """Numbered, checkable requirements: what must be true once this is fixed. `app_side` is for a retry of the app's own
     request, which carries no requirements about fixing the Factory."""
@@ -345,11 +336,11 @@ def file_app_retry(repo, token, pat, facts, result, rollback, lim, category):
     history = [str(h) for h in state.get("history", [])][-3:]
     history.append(f"attempt {attempt - 1 or 'zero (the original request)'}: ended {facts.get('outcome')}: {clip(facts.get('message'), 160)}")
     flags = [f for f in (facts.get("flags") or state.get("flags") or []) if isinstance(f, str)]
-    new_cap = raised_cap(facts.get("outcome"), facts.get("cap_usd"), lim.get("cost_cap_usd_ceiling", 10.0))
-    cap_note = (f"The cost cap for this attempt is raised from ${float(facts.get('cap_usd')):.2f} to ${new_cap:.2f}, because the last attempt ran out of money."
-                if new_cap else "")
+    # A retry gets the cap the request had, never more: a story that could not finish inside it is too big for one pass, and the fix is to do less.
+    cap_note = (f"The last attempt ran out of money, and the cost cap is not raised for this one: do less in one pass, with the smallest change sets that work."
+                if facts.get("outcome") == "budget_exhausted" else "")
     auto = {"attempt": attempt, "max": int(lim.get("fix_request_max_attempts", 2)), "started": autostart}
-    new_state = {"attempt": attempt, "flags": flags, "history": history, "last_run": facts.get("run_url"), "cap": new_cap or state.get("cap"),
+    new_state = {"attempt": attempt, "flags": flags, "history": history, "last_run": facts.get("run_url"),
                  "guidance": app_request(facts, result, rollback, None, category, history, cap_note, flags)[:6000]}
     for name, color, desc in ((RETRYING, "fbca04", "This story failed and is being retried on the same issue and flag"),
                               ("needs-human", "b60205", "The Orchestrator stopped and needs a person"), (update_intake.GO, "0e8a16", "Start this change now")):

@@ -24,6 +24,7 @@ from pathlib import Path
 OK = ("released", "nothing_to_release", "planned")
 WORKFLOW = "build-run.yml"
 MAX_RUNS_PER_PASS = 100
+COST_TARGET_USD = 1.0  # the owner's goal for one Build Run; a target, not a cap (the cap is `limits.cost_cap_usd_default`)
 
 
 def summarize_run(d):
@@ -54,6 +55,12 @@ def _avg(xs):
     return round(sum(xs) / len(xs), 2) if xs else None
 
 
+def _p90(xs):
+    """The value 90% of the runs are at or below (nearest rank), or None for no runs."""
+    xs = sorted(x for x in xs if x is not None)
+    return round(xs[min(len(xs) - 1, -(-9 * len(xs) // 10) - 1)], 2) if xs else None
+
+
 def metrics(history, lessons=None):
     """Fleet numbers, overall and per app. `lessons` is {"open": n, "fix_ineffective": n} or None."""
     def block(rows):
@@ -64,6 +71,8 @@ def metrics(history, lessons=None):
                 "avg_rounds": _avg([r["rounds"] for r in rows if r["rounds"]]),
                 "avg_cost_usd": _avg([r["cost_usd"] for r in rows]),
                 "total_cost_usd": round(sum(r["cost_usd"] for r in rows), 2),
+                "p90_cost_usd": _p90([r["cost_usd"] for r in rows]),
+                "over_target": sum(1 for r in rows if r["cost_usd"] > COST_TARGET_USD),
                 "stuck": sum(1 for r in rows if r["outcome"] in ("stuck", "round_limit")),
                 "watchdog_disabled": sum(1 for r in rows if r["outcome"] == "watchdog_disabled"),
                 "needs_human": sum(1 for r in rows if r["outcome"] not in OK),
@@ -91,7 +100,8 @@ def render_digest(history, m, since):
              f"**Last day**: {len(recent)} Build Run(s), {sum(1 for r in recent if r['outcome'] in OK)} ended OK, "
              f"${sum(r['cost_usd'] for r in recent):.2f} spent.",
              f"**All time**: {allm['runs']} runs, {pct(allm['ok_rate'])} OK, {pct(allm['first_pass_rate'])} first pass, "
-             f"avg {num(allm['avg_rounds'])} rounds, avg {num(allm['avg_cost_usd'], '$')}, total {num(allm['total_cost_usd'], '$')}."]
+             f"avg {num(allm['avg_rounds'])} rounds, avg {num(allm['avg_cost_usd'], '$')}, total {num(allm['total_cost_usd'], '$')}.",
+             f"**Cost target** (${COST_TARGET_USD:.2f} a run): {allm['over_target']} of {allm['runs']} run(s) over it, 90th percentile {num(allm['p90_cost_usd'], '$')}."]
     attention = [r for r in recent if r["outcome"] not in OK]
     if attention:
         lines += ["", "**Needs a person**:"] + [f"- `{r['app']}`: {r['outcome']} ([run]({r['run_url']}))" for r in attention]
@@ -119,7 +129,8 @@ def render_html(history, m, generated):
     e = html.escape
     allm = m["all"]
     cards = [("Runs", allm["runs"]), ("OK", pct(allm["ok_rate"])), ("First pass", pct(allm["first_pass_rate"])),
-             ("Avg rounds", num(allm["avg_rounds"])), ("Avg cost", num(allm["avg_cost_usd"], "$")), ("Total cost", num(allm["total_cost_usd"], "$")),
+             ("Avg rounds", num(allm["avg_rounds"])), ("Avg cost", num(allm["avg_cost_usd"], "$")), ("90th pct cost", num(allm["p90_cost_usd"], "$")),
+             (f"Over ${COST_TARGET_USD:.0f}", allm["over_target"]), ("Total cost", num(allm["total_cost_usd"], "$")),
              ("Stuck", allm["stuck"]), ("Watchdog off", allm["watchdog_disabled"]), ("Audit breaks", allm["audit_violations"])]
     les = m.get("lessons") or {}
     if les:

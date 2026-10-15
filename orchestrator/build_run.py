@@ -1154,8 +1154,6 @@ class BuildRun:
                                            self.lim["cost_cap_usd_ceiling"])
         if retry.get("guidance"):
             self.task += "\n\n" + str(retry["guidance"])
-            if retry.get("cap"):
-                self.cap = max(self.cap, min(float(retry["cap"]), float(self.lim["cost_cap_usd_ceiling"])))
         secrets = triage.find_secrets(issue["body"] or "")
         if secrets:
             raise Refused(triage.secret_refusal(secrets))
@@ -1469,10 +1467,12 @@ class BuildRun:
         """Run a role that writes a JSON file; one retry if the file is missing or malformed. If the Agent wrote the file under its working
         directory instead of the path it was given (it has done so, twice, with the right content), that copy is used.
         Returns (document, cost, token usage)."""
-        total_cost, usage, note = 0.0, None, None
+        total_cost, usage, note, attempts, exhausted = 0.0, None, None, 0, False
         for attempt in (1, 2):
             Path(path).unlink(missing_ok=True)
-            _, cost, used = self.invoke(role, f"{label}{'' if attempt == 1 else 'b'}", values, extra_env, cwd, home, note=note)
+            attempt_label = f"{label}{'' if attempt == 1 else 'b'}"
+            _, cost, used = self.invoke(role, attempt_label, values, extra_env, cwd, home, note=note)
+            attempts += 1
             total_cost += cost
             usage = merge_usage(usage, used)
             adopt_misplaced_file(path, cwd)
@@ -1484,6 +1484,16 @@ class BuildRun:
                 pass
             note = json_problem(path, check)  # read before the next attempt removes the file
             self.restore_tree(cwd)
+            if spending_limit_hit(self.art / f"openhands-{role}-{attempt_label}.jsonl"):
+                # The Agent spent its whole credential and still wrote nothing usable. A second attempt gets a credential of the same
+                # size and goes the same way, so it only spends the money again (a tester did this for about $0.50 a time).
+                exhausted = True
+                break
+        # What a failed Agent cost is spent either way; give it a stage so the Report accounts for it.
+        self.state.stage(f"{role.capitalize()} failed", role, label, total_cost, f"no usable output after {attempts} attempt(s)", usage)
+        if exhausted:
+            raise NeedsHuman("other", f"the {role} spent its whole credential (${total_cost:.2f}) without writing a usable output file"
+                                      + (f" (last problem: {note})" if note else "") + "; a second attempt would only repeat it")
         raise NeedsHuman("other", f"the {role} produced no valid output file twice" + (f" (last problem: {note})" if note else ""))
 
     def restore_tree(self, cwd=None):
@@ -1522,6 +1532,8 @@ class BuildRun:
                             self.git("grep", "-n", "-I", "-F", "-e", slug, head, check=False).stdout.splitlines()))
                         if problem:
                             break
+                    if not problem and self.lim.get("precheck", True):
+                        problem = self.check_problem()
             if problem:
                 attempts += 1
                 self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
@@ -1532,6 +1544,30 @@ class BuildRun:
             self.check_limits()
             self.state.stage("Coder", "coder", label, cost, f"committed {head[:8]}", self.take_usage())
             return head
+
+    def check_problem(self):
+        """Run the app's own `npm run check` (type-check and lint, the Test Gate's first step) on the coder's commit, as the Agent user, and
+        return what to tell the coder when it fails, so a mechanical error costs a coder attempt and not a review, a push and a CI run.
+        It only reads: the formatter stays the coder's. None when it passes, the app has no such script or it could not be run."""
+        try:
+            scripts = json.loads((self.app_dir / "package.json").read_text()).get("scripts", {})
+        except (OSError, ValueError):
+            return None
+        if "check" not in scripts:
+            return None
+        self.restore_tree()
+        env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
+        try:
+            p = sh(agent_command(["npm", "run", "check"], env, self.agent_user), cwd=self.app_dir, env=env, check=False, timeout=300)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log(f"npm run check could not be run ({type(e).__name__}); leaving it to the Test Gate")
+            return None
+        finally:
+            self.restore_tree()
+        if p.returncode == 0:
+            return None
+        out = ((p.stdout or "") + (p.stderr or "")).strip()[-1500:]
+        return f"`npm run check` fails on your commit. Fix every error it reports (in the code, not by suppressing the rule), then commit again:\n{out}"
 
     def push(self, head):
         """Push the reviewed commit to `main` (which deploys it, dark if it is flagged). Only the Orchestrator pushes, and only code the
@@ -1971,6 +2007,7 @@ class BuildRun:
                 log("retiring in passing: " + ", ".join(self.retiring))
                 self.state.d["retiring"] = list(self.retiring)
             head = self.coder("1", task, str(findings_path))
+            failed_tests = 0
             for rnd in range(1, self.lim["review_rounds"] + 1):
                 # The reviewer sees the commit before it is pushed, so code it blocks never reaches `main`; only reviewed code is pushed,
                 # and it deploys dark behind its flag until the tester has passed it.
@@ -2029,6 +2066,11 @@ class BuildRun:
                             else "Clean, but the update added no flag, so there was nothing to release."))
                     self.archive_retired_flags(base, head)
                     return
+                if failed_checks(test_failures):
+                    failed_tests += 1
+                    if failed_tests >= int(self.lim.get("test_rounds", 0) or 10**6):
+                        raise NeedsHuman("round_limit", f"{failed_tests} deployed tests failed; each costs a push, a deploy and a tester pass, "
+                                                        "so the run stops for a person instead of trying again")
                 if rnd == self.lim["review_rounds"]:
                     raise NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
                 if stalled(self.state.d["scoreboard"], int(self.lim.get("stuck_rounds", 0))):
@@ -2202,6 +2244,21 @@ def provider_blocked_text(text):
     are needed on one line (an error event and the billing wording), so a prompt or a log that merely mentions balances
     does not trip it."""
     return any(BLOCKED_LINE_RE.search(line) and BLOCKED_EVENT_RE.search(line) for line in (text or "").splitlines())
+
+
+SPENDING_LIMIT_RE = re.compile(r"token spending limit exceeded", re.I)
+
+
+def spending_limit_hit(path, tail_bytes=300_000):
+    """True when the end of an Agent's JSONL output shows its own scoped credential ran out (the provider's "token spending limit exceeded"),
+    which is the credential's cap, not an empty account (that is `scan_for_provider_block`)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - tail_bytes))
+            return bool(SPENDING_LIMIT_RE.search(f.read().decode(errors="replace")))
+    except OSError:
+        return False
 
 
 def scan_for_provider_block(path, tail_bytes=300_000):

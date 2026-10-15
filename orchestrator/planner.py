@@ -30,6 +30,10 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # switch it off. (A run that invented `retire-delete-flag` for this turned a live DELETE endpoint dark.)
 RETIRES_FLAG_RE = re.compile(r"\b(retire|retiring|remove|removing|delete|deleting|drop|dropping|clean ?up|get rid of)\b[^.]{0,60}\b(feature[- ]?)?flags?\b", re.I)
 TESTS_ONLY_RE = re.compile(r"^\s*(add|write|create|update|improve|expand|implement)\b[^.]*\b(unit |integration |comprehensive |more |additional |extra )*(tests?|test coverage|test suite)(?![\w-])", re.I)
+# A change set that bumps dependencies is a different kind of work from retiring a flag; they ship and fail separately.
+DEPENDENCY_WORK_RE = re.compile(r"\b(bump|upgrad\w*|updat\w*|dependabot)\b[^.]{0,40}\b(dependenc\w*|packages?|npm|base image)\b", re.I)
+# An HTTP route or a screen element in the criteria: something a user or a client can reach.
+USER_REACHABLE_RE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+/|\bendpoints?\b|\broutes?\b|\bbuttons?\b|\bscreens?\b|\bpage\b", re.I)
 MAX_CHANGE_SETS = 8
 
 
@@ -104,6 +108,13 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, re
         flag = cs.get("flag")
         if flag is not None and RETIRES_FLAG_RE.search(str(cs.get("title", ""))):
             problems.append(f"{name} retires or removes a flag but is given the new flag {flag!r}: users see no difference, so set flag to null and internal_only to true")
+        title = str(cs.get("title", ""))
+        if RETIRES_FLAG_RE.search(title) and DEPENDENCY_WORK_RE.search(title):
+            problems.append(f"{name} bundles a dependency update with retiring a flag: they ship and fail separately, so make them two change sets")
+        if (cs.get("internal_only") and flag is None and not RETIRES_FLAG_RE.search(title)
+                and USER_REACHABLE_RE.search(" ".join(str(c) for c in cs.get("criteria") or []))):
+            problems.append(f"{name} is marked internal_only but its criteria name an endpoint, route or screen a user can reach: "
+                            "a change to those is user-visible, so give it its own flag (describing it as tooling does not make it internal)")
         if flag is not None:
             if not isinstance(flag, str) or not SLUG_RE.fullmatch(flag):
                 problems.append(f"{name} has an invalid flag slug {flag!r}")
