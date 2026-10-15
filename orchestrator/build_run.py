@@ -349,6 +349,21 @@ class Refused(Exception):
     was built, so nothing is rolled back, retried or filed as a failure."""
 
 
+DEPLOY_WORKFLOW = ".github/workflows/deploy-fly.yml"
+SECRETS_REGION_RE = re.compile(r"^([ \t]*)# factory-secrets:begin\n(?:.*\n)*?[ \t]*# factory-secrets:end$", re.M)
+
+
+def wire_secrets(workflow_text, names):
+    """The deploy workflow with each declared secret listed as an ordinary `NAME: ${{ secrets.NAME }}` line between its markers. Static
+    references, because a workflow that dumps the whole `secrets` context is flagged by GitHub as possibly malicious and never runs."""
+    names = sorted({n for n in names if isinstance(n, str) and not triage.secret_name_problem(n)})
+
+    def region(m):
+        indent = m.group(1)
+        return "\n".join([f"{indent}# factory-secrets:begin"] + [f"{indent}{n}: ${{{{ secrets.{n} }}}}" for n in names] + [f"{indent}# factory-secrets:end"])
+    return SECRETS_REGION_RE.sub(region, workflow_text, count=1)
+
+
 def secrets_note(needed):
     """What the coder is told about the request's secrets: they exist at runtime as environment variables, and it never sees a value."""
     names = ", ".join(x["name"] for x in needed)
@@ -1227,9 +1242,14 @@ class BuildRun:
         changed = []
         for rel in group:
             src, dst = FACTORY_DIR / "templates" / "starter" / rel, self.app_dir / rel
-            if src.is_file() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
+            if not src.is_file():
+                continue
+            wanted = src.read_bytes()
+            if rel == DEPLOY_WORKFLOW:  # the app's declared secrets stay listed in the workflow when the template is copied over it
+                wanted = wire_secrets(wanted.decode(), self.secret_names()).encode()
+            if not dst.is_file() or dst.read_bytes() != wanted:
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dst)
+                dst.write_bytes(wanted)
                 changed.append(rel)
         if changed:
             self.git("add", "--", *changed)
@@ -1237,6 +1257,26 @@ class BuildRun:
                      "chore: sync protected Starter Template files\n\n" + "\n".join(changed))
             self.share_with_agent(self.app_dir)
         return changed
+
+    def secret_names(self):
+        """The secret names this app declares: in its committed `secrets.json`, and the plan's declared ones for this run."""
+        names = list(self.state.d.get("secrets") or [])
+        try:
+            names += [x.get("name") for x in json.loads((self.app_dir / "secrets.json").read_text()).get("secrets", [])]
+        except (OSError, ValueError, AttributeError):
+            pass
+        return names
+
+    def stage_secret_wiring(self):
+        """List the run's declared secrets in the deploy workflow (an Orchestrator-owned file), committed locally and pushed with the coder's
+        reviewed work, like the lint config. Before the coder starts, so its protected-file check starts from this commit."""
+        if not self.state.d.get("secrets"):
+            return
+        try:
+            if self.copy_template_files((DEPLOY_WORKFLOW,)):
+                log("listed the declared secrets in the deploy workflow: " + ", ".join(self.state.d["secrets"]))
+        except Exception as e:  # noqa: BLE001
+            log(f"could not list the secrets in the deploy workflow: {type(e).__name__}: {e}")
 
     def apply_template_files(self, labels):
         """A template-sync Intake: copy the protected Starter Template files in TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR into the app and
@@ -2084,6 +2124,7 @@ class BuildRun:
             if self.retiring:
                 log("retiring in passing: " + ", ".join(self.retiring))
                 self.state.d["retiring"] = list(self.retiring)
+            self.stage_secret_wiring()
             head = self.coder("1", task, str(findings_path))
             failed_tests = 0
             for rnd in range(1, self.lim["review_rounds"] + 1):

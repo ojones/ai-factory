@@ -74,11 +74,14 @@ jobs:
 
       - name: Sync the app's own secrets to Fly
         # The third-party secrets this app declares in secrets.json (names only, no values) were set by the owner as GitHub Actions secrets with
-        # `gh secret set`. Only this job sees them, and only the declared names are copied, through stdin so no value is on a command line.
-        # A missing value fails the deploy; the Factory's own names are refused, so a bad secrets.json cannot copy a credential into the app.
+        # `gh secret set`. The Orchestrator, which owns this file, lists each declared name between the markers below as an ordinary
+        # `NAME: ${{ secrets.NAME }}` line; only this job sees them, and only the listed names are copied, through stdin so no value is on a
+        # command line. A name that is not listed or has no value fails the deploy, and the Factory's own names are refused.
         if: hashFiles('secrets.json') != ''
         env:
-          ALL_SECRETS: ${{ toJSON(secrets) }}
+          FACTORY_APP_SECRETS: declared
+          # factory-secrets:begin
+          # factory-secrets:end
         run: |
           names=$(jq -r '.secrets[]?.name' secrets.json)
           [ -n "$names" ] || exit 0
@@ -89,8 +92,8 @@ jobs:
                 echo "::error::$name is reserved and cannot be an app secret"; exit 1 ;;
             esac
             printf '%s' "$name" | grep -Eq '^[A-Z][A-Z0-9_]{2,63}$' || { echo "::error::bad secret name"; exit 1; }
-            value=$(jq -r --arg n "$name" '.[$n] // empty' <<<"$ALL_SECRETS")
-            [ -n "$value" ] || { echo "::error::the GitHub secret $name is not set; run: gh secret set $name -R $GITHUB_REPOSITORY"; exit 1; }
+            value="${!name:-}"
+            [ -n "$value" ] || { echo "::error::the GitHub secret $name is not set (gh secret set $name -R $GITHUB_REPOSITORY) or is not listed in this step"; exit 1; }
             case "$value" in *$'\n'*) echo "::error::$name has a multi-line value, which this step does not copy"; exit 1 ;; esac
             printf '%s=%s\n' "$name" "$value" >> /tmp/app-secrets
           done

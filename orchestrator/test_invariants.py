@@ -635,6 +635,12 @@ class Invariants(unittest.TestCase):
         deploy = (STARTER / ".github/workflows/deploy-fly.yml").read_text()
         step = deploy[deploy.index("Sync the app's own secrets"):deploy.index("Copy image from GHCR")]
         self.assertIn("< /tmp/app-secrets", step)  # the values go to Fly through stdin
+        self.assertNotIn("toJSON(secrets)", deploy)  # GitHub flags a workflow that dumps the whole secrets context as malicious and will not run it
+        wired = b.wire_secrets(deploy, ["WEATHER_API_KEY", "FLY_API_TOKEN", "bad name"])
+        self.assertIn("WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}", wired)  # an ordinary static reference
+        self.assertNotIn("secrets.FLY_API_TOKEN: ", wired.split("factory-secrets:begin")[1].split("factory-secrets:end")[0])
+        self.assertEqual(b.wire_secrets(wired, ["WEATHER_API_KEY"]), wired)  # idempotent
+        self.assertEqual(b.wire_secrets(wired, []), deploy)  # and removable
         self.assertNotIn("echo \"$value\"", step)
         import triage
         self.assertEqual(triage.find_secrets("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk"), ["a bearer or JWT token"])
