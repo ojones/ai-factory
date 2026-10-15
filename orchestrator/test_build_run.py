@@ -1304,6 +1304,18 @@ class ModelFallback(unittest.TestCase):
                 self.assertEqual(b.model_status("https://llm", "k", "m"), expected, answer)
 
 
+class PipelineNotStarted(unittest.TestCase):
+    def test_a_run_github_never_started_stops_without_calling_the_pipeline_agent(self):
+        run = object.__new__(b.BuildRun)
+        run.lim = {"pipeline_retries": 2}
+        run.wait_run = lambda wf, sha: {"conclusion": "action_required", "url": "https://x/runs/9", "databaseId": 9}
+        run.agent_json = lambda *a, **k: self.fail("the Pipeline Agent must not be paid to read a log that does not exist")
+        with self.assertRaises(b.NeedsHuman) as cm:
+            run.pipeline("a" * 40)
+        self.assertIn("did not start", str(cm.exception))
+        self.assertIn("https://x/runs/9", str(cm.exception))
+
+
 class ScoreboardCategories(unittest.TestCase):
     def test_the_scoreboard_counts_blocking_findings_by_category_and_tester_checks_apart(self):
         record = {"counts": {}, "checks": []}

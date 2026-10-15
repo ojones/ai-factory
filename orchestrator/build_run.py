@@ -39,6 +39,7 @@ from update_intake import form_section  # noqa: F401 - the Issue Form parser liv
 FACTORY_DIR = Path(__file__).resolve().parent.parent
 DEEPINFRA = "https://api.deepinfra.com"
 GROWTHBOOK_API = os.environ.get("GROWTHBOOK_API_HOST", "https://ai-factory-growthbook.fly.dev:3100") + "/api/v1"
+NOT_STARTED_CONCLUSIONS = ("action_required", "startup_failure")  # a workflow run GitHub ended before any job started: no log to diagnose
 PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to Fly", "deploy-fly.yml")]
 # Starter Template files the coder must not change: the workflows hold the Fly
 # token, and the flag wrapper is the release gate's other half.
@@ -1696,6 +1697,10 @@ class BuildRun:
             if failed is None:
                 self.state.stage("CI / Build / Deploy", "-", "-", 0, f"green, deployed {sha[:8]}")
                 return sha
+            if failed[1] and failed[1]["conclusion"] in NOT_STARTED_CONCLUSIONS:
+                # GitHub did not run it (no jobs, no log), so there is nothing for the Pipeline Agent to read: say so, and spend nothing.
+                raise NeedsHuman("pipeline", f"{failed[0]} did not start: GitHub ended the run as {failed[1]['conclusion']!r} before any job ran "
+                                             f"({failed[1]['url']}). Approve or fix it in the app's Actions tab, then add `proceed-with-change` again.")
             n += 1
             ctx = self.failure_context(failed, sha, n)
             url = failed[1]["url"] if failed[1] else f"https://github.com/{self.app_repo}/actions"
