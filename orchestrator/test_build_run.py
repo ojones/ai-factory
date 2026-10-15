@@ -157,7 +157,7 @@ class Prompts(unittest.TestCase):
         "coder": {"app_name", "round", "task", "findings_path", "build_kind", "issue_ref"},
         "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind", "spec"},
         "reviewer-fast": {"app_name", "base_sha", "head_sha", "rubric", "build_kind"},
-        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec", "api_check", "ui_section"},
+        "tester": {"app_name", "app_url", "head_sha", "report_path", "previous_report", "build_kind", "spec", "api_check", "ui_section", "new_flags"},
         "planner": {"app_name", "build_kind", "task", "plan_path", "spec"},
         "pipeline": {"app_name", "head_sha", "failure_run_url", "diagnosis_path", "context_dir"},
         "retrospective": {"facts_path", "result_path", "categories"},
