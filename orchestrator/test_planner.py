@@ -130,6 +130,18 @@ class Plan(unittest.TestCase):
             else:
                 self.assertTrue(any(case["expect"] in x for x in problems), (case["name"], problems))
 
+    def test_declared_secrets_are_checked_for_name_purpose_and_uniqueness(self):
+        plan = good()
+        plan["secrets"] = [{"name": "WEATHER_API_KEY", "purpose": "forecast lookups", "read_by": "backend"}]
+        self.assertEqual(check(plan)[0], [])
+        for bad, fragment in (([{"name": "weather key", "purpose": "x"}], "not a valid secret name"),
+                              ([{"name": "FLY_API_TOKEN", "purpose": "x"}], "Factory's own"),
+                              ([{"name": "WEATHER_API_KEY", "purpose": ""}], "no purpose"),
+                              ([{"name": "A_KEY", "purpose": "x"}, {"name": "A_KEY", "purpose": "y"}], "not unique"),
+                              ("WEATHER_API_KEY", "must be a list")):
+            plan["secrets"] = bad
+            self.assertTrue(any(fragment in x for x in check(plan)[0]), (bad, check(plan)[0]))
+
     def test_garbage_is_reported_not_raised(self):
         self.assertEqual(check([])[0], ["the plan is not a JSON object"])
         problems = check({})[0]

@@ -33,12 +33,21 @@ it as an assumption on the issue.
 Refused after the planner call (about $0.04): it needs a payment provider account and keys. The comment says what could be built instead, for
 example the premium flag without a payment step.
 
-## Refused: a third-party key
+## Refused: a key pasted into the request
 
 > Send me a text message on Twilio when a todo is due. Use account SID `AC...` and auth token `...`.
 
 Refused: it needs a Twilio account, and the value pasted into the request is public. The comment names the kind of secret and says to rotate it.
 (If the secret value is present the refusal comes first, before any planning.)
+
+## Waits for a key you set yourself
+
+> Show today's forecast for a city the user types, from the OpenWeather API. Do not put the key in this issue.
+
+The planner lists the secret it needs (`OPENWEATHER_API_KEY`, with its purpose) and the run stops before building anything, ending `awaiting_secret`.
+The Intake comment gives the exact command, `gh secret set OPENWEATHER_API_KEY -R <owner>/<app>`, which prompts for the value so it never appears in
+an issue or a log. Set it (a restricted key with a spending limit is best), then add `proceed-with-change` again: the build starts once the name
+exists, the coder reads it from `process.env`, and the deploy copies it to the running app. The feature ships dark behind its flag as usual.
 
 ## Refused: personal data
 

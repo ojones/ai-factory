@@ -184,13 +184,13 @@ def bad_fixture_reason(fixture_diffs):
 
 def wants_fix_request(d, limits):
     """A fix request is filed for every Build Run that did not end well (`planned` and the good endings do not)."""
-    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in b.OK_OUTCOMES and d.get("outcome") not in ("provider_blocked", "refused")
+    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in b.OK_OUTCOMES and d.get("outcome") not in ("provider_blocked", "refused", "awaiting_secret")
 
 
 def records_stuck_issue(outcome):
     """Whether a run's ending gets the generic `Stuck run` lesson. A release the watchdog switched off is already a
     specific, severe lesson (`watchdog_disabled`); recording it twice made two issues and two analyses for one event."""
-    return outcome not in b.OK_OUTCOMES and outcome not in ("watchdog_disabled", "provider_blocked", "refused")
+    return outcome not in b.OK_OUTCOMES and outcome not in ("watchdog_disabled", "provider_blocked", "refused", "awaiting_secret")
 
 
 def lesson_has_fixture(paths):
@@ -320,6 +320,44 @@ def similar_open_issue(repo, token, summary, label=None, threshold=SIMILAR):
         if score > best:
             best, found = score, issue["number"]
     return found if best >= threshold else None
+
+
+SEEN_RE = re.compile(r"<!-- seen:(\{.*?\}) -->", re.S)
+RECURRING_LABEL = "recurring"
+
+
+def sightings(body):
+    """{run url: app} recorded in an issue body's hidden `seen` marker."""
+    m = SEEN_RE.search(body or "")
+    try:
+        return dict(json.loads(m.group(1))) if m else {}
+    except ValueError:
+        return {}
+
+
+def with_sighting(body, run_url, app):
+    """The body with this run added to its hidden marker, and the counts: (body, distinct runs, distinct apps). Keyed by run URL, so a
+    retry of the same run, or the same run reported twice, is one sighting."""
+    seen = sightings(body)
+    seen[run_url] = app
+    marker = f"<!-- seen:{json.dumps(seen, sort_keys=True)} -->"
+    body = SEEN_RE.sub(marker, body, count=1) if SEEN_RE.search(body or "") else (body or "").rstrip() + "\n\n" + marker
+    return body, len(seen), len(set(seen.values()))
+
+
+def note_sighting(repo, token, number, facts, promote_after):
+    """Count this run against a `factory-learning` issue (hidden marker in its body; the label `recurring` once `promote_after` distinct
+    runs have seen it). Returns the number of distinct runs."""
+    out = gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], token).stdout
+    body, runs, _ = with_sighting((json.loads(out or "{}")).get("body") or "", facts["run_url"], facts["app"])
+    gh(["issue", "edit", str(number), "--repo", repo, "--body", body] + (["--add-label", RECURRING_LABEL] if runs >= max(promote_after, 2) else []), token)
+    return runs
+
+
+def ready_for_fix(runs, promote_after, severe=False):
+    """Whether an issue earns the Agent's analysis and fix PR: at once when it is severe or `promote_after` is 1 or less, otherwise once
+    that many distinct runs have seen it. One-off findings are still recorded and counted."""
+    return severe or promote_after <= 1 or runs >= promote_after
 
 
 def already_proposed(repo, token, number):
@@ -745,8 +783,8 @@ def main():
     stuck = d.get("outcome") not in b.OK_OUTCOMES
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
-    if d.get("outcome") == "refused":
-        return 0  # a refusal is a correct answer to an impossible request, not a failure to learn from or retry
+    if d.get("outcome") in b.ANSWERED_ENDINGS:
+        return 0  # a refusal, or a wait for the owner's secrets, is an answer, not a failure, not a failure to learn from or retry
     facts = collect_facts(work, d)
     if d.get("outcome") == "provider_blocked":
         # Not a lesson and not a fix request: nothing the Factory can change helps, and the Agent could not run anyway.
@@ -755,6 +793,7 @@ def main():
         except Exception as e:  # noqa: BLE001 - the retrospective never fails the run
             b.log(f"could not file the provider alert: {type(e).__name__}: {e}")
         return 0
+    cfg_limits = b.load_config().get("limits", {})
     lessons = lessons_from(facts)
     facts["signals"] = [{"kind": x["kind"], "detail": x["detail"]} for x in lessons]
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -763,12 +802,25 @@ def main():
     app_repo = f"{repo.split('/')[0]}/{d['app']}"
     stuck_issue = record_issue(repo, token, facts) if records_stuck_issue(d.get("outcome")) else None
     minors = record_minors(repo, token, app_repo, pat, facts)
-    new_minors = [n for n, proposed in minors if not proposed]
+    promote_after = int(cfg_limits.get("promote_after_runs", 2))
+    seen_in = {}
+
+    def earned(number, severe=False):
+        if number not in seen_in:
+            try:
+                seen_in[number] = note_sighting(repo, token, number, facts, promote_after)
+            except Exception as e:  # noqa: BLE001 - counting never fails the run
+                b.log(f"could not count the sighting on #{number}: {type(e).__name__}: {e}")
+                seen_in[number] = promote_after
+        return ready_for_fix(seen_in[number], promote_after, severe)
+
+    new_minors = [n for n, proposed in minors if not proposed and earned(n)]
     suggested, filed = record_improvements(repo, token, app_repo, pat, facts)
-    new_improvements = [n for n, proposed in suggested if not proposed]
-    recorded = [record_lesson(repo, token, x, facts) for x in lessons]
-    # The Agent looks at a lesson that is new or came back after its fix, or has no PR proposed yet.
-    new_lessons = [n for n, status in recorded if n and (status in ("new", "reopened") or not already_proposed(repo, token, n))]
+    new_improvements = [n for n, proposed in suggested if not proposed and earned(n)]
+    recorded = [(record_lesson(repo, token, x, facts), x["severe"]) for x in lessons]
+    # The Agent looks at a lesson that came back after its fix, or has earned it (severe, or seen in enough distinct runs) and has no PR yet.
+    new_lessons = [n for (n, status), severe in recorded
+                   if n and (status == "reopened" or (earned(n, severe) and (status == "new" or not already_proposed(repo, token, n))))]
     targets = list(dict.fromkeys(([stuck_issue] if stuck_issue else []) + new_minors + new_improvements + new_lessons))
     cfg, key = b.load_config(), os.environ.get("DEEPINFRA_API_KEY")
     result = None

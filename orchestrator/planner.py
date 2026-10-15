@@ -24,6 +24,8 @@ import json
 import re
 import sys
 
+import triage
+
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # A change set that exists only to add tests. Every change set includes its own tests, so this one has no outcome of its own.
 # A change set that retires or removes a flag. Its flag must be null: the feature is already live, so a new flag would
@@ -39,6 +41,28 @@ MAX_CHANGE_SETS = 8
 
 def _ids(items, key="id"):
     return [i.get(key) for i in items if isinstance(i, dict)]
+
+
+def secret_problems(secrets):
+    """Problems with a plan's `secrets` list: [{name, purpose, read_by}], one entry per service secret the build needs."""
+    if secrets in (None, []):
+        return []
+    if not isinstance(secrets, list):
+        return ["`secrets` must be a list"]
+    problems, names = [], []
+    for x in secrets:
+        if not isinstance(x, dict):
+            problems.append("a secret is not an object")
+            continue
+        bad = triage.secret_name_problem(x.get("name"))
+        if bad:
+            problems.append(bad)
+        if not str(x.get("purpose", "")).strip():
+            problems.append(f"secret {x.get('name')} has no purpose (what it is for, in one sentence)")
+        names.append(x.get("name"))
+    if len(set(names)) != len(names):
+        problems.append("secret names are not unique")
+    return problems
 
 
 def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, reuse_flags=()):
@@ -135,6 +159,7 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, re
     if order is None:
         problems.append("the change sets' dependencies contain a cycle")
 
+    problems += secret_problems(plan.get("secrets"))
     for q in plan.get("open_questions") or []:
         if isinstance(q, dict) and q.get("blocking"):
             questions.append(f"{q.get('id', '?')}: {q.get('text', '')}")

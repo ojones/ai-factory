@@ -14,7 +14,7 @@ CASES = json.loads((ROOT / "agents" / "lint-fixtures" / "cases.json").read_text(
 def lint(filename, code):
     p = subprocess.run([str(ESLINT), "--stdin", "--stdin-filename", filename, "-f", "json"], cwd=STARTER, input=code,
                        capture_output=True, text=True, timeout=120)
-    return [m["message"] for f in json.loads(p.stdout or "[]") for m in f["messages"] if m.get("ruleId") == "no-restricted-syntax"]
+    return [m["message"] for f in json.loads(p.stdout or "[]") for m in f["messages"] if m.get("ruleId") in ("no-restricted-syntax", "factory/test-asserts", "factory/test-asserts-strongly")]
 
 
 @unittest.skipUnless(ESLINT.exists(), "the Starter's dependencies are not installed (run npm ci in templates/starter)")
@@ -30,7 +30,7 @@ class StarterLintRules(unittest.TestCase):
 class Cases(unittest.TestCase):
     def test_each_custom_rule_has_a_failing_and_a_passing_case(self):
         failing = {fragment for c in CASES for fragment in c["expect"]}
-        self.assertLessEqual({"source text", "flags.json", ".only"}, failing)
+        self.assertLessEqual({"source text", "flags.json", ".only", "makes no assertion", "toBeTruthy/toBeDefined"}, failing)
         self.assertTrue(any(c["expect"] == [] for c in CASES))
         self.assertTrue(any("frontend" in c["filename"] for c in CASES))
 

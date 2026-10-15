@@ -83,6 +83,10 @@ limits:
   # holds the parent key), and no more than this many learning PRs may be open at once.
   retrospective_cost_cap_usd: 0.50
   max_open_learning_prs: 3
+  # A lesson, minor finding or factory improvement is recorded and counted (distinct runs, a hidden marker in its issue) on its first sighting, but the
+  # Agent analyses it and proposes a fix PR only once this many distinct runs have seen it. Severe lessons (an audit violation, a watchdog switch-off), stuck
+  # runs and a lesson that came back after its fix go at once. 1 acts on the first sighting.
+  promote_after_runs: 2
   # Per Agent invocation; a hung Agent is killed and counts as a failed attempt.
   agent_timeout_minutes: 45
   # An Agent whose event stream has not grown for this long is killed and counts as a failed attempt (0 turns it off). A real run

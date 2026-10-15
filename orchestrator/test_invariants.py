@@ -564,6 +564,81 @@ class Invariants(unittest.TestCase):
         self.assertTrue(any(c["expect"] for c in cases) and any(not c["expect"] for c in cases))  # failing and passing cases exist
 
 
+    def test_inv48_a_request_needing_a_secret_builds_nothing_until_its_names_exist(self):
+        import triage
+        run = object.__new__(b.BuildRun)
+        run.app_repo, run.issue, run.factory_repo, run.factory_token = "o/app", "7", "o/f", "tok"
+        run.state = mock.Mock(d={})
+        sent = []
+        listed = [{"name": "OTHER"}]
+
+        def gh(args, token=None, check=True):
+            sent.append(args)
+            return mock.Mock(returncode=0, stdout=json.dumps(listed) if args[:2] == ["secret", "list"] else "")
+        run.gh = gh
+        need = [{"name": "WEATHER_API_KEY", "purpose": "forecast lookups"}]
+        with self.assertRaises(b.AwaitingSecret):
+            run.require_secrets(need, record=True)
+        comment = next(a for a in sent if a[:2] == ["issue", "comment"])[-1]
+        self.assertIn("gh secret set WEATHER_API_KEY -R o/app", comment)
+        self.assertEqual(run.state.d["secrets"], ["WEATHER_API_KEY"])
+        listed.append({"name": "WEATHER_API_KEY"})
+        run.require_secrets(need, record=True)  # all present: the build may go on
+        # every later start checks the recorded names before any Agent is paid for: a retry, a re-run, a child issue
+        import update_intake as ui
+        marker = ui.secrets_marker(need)
+        self.assertEqual(ui.declared_secrets({"comments": [{"body": "text\n\n" + marker}]}), need)
+        child = ui.child_body("app", "task", 5, "CS-1", [], secrets=need)
+        self.assertEqual(ui.declared_secrets({"body": child, "comments": []}), need)
+        self.assertEqual(ui.declared_secrets({"body": "no marker", "comments": []}), [])
+        src = __import__("inspect").getsource(b.BuildRun.setup)
+        self.assertIn("update_intake.declared_secrets(issue)", src)
+        self.assertLess(src.index("require_secrets(self.declared_secrets)"), src.index("self.spec = self.task"))
+        listed.clear()
+        with self.assertRaises(b.AwaitingSecret):
+            run.require_secrets(need, record=False)
+        self.assertEqual(sum(1 for a in sent if a[:2] == ["issue", "comment"]), 2)  # the early check posts nothing more
+        self.assertIn("awaiting_secret", b.ANSWERED_ENDINGS)
+        self.assertNotIn("awaiting_secret", b.OK_OUTCOMES)  # INV-24: an OK ending closes the Intake
+        self.assertFalse(pm.wants_fix_request({"outcome": "awaiting_secret"}, {}))
+        self.assertFalse(pm.records_stuck_issue("awaiting_secret"))
+        self.assertNotIn("-----", triage.secrets_request(need, "o/app"))
+
+    def test_inv49_a_commit_with_a_secret_value_or_an_undeclared_name_is_never_pushed(self):
+        import triage
+        run = object.__new__(b.BuildRun)
+        run.state = mock.Mock(d={"secrets": ["WEATHER_API_KEY"]})
+        calls = []
+
+        def git(*a, check=True, cwd=None):
+            calls.append(a)
+            if a[0] == "diff":
+                return mock.Mock(stdout="+++ b/x.ts\n+const k = \"sk-" + "a" * 30 + "\";\n")
+            return mock.Mock(returncode=0, stdout="")
+        run.git = git
+        problem = run.secret_problem("base", "head")
+        self.assertIn("API key", problem)
+        self.assertNotIn("sk-a", problem)
+        self.assertIn(("reset", "-q", "--hard", "base"), calls)
+        self.assertIsNotNone(triage.secret_name_problem("FLY_API_TOKEN"))
+        self.assertIsNotNone(triage.secret_name_problem("GITHUB_TOKEN"))
+        self.assertIsNone(triage.secret_name_problem("WEATHER_API_KEY"))
+        run.git = lambda *a, check=True, cwd=None: mock.Mock(returncode=0, stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
+        self.assertIn("SNEAKY_KEY", run.secret_problem("base", "head"))
+        deploy = (STARTER / ".github/workflows/deploy-fly.yml").read_text()
+        self.assertIn("flyctl secrets import --stage", deploy)
+        self.assertIn("reserved", deploy)
+        self.assertTrue((STARTER / "secrets.json").is_file())
+
+    def test_inv50_no_secret_value_reaches_an_issue_a_command_line_or_an_agent(self):
+        deploy = (STARTER / ".github/workflows/deploy-fly.yml").read_text()
+        step = deploy[deploy.index("Sync the app's own secrets"):deploy.index("Copy image from GHCR")]
+        self.assertIn("< /tmp/app-secrets", step)  # the values go to Fly through stdin
+        self.assertNotIn("echo \"$value\"", step)
+        import triage
+        self.assertEqual(triage.find_secrets("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk"), ["a bearer or JWT token"])
+
+
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):
         table = set(re.findall(r"^\| INV-(\d\d) \|", (ROOT / "docs/invariants.md").read_text(), re.M))

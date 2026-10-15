@@ -30,6 +30,7 @@ WAIT = "waiting-on-plan"
 APP_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 META_RE = re.compile(r"<!-- factory-plan:(.*?) -->", re.S)
 FIX_RE = re.compile(r"<!-- factory-fix:(.*?) -->", re.S)
+SECRETS_RE = re.compile(r"<!-- factory-secrets:(.*?) -->", re.S)
 AUTO_FIX = "auto-fix"
 
 
@@ -74,6 +75,31 @@ def plan_meta(body):
         return meta if isinstance(meta, dict) else {}
     except ValueError:
         return {}
+
+
+def secrets_marker(needed):
+    """The hidden marker that records which secrets a request declared (names and purposes, never values), so every later start checks them
+    before any Agent is paid for, whichever path it takes."""
+    return "<!-- factory-secrets:" + json.dumps([{"name": x["name"], "purpose": x.get("purpose", "")} for x in needed], separators=(",", ":")) + " -->"
+
+
+def declared_secrets(issue):
+    """The secrets recorded for this Intake: in a hidden marker in any comment, or in a child issue's plan metadata. [{name, purpose}]."""
+    found = {}
+    sources = [c.get("body", "") for c in issue.get("comments") or []]
+    for text in sources:
+        m = SECRETS_RE.search(text or "")
+        try:
+            items = json.loads(m.group(1)) if m else []
+        except ValueError:
+            items = []
+        for x in items if isinstance(items, list) else []:
+            if isinstance(x, dict) and isinstance(x.get("name"), str):
+                found[x["name"]] = {"name": x["name"], "purpose": str(x.get("purpose", ""))}
+    for x in plan_meta(issue.get("body")).get("secrets") or []:
+        if isinstance(x, dict) and isinstance(x.get("name"), str):
+            found[x["name"]] = {"name": x["name"], "purpose": str(x.get("purpose", ""))}
+    return list(found.values())
 
 
 def fix_meta(body):
@@ -132,9 +158,11 @@ def render_plan_comment(plan, questions=()):
     return "\n".join(lines)
 
 
-def child_body(app, task, parent, cs_id, depends_on, cap=None):
+def child_body(app, task, parent, cs_id, depends_on, cap=None, secrets=None):
     """A child issue's body: the Update Intake form fields plus hidden plan metadata."""
     meta = {"parent": parent, "cs": cs_id, "depends_on": depends_on}
+    if secrets:
+        meta["secrets"] = [{"name": x["name"], "purpose": x.get("purpose", "")} for x in secrets]
     # The metadata goes first: text after the last "### " heading would be read as part of that field.
     return (f"<!-- factory-plan:{json.dumps(meta, separators=(',', ':'))} -->\n\n"
             f"### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n{cap if cap else '_No response_'}\n")
@@ -168,7 +196,7 @@ def ensure_label(repo, name, token, color="0e8a16", description=""):
     gh(["label", "create", name, "--repo", repo, "--color", color, "--description", description], token)
 
 
-def file_children(repo, pat, app, parent, change_sets, order, request, cap=None):
+def file_children(repo, pat, app, parent, change_sets, order, request, cap=None, secrets=None):
     """Create one issue per change set, dependencies first, and start those with nothing to wait for.
     Returns [(change set id, issue number)]."""
     for name, color, desc in ((FORM_LABEL, "1d76db", "A change request for an existing Managed App"),
@@ -182,7 +210,7 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None)
         cs = by_id[cs_id]
         deps = [numbers[d] for d in cs.get("depends_on") or []]
         task = render_change_set_task(cs, parent=parent)
-        out = gh(["issue", "create", "--repo", repo, "--title", f"{app}: {one_line(cs['title'])}", "--body", child_body(app, task, parent, cs_id, deps, cap),
+        out = gh(["issue", "create", "--repo", repo, "--title", f"{app}: {one_line(cs['title'])}", "--body", child_body(app, task, parent, cs_id, deps, cap, secrets),
                   "--label", f"{FORM_LABEL},app:{app},plan:{parent},{WAIT}"], pat, check=True).stdout
         m = re.search(r"/issues/(\d+)", out)
         numbers[cs_id] = int(m.group(1))

@@ -15,6 +15,7 @@ key; the coder only commits, and this process pushes.
 import base64
 import hashlib
 import hmac
+import collections
 import json
 import os
 import re
@@ -346,6 +347,24 @@ class Refused(Exception):
     was built, so nothing is rolled back, retried or filed as a failure."""
 
 
+def secrets_note(needed):
+    """What the coder is told about the request's secrets: they exist at runtime as environment variables, and it never sees a value."""
+    names = ", ".join(x["name"] for x in needed)
+    return ("\n\nSecrets (set by the owner, already in the running app's environment as process.env.<NAME>; you never see a value): " + names
+            + ". Read each in exactly one place, the call to the service; fail closed (a clear error, the feature off) when it is missing; never log it, "
+              "return it or send it anywhere else. In the same commit add each name and what it is for (no values) to `secrets.json` at the repo root as "
+              '{"secrets": [{"name": "...", "purpose": "..."}]}. In tests, stub the service: the test environment has no real value.')
+
+
+class AwaitingSecret(Exception):
+    """The plan declares secrets that are not all set as GitHub Actions secrets on the app's repository yet. The run ends `awaiting_secret`:
+    nothing was built, and it is not a failure, so nothing is retried or learned from. Adding `proceed-with-change` again checks again."""
+
+
+# Endings that are an answer to the request, not a failure of the Factory: no retry, no fix request, no failure issue in the app.
+ANSWERED_ENDINGS = ("refused", "awaiting_secret")
+
+
 class Regression(Exception):
     """The tester saw behaviour that was live before this change stop working (`test_impact`). finalize rolls the deploy back through CI."""
 
@@ -522,7 +541,8 @@ def scoreboard_entry(rnd, sha, record, blocking):
     findings that were open. Written by the Orchestrator, never by an Agent."""
     return {"round": rnd, "sha": sha, "counts": record["counts"],
             "checks": {check_key(c): c["status"] for c in record["checks"]},
-            "blocking": sorted({" ".join(str(b.get("summary", "")).lower().split()) for b in blocking})}
+            "blocking": sorted({" ".join(str(b.get("summary", "")).lower().split()) for b in blocking}),
+            "categories": dict(collections.Counter(b.get("category") or f"{b.get('source', 'other')}_check" for b in blocking))}
 
 
 def open_items(entry):
@@ -663,7 +683,7 @@ REVIEW_CONTEXT_FILES = ("backend/src/app.ts", "backend/src/feature-flags.ts")
 SKIP_SUFFIXES = (".lock", "-lock.json", ".png", ".jpg", ".svg", ".ico", ".woff", ".woff2", ".map")
 
 # Detail a finding may carry so the coder can act without exploring; all best-effort, "" when not applicable.
-DETAIL_FIELDS = ("file", "line", "requirement", "suggested_fix", "repro")
+DETAIL_FIELDS = ("file", "line", "requirement", "suggested_fix", "repro", "category")
 
 REVIEW_SCHEMA = {
     "type": "object",
@@ -1072,6 +1092,7 @@ class BuildRun:
     retry_state = {}  # the story's retry state from its issue (fixrequest.retry_state)
     reuse_flags = []  # the flag(s) a retried story keeps through every attempt
     flag_issues = {}  # slug -> number of the story each released flag came from (from the State issue)
+    declared_secrets = ()  # the secrets recorded on the Intake, checked at the start of the run (`setup`)
     agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
     def __init__(self):
         e = os.environ
@@ -1157,6 +1178,12 @@ class BuildRun:
         secrets = triage.find_secrets(issue["body"] or "")
         if secrets:
             raise Refused(triage.secret_refusal(secrets))
+        self.declared_secrets = update_intake.declared_secrets(issue)
+        if self.declared_secrets:
+            # Checked before the planner, the coder, the reviewer or the tester is paid for, on every start (a retry, a child, a re-run).
+            self.require_secrets(self.declared_secrets)
+            if self.plan_meta:
+                self.task += secrets_note(self.declared_secrets)
         self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
         # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
         raw_cap = form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
@@ -1532,6 +1559,8 @@ class BuildRun:
                             self.git("grep", "-n", "-I", "-F", "-e", slug, head, check=False).stdout.splitlines()))
                         if problem:
                             break
+                    if not problem:
+                        problem = self.secret_problem(base, head)
                     if not problem and self.lim.get("precheck", True):
                         problem = self.check_problem()
             if problem:
@@ -1544,6 +1573,26 @@ class BuildRun:
             self.check_limits()
             self.state.stage("Coder", "coder", label, cost, f"committed {head[:8]}", self.take_usage())
             return head
+
+    def secret_problem(self, base, head):
+        """Reject a commit that adds a real secret value, or that lists in `secrets.json` a name the plan did not declare (the deploy step
+        copies every listed name to the running app). A value is discarded with the commit and never repeated; the coder is told the kind."""
+        kinds = triage.diff_secrets(self.git("diff", f"{base}..{head}", check=False).stdout)
+        if kinds:
+            self.git("reset", "-q", "--hard", base)
+            return (f"Your commit added {' and '.join(kinds)}. The repository is public and secrets never go in code. It was discarded. Read the value "
+                    "from process.env at runtime and, in tests, use an obviously fake placeholder.")
+        listed = self.git("show", f"{head}:secrets.json", check=False)
+        if listed.returncode != 0:
+            return None
+        try:
+            names = [x.get("name") for x in json.loads(listed.stdout).get("secrets", [])]
+        except (ValueError, AttributeError):
+            return "`secrets.json` is not valid JSON of the form {\"secrets\": [{\"name\": \"...\", \"purpose\": \"...\"}]}."
+        declared = set(self.state.d.get("secrets") or [])
+        bad = [n for n in names if n not in declared or triage.secret_name_problem(n)]
+        return (f"`secrets.json` lists {', '.join(map(str, bad))}, which the plan did not declare. List only the secrets named in the request's Secrets note."
+                if bad else None)
 
     def check_problem(self):
         """Run the app's own `npm run check` (type-check and lint, the Test Gate's first step) on the coder's commit, as the Agent user, and
@@ -1965,6 +2014,11 @@ class BuildRun:
         if questions:
             raise NeedsHuman("other", "the plan needs a person to answer first: " + " | ".join(questions)
                              + ". Put the answers in the Update Intake issue, then add `proceed-with-change` again.")
+        needed = [x for x in doc.get("secrets") or [] if isinstance(x, dict)]
+        if needed:
+            if {x["name"] for x in needed} - {x["name"] for x in self.declared_secrets}:  # a secret not yet checked at the start
+                self.require_secrets(needed, record=True)
+            self.task += secrets_note(needed)
         if len(sets) == 1:
             self.task = update_intake.render_change_set_task(sets[0], request=self.task)
             if sets[0].get("flag"):
@@ -1973,10 +2027,28 @@ class BuildRun:
             self.spec = self.task
             return False
         made = update_intake.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
-                                           planner.topological_order(sets), self.task, cap=self.cap_override)
+                                           planner.topological_order(sets), self.task, cap=self.cap_override, secrets=needed)
         self.state.d.update(outcome="planned", message="Planned as %d change sets, each now its own Update Intake and Build Run, in order: %s."
                             % (len(made), ", ".join(f"{cs} (#{n})" for cs, n in made)))
         return True
+
+    def require_secrets(self, needed, record=False):
+        """Stop (AwaitingSecret) until every secret declared for this request exists as a GitHub Actions secret on the app's repository. Only
+        names are read (`gh secret list` never returns a value). Records the declared names so the coder's `secrets.json` can be checked
+        against them, and with `record` leaves a hidden marker on the Intake so every later start checks them before paying for anything."""
+        out = self.gh(["secret", "list", "--repo", self.app_repo, "--json", "name"], check=False)
+        if out.returncode != 0:
+            raise NeedsHuman("other", "could not read the names of the app's GitHub secrets, so the request's secrets cannot be confirmed")
+        have = {x.get("name") for x in json.loads(out.stdout or "[]")}
+        self.state.d["secrets"] = [x["name"] for x in needed]
+        missing = [x for x in needed if x["name"] not in have]
+        if record:
+            text = triage.secrets_request(missing, self.app_repo) if missing else "This request uses " + ", ".join(x["name"] for x in needed) + " (set)."
+            self.gh(["issue", "comment", str(self.issue), "--repo", self.factory_repo, "--body", text + "\n\n" + update_intake.secrets_marker(needed)],
+                    token=self.factory_token, check=False)
+        if missing:
+            raise AwaitingSecret("waiting for " + ", ".join(x["name"] for x in missing) + " to be set on " + self.app_repo
+                                 + " (the commands are on the Intake issue); then add `proceed-with-change` again")
 
     def post_plan(self, doc, questions):
         """Put the plan on the Intake issue, so the owner can see what is about to be built and every assumption the
@@ -2084,6 +2156,8 @@ class BuildRun:
             self.state.d.update(outcome="regression", message=str(e))
         except Refused as e:
             self.state.d.update(outcome="refused", message=str(e))
+        except AwaitingSecret as e:
+            self.state.d.update(outcome="awaiting_secret", message=str(e))
         except ProviderBlocked as e:
             self.state.d.update(outcome="provider_blocked", message=str(e))
         except BudgetExhausted as e:
@@ -2390,7 +2464,7 @@ def is_dark_broken(d):
     having switched the release off, or the tester having found a regression and the deploy been rolled back). The code stays in `main`,
     behind a flag that is off, and is fixed forward. The flag is the identity of a dark feature, and its
     story issue (`flag:<slug>`) carries this label; `flags.json` does not, because every edit to it deploys."""
-    return bool(d.get("flags") and d.get("commits")) and d.get("outcome") not in OK_OUTCOMES + ("refused", "provider_blocked")
+    return bool(d.get("flags") and d.get("commits")) and d.get("outcome") not in OK_OUTCOMES + ANSWERED_ENDINGS + ("provider_blocked",)
 
 
 def label_dark_feature(d, repo, token):
@@ -2455,14 +2529,14 @@ def finalize():
     record_spend_in_ledger(d, os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_RUN_ID", "0"), os.environ["FACTORY_GH_TOKEN"])
     pat, ftoken = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     update_state_issues(d, os.environ["GITHUB_REPOSITORY"], pat, ftoken)
-    if not ok and d["outcome"] != "refused":  # a refusal is answered on the Intake issue; there is nothing in the app repo to report
+    if not ok and d["outcome"] not in ANSWERED_ENDINGS:  # a refusal is answered on the Intake issue; there is nothing in the app repo to report
         body = f"{d['message']}\n\n**Build Run**: {run_url}\n**Spent**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f}\n\n" + summary
         (work / "issue-body.md").write_text(body)
         sh(["gh", "issue", "create", "--repo", f"{owner}/{app}", "--title", OUTCOME_TITLES.get(d["outcome"], "Build Run: crash"),
             "--body-file", str(work / "issue-body.md")], env={**os.environ, "GH_TOKEN": pat}, check=False)
     retry = ("" if ok or d.get("intake_kind") != "update" else
              f"\n\nOnce the provider balance is topped up, add `{update_intake.GO}` again to retry." if d["outcome"] == "provider_blocked"
-             else "" if d["outcome"] == "refused"  # the refusal text already says how to try again
+             else "" if d["outcome"] in ANSWERED_ENDINGS  # the message already says how to try again
              else f"\n\nEdit this issue if the request needs to change, then add `{update_intake.GO}` again to retry.")
     sh(["gh", "issue", "comment", d["issue_number"], "--repo", os.environ["GITHUB_REPOSITORY"], "--body",
         f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],

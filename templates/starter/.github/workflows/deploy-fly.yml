@@ -72,6 +72,31 @@ jobs:
             GROWTHBOOK_CLIENT_KEY="$GROWTHBOOK_CLIENT_KEY" \
             PREVIEW_TOKEN="$PREVIEW_TOKEN"
 
+      - name: Sync the app's own secrets to Fly
+        # The third-party secrets this app declares in secrets.json (names only, no values) were set by the owner as GitHub Actions secrets with
+        # `gh secret set`. Only this job sees them, and only the declared names are copied, through stdin so no value is on a command line.
+        # A missing value fails the deploy; the Factory's own names are refused, so a bad secrets.json cannot copy a credential into the app.
+        if: hashFiles('secrets.json') != ''
+        env:
+          ALL_SECRETS: ${{ toJSON(secrets) }}
+        run: |
+          names=$(jq -r '.secrets[]?.name' secrets.json)
+          [ -n "$names" ] || exit 0
+          : > /tmp/app-secrets
+          for name in $names; do
+            case "$name" in
+              FLY_API_TOKEN|GROWTHBOOK_*|PREVIEW_*|FACTORY_*|DEEPINFRA_*|GITHUB_*|FLY_*|NODE_ENV|PORT|PATH|HOME)
+                echo "::error::$name is reserved and cannot be an app secret"; exit 1 ;;
+            esac
+            printf '%s' "$name" | grep -Eq '^[A-Z][A-Z0-9_]{2,63}$' || { echo "::error::bad secret name"; exit 1; }
+            value=$(jq -r --arg n "$name" '.[$n] // empty' <<<"$ALL_SECRETS")
+            [ -n "$value" ] || { echo "::error::the GitHub secret $name is not set; run: gh secret set $name -R $GITHUB_REPOSITORY"; exit 1; }
+            case "$value" in *$'\n'*) echo "::error::$name has a multi-line value, which this step does not copy"; exit 1 ;; esac
+            printf '%s=%s\n' "$name" "$value" >> /tmp/app-secrets
+          done
+          flyctl secrets import --stage --app "$FLY_APP_NAME" < /tmp/app-secrets
+          rm -f /tmp/app-secrets
+
       - name: Copy image from GHCR to Fly's registry
         # GHCR packages are private by default and Fly can't authenticate to
         # pull them; flipping visibility is UI-only. So pull with this job's

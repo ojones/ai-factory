@@ -1304,6 +1304,14 @@ class ModelFallback(unittest.TestCase):
                 self.assertEqual(b.model_status("https://llm", "k", "m"), expected, answer)
 
 
+class ScoreboardCategories(unittest.TestCase):
+    def test_the_scoreboard_counts_blocking_findings_by_category_and_tester_checks_apart(self):
+        record = {"counts": {}, "checks": []}
+        blocking = [{"source": "reviewer", "summary": "a", "category": "test_quality"}, {"source": "reviewer", "summary": "b", "category": "test_quality"},
+                    {"source": "tester", "summary": "c"}]
+        self.assertEqual(b.scoreboard_entry(1, "sha", record, blocking)["categories"], {"test_quality": 2, "tester_check": 1})
+
+
 class CheckProblem(unittest.TestCase):
     """The Orchestrator's own `npm run check` on the coder's commit, before the reviewer."""
 

@@ -204,6 +204,44 @@ class Guardrails(unittest.TestCase):
         self.assertIsNone(pm.bad_fixture_reason(texts))
 
 
+class Recurrence(unittest.TestCase):
+    def test_a_sighting_is_counted_once_per_run_and_apps_are_counted_apart(self):
+        body, runs, apps = pm.with_sighting("A lesson.", "https://x/runs/1", "todo")
+        self.assertEqual((runs, apps), (1, 1))
+        again, runs, apps = pm.with_sighting(body, "https://x/runs/1", "todo")
+        self.assertEqual((again, runs, apps), (body, 1, 1))  # the same run reported twice changes nothing
+        body, runs, apps = pm.with_sighting(body, "https://x/runs/2", "notes")
+        self.assertEqual((runs, apps), (2, 2))
+        self.assertEqual(body.count("<!-- seen:"), 1)
+        self.assertEqual(pm.sightings(body), {"https://x/runs/1": "todo", "https://x/runs/2": "notes"})
+        self.assertEqual(pm.sightings("no marker"), {})
+
+    def test_promotion_waits_for_enough_distinct_runs_unless_severe(self):
+        self.assertFalse(pm.ready_for_fix(1, 2))
+        self.assertTrue(pm.ready_for_fix(2, 2))
+        self.assertTrue(pm.ready_for_fix(1, 2, severe=True))
+        self.assertTrue(pm.ready_for_fix(1, 1))
+        self.assertTrue(pm.ready_for_fix(1, 0))
+
+    def test_noting_a_sighting_edits_the_body_and_labels_it_recurring_at_the_threshold(self):
+        from unittest import mock
+        body = {"body": "A lesson."}
+        calls = []
+
+        def fake_gh(args, token, check=False):
+            calls.append(args)
+            if args[:2] == ["issue", "view"]:
+                return mock.Mock(stdout=json.dumps(body))
+            if args[:2] == ["issue", "edit"]:
+                body["body"] = args[args.index("--body") + 1]
+            return mock.Mock(stdout="")
+        with mock.patch.object(pm, "gh", fake_gh):
+            self.assertEqual(pm.note_sighting("o/f", "t", 5, {"run_url": "https://x/runs/1", "app": "a"}, 2), 1)
+            self.assertNotIn("--add-label", calls[-1])
+            self.assertEqual(pm.note_sighting("o/f", "t", 5, {"run_url": "https://x/runs/2", "app": "a"}, 2), 2)
+            self.assertIn("recurring", calls[-1])
+
+
 class Improvements(unittest.TestCase):
     IMPS = [{"source": "reviewer", "target": "factory", "summary": "The coder prompt never says to trim input", "evidence": "round 1"},
             {"source": "tester", "target": "managed_app", "summary": "Add a test for empty text", "evidence": ""}]

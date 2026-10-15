@@ -145,6 +145,12 @@ else
   exit 1
 fi
 
+# GitHub's own free secret scanning, with push protection, so a known token pattern is blocked on push. Idempotent; a repo that cannot take
+# the setting is warned about, not failed, because the Orchestrator also scans every coder diff before it pushes.
+echo '{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}' |
+  pat gh api -X PATCH "repos/$OWNER/$SLUG" --input - >/dev/null 2>&1 ||
+  echo "::warning::could not enable secret scanning with push protection on $OWNER/$SLUG"
+
 # --- 5. GrowthBook: fresh app-scoped SDK key, and the kill switch -------------------
 
 project_json="$(gb "$GROWTHBOOK_API/projects?limit=100")"

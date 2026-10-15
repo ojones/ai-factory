@@ -53,6 +53,21 @@ class Dashboard(unittest.TestCase):
         self.assertIn("Over $1", db.render_html(rows, m, "now"))
         self.assertEqual(db.metrics([])["all"]["p90_cost_usd"], None)
 
+    def test_payoff_is_cost_rounds_and_findings_per_accepted_change(self):
+        def run(url, outcome, rounds, cost, board):
+            return db.summarize_run(report(url=url, outcome=outcome, rounds=rounds, cost=cost) | {"scoreboard": board})
+        rows = [run("1", "released", 1, 0.2, [{"categories": {}}]),
+                run("2", "released", 2, 0.6, [{"categories": {"test_quality": 2, "correctness": 1}}, {"categories": {"test_quality": 1}}]),
+                run("3", "stuck", 3, 1.0, [{"categories": {"correctness": 2}}])]
+        m = db.metrics(rows)["all"]
+        self.assertEqual((m["accepted"], m["cost_per_accepted_usd"], m["rounds_per_accepted"], m["interventions"]), (2, 0.9, 3.0, 1))
+        self.assertEqual(m["findings_by_category"], {"correctness": 3, "test_quality": 3})
+        self.assertEqual(m["findings_per_run"], 2.0)
+        self.assertEqual(db.metrics(rows)["recent"]["accepted"], 2)
+        self.assertIn("**Payoff** (per accepted change", db.render_digest(rows, db.metrics(rows), "2000-01-01T00:00:00Z"))
+        self.assertIn("Blocking findings: test_quality", db.render_html(rows, db.metrics(rows), "now"))
+        self.assertIsNone(db.metrics([])["all"]["cost_per_accepted_usd"])
+
     def test_no_runs_is_not_a_crash(self):
         m = db.metrics([])
         self.assertIsNone(m["all"]["ok_rate"])

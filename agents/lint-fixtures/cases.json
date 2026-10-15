@@ -20,7 +20,7 @@
     {
       "name": "a test asserts on flags.json",
       "filename": "backend/src/__tests__/x.test.ts",
-      "code": "it(\"records the flag\", () => { const entry = load(\"flags.json\"); expect(entry).toBeTruthy(); });\n",
+      "code": "it(\"records the flag\", () => { const entry = load(\"flags.json\"); expect(entry).toEqual({}); });\n",
       "expect": [
         "flags.json"
       ]
@@ -71,6 +71,80 @@
       "name": "application code may mention flags.json",
       "filename": "backend/src/routes/y.ts",
       "code": "export const manifest = \"flags.json\";\n",
+      "expect": []
+    },
+    {
+      "name": "a test with no assertion",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it(\"x\", () => { const r = add(1, 2); console.log(r); });\n",
+      "expect": [
+        "makes no assertion"
+      ]
+    },
+    {
+      "name": "an async test that only awaits",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it(\"x\", async () => { await save({ text: \"a\" }); });\n",
+      "expect": [
+        "makes no assertion"
+      ]
+    },
+    {
+      "name": "a test whose only assertion is toBeTruthy",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it(\"x\", () => { expect(add(1, 2)).toBeTruthy(); });\n",
+      "expect": [
+        "toBeTruthy/toBeDefined"
+      ]
+    },
+    {
+      "name": "a test with toBeTruthy beside a real assertion",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it(\"x\", () => { expect(add(1, 2)).toBeTruthy(); expect(add(1, 2)).toBe(3); });\n",
+      "expect": []
+    },
+    {
+      "name": "a test that asserts through an expect-named helper",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it(\"x\", async () => { await expectStatus(app, \"/api/x\", 404); });\n",
+      "expect": []
+    },
+    {
+      "name": "a test that asserts through node:assert",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it(\"x\", () => { assert.equal(add(1, 2), 3); });\n",
+      "expect": []
+    },
+    {
+      "name": "a test that asserts through supertest",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it(\"x\", async () => { await request(app).get(\"/api/x\").expect(404); });\n",
+      "expect": []
+    },
+    {
+      "name": "a parameterised test with an assertion",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it.each([[1, 2]])(\"x\", (a, b) => { expect(add(a, b)).toBe(3); });\n",
+      "expect": []
+    },
+    {
+      "name": "a parameterised test with no assertion",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it.each([[1, 2]])(\"x\", (a, b) => { add(a, b); });\n",
+      "expect": [
+        "makes no assertion"
+      ]
+    },
+    {
+      "name": "a todo test has no body to check",
+      "filename": "backend/src/__tests__/x.test.ts",
+      "code": "it.todo(\"later\");\n",
+      "expect": []
+    },
+    {
+      "name": "a non-test file may call anything",
+      "filename": "backend/src/app.ts",
+      "code": "export const run = () => { add(1, 2); };\n",
       "expect": []
     }
   ]

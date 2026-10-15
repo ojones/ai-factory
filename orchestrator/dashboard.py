@@ -12,6 +12,7 @@ are unit-tested; `collect` and `main` talk to GitHub through `gh`.
 Usage: dashboard.py <data-dir>        (env GH_TOKEN and GITHUB_REPOSITORY; GITHUB_STEP_SUMMARY optional)
 """
 import calendar
+import collections
 import html
 import json
 import os
@@ -22,6 +23,8 @@ import time
 from pathlib import Path
 
 OK = ("released", "nothing_to_release", "planned")
+ACCEPTED = ("released", "nothing_to_release")  # a change that shipped, or a build that needed no release
+RECENT_RUNS = 10  # the trailing window the payoff numbers are also shown over, to judge a change to the pipeline against what came before
 WORKFLOW = "build-run.yml"
 MAX_RUNS_PER_PASS = 100
 COST_TARGET_USD = 1.0  # the owner's goal for one Build Run; a target, not a cap (the cap is `limits.cost_cap_usd_default`)
@@ -40,7 +43,8 @@ def summarize_run(d):
             "kind": d.get("build_kind") or "", "started_at": started, "minutes": minutes,
             "rounds": d.get("review_passes") or 0, "cost_usd": round(d.get("spent_usd") or 0, 4), "cap_usd": d.get("cap_usd"),
             "released": (d.get("release") or {}).get("released") or [], "checks": ver,
-            "audit": [a.get("rule", "") for a in d.get("audit") or []]}
+            "audit": [a.get("rule", "") for a in d.get("audit") or []],
+            "findings": dict(sum((collections.Counter(e.get("categories") or {}) for e in d.get("scoreboard") or []), collections.Counter()))}
 
 
 def merge_history(history, rows):
@@ -61,6 +65,21 @@ def _p90(xs):
     return round(xs[min(len(xs) - 1, -(-9 * len(xs) // 10) - 1)], 2) if xs else None
 
 
+def payoff(rows):
+    """What the pipeline costs per change that shipped: all spend and all rounds (failed runs included) over the accepted runs, and the
+    blocking findings by category per run. The owner's intervention is counted as runs that ended needing a person."""
+    accepted = sum(1 for r in rows if r["outcome"] in ACCEPTED)
+    findings = collections.Counter()
+    for r in rows:
+        findings.update(r.get("findings") or {})
+    return {"accepted": accepted,
+            "cost_per_accepted_usd": round(sum(r["cost_usd"] for r in rows) / accepted, 2) if accepted else None,
+            "rounds_per_accepted": round(sum(r["rounds"] for r in rows) / accepted, 2) if accepted else None,
+            "findings_by_category": dict(findings.most_common()),
+            "findings_per_run": round(sum(findings.values()) / len(rows), 2) if rows else None,
+            "interventions": sum(1 for r in rows if r["outcome"] not in OK)}
+
+
 def metrics(history, lessons=None):
     """Fleet numbers, overall and per app. `lessons` is {"open": n, "fix_ineffective": n} or None."""
     def block(rows):
@@ -76,12 +95,13 @@ def metrics(history, lessons=None):
                 "stuck": sum(1 for r in rows if r["outcome"] in ("stuck", "round_limit")),
                 "watchdog_disabled": sum(1 for r in rows if r["outcome"] == "watchdog_disabled"),
                 "needs_human": sum(1 for r in rows if r["outcome"] not in OK),
-                "audit_violations": sum(len(r["audit"]) for r in rows)}
+                "audit_violations": sum(len(r["audit"]) for r in rows),
+                **payoff(rows)}
 
     apps = {}
     for r in history:
         apps.setdefault(r["app"], []).append(r)
-    return {"all": block(history), "apps": {a: block(rs) for a, rs in sorted(apps.items())}, "lessons": lessons or {}}
+    return {"all": block(history), "recent": block(history[-RECENT_RUNS:]), "apps": {a: block(rs) for a, rs in sorted(apps.items())}, "lessons": lessons or {}}
 
 
 def pct(x):
@@ -102,6 +122,10 @@ def render_digest(history, m, since):
              f"**All time**: {allm['runs']} runs, {pct(allm['ok_rate'])} OK, {pct(allm['first_pass_rate'])} first pass, "
              f"avg {num(allm['avg_rounds'])} rounds, avg {num(allm['avg_cost_usd'], '$')}, total {num(allm['total_cost_usd'], '$')}.",
              f"**Cost target** (${COST_TARGET_USD:.2f} a run): {allm['over_target']} of {allm['runs']} run(s) over it, 90th percentile {num(allm['p90_cost_usd'], '$')}."]
+    rec = m.get("recent") or {}
+    lines.append(f"**Payoff** (per accepted change; last {RECENT_RUNS} runs vs all): {num(rec.get('cost_per_accepted_usd'), '$')} vs "
+                 f"{num(allm['cost_per_accepted_usd'], '$')} spent, {num(rec.get('rounds_per_accepted'))} vs {num(allm['rounds_per_accepted'])} rounds, "
+                 f"{num(rec.get('findings_per_run'))} vs {num(allm['findings_per_run'])} blocking findings a run.")
     attention = [r for r in recent if r["outcome"] not in OK]
     if attention:
         lines += ["", "**Needs a person**:"] + [f"- `{r['app']}`: {r['outcome']} ([run]({r['run_url']}))" for r in attention]
@@ -139,7 +163,16 @@ def render_html(history, m, generated):
            "<title>Factory dashboard</title>", f"<style>{STYLE}</style><main>", "<h1>Factory dashboard</h1>",
            f"<p class=muted>Generated {e(generated)} from {allm['runs']} Build Run Report(s).</p>", "<div class=cards>"]
     out += [f"<div class=card><b>{e(str(v))}</b><span>{e(k)}</span></div>" for k, v in cards]
-    out += ["</div>", "<h2>Apps</h2><div class=scroll><table><tr><th>App<th>Runs<th>OK<th>First pass<th>Avg rounds<th>Avg cost<th>Total<th>Needs a person</tr>"]
+    rec = m.get("recent") or {}
+    out += ["</div>", f"<h2>Payoff per accepted change</h2><div class=scroll><table><tr><th><th>All runs<th>Last {RECENT_RUNS}</tr>"]
+    for label, key, pre in (("Accepted changes", "accepted", ""), ("Cost per accepted", "cost_per_accepted_usd", "$"),
+                            ("Rounds per accepted", "rounds_per_accepted", ""), ("Blocking findings per run", "findings_per_run", ""),
+                            ("Runs that needed a person", "interventions", "")):
+        out.append(f"<tr><td>{e(label)}<td>{num(allm[key], pre)}<td>{num(rec.get(key), pre)}</tr>")
+    cats = sorted(set(allm["findings_by_category"]) | set(rec.get("findings_by_category") or {}))
+    for c in cats:
+        out.append(f"<tr><td>Blocking findings: {e(c)}<td>{allm['findings_by_category'].get(c, 0)}<td>{(rec.get('findings_by_category') or {}).get(c, 0)}</tr>")
+    out += ["</table></div>", "<h2>Apps</h2><div class=scroll><table><tr><th>App<th>Runs<th>OK<th>First pass<th>Avg rounds<th>Avg cost<th>Total<th>Needs a person</tr>"]
     for app, a in m["apps"].items():
         out.append(f"<tr><td>{e(app)}<td>{a['runs']}<td>{pct(a['ok_rate'])}<td>{pct(a['first_pass_rate'])}<td>{num(a['avg_rounds'])}"
                    f"<td>{num(a['avg_cost_usd'], '$')}<td>{num(a['total_cost_usd'], '$')}<td>{a['needs_human']}</tr>")
