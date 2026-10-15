@@ -99,7 +99,7 @@ Models are set per role in [agents/profiles.yml](../agents/profiles.yml), each w
 
 | Role | Model (lab) | Fallback | Does | Output the Orchestrator checks |
 |---|---|---|---|---|
-| Planner | Qwen3-Coder-480B (Alibaba) | DeepSeek-V4.1-Flash | Judges feasibility, splits a request into change sets with criteria and a flag each | `plan.json`, validated (reuses a retry's flag) |
+| Planner | gpt-oss-120b (OpenAI) | Qwen3.8-Flash | Judges feasibility, splits a request into change sets with criteria and a flag each | `plan.json`, validated (reuses a retry's flag) |
 | Coder | DeepSeek-V4.1-Flash (DeepSeek) | Qwen3-Coder-480B | Formats, then writes the change and its tests behind one flag; retires proven flags; commits locally | commits (protected files and flag leftovers rejected) |
 | Reviewer | DeepSeek-V4.1-Flash (single call) | Qwen3-Coder-480B | Reads the local diff, flags and spec before the push; raises blocking or minor findings and suggests improvements | findings; clean = no blocking |
 | Tester | Nemotron-3-Ultra 550B (NVIDIA) | Qwen3-Coder-480B | Exercises the deployed app with the Preview Token; tags checks `new` or `existing`; states checks as data for the helpers; notes failures and suggests improvements | report, reconciled with the helpers' logs |

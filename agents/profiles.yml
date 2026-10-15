@@ -45,10 +45,13 @@ roles:
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/pipeline.md
   # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planner.py checks the
-  # plan). Runs first in a Build Run for an Update Intake. The model is a first guess, unmeasured.
+  # plan). Runs first in a Build Run for an Update Intake. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
+  # because the 480B hung for minutes at a time on real runs (one planner attempt took 1277 s) and a planner needs no code-tuned model;
+  # gpt-oss-120b is about 8x cheaper and a different lab from the coder and reviewer (DeepSeek) and the tester (Nvidia). Watch the planner
+  # time, cost and plan_gap lessons on the next runs; ticket 30 would measure it properly.
   planner:
-    model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
-    fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
+    model: openai/gpt-oss-120b
+    fallback_model: Qwen/Qwen3.8-Flash
     prompt: prompts/planner.md
   # After every Build Run, released or not: reads what the run found and how it ended, files the improvements and proposes a fix as a PR (orchestrator/retrospective.py).
   retrospective:
