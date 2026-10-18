@@ -149,7 +149,7 @@ class MergePolicy(unittest.TestCase):
         self.assertFalse(pm.auto_merge_eligible(""))
 
     def test_a_fixture_is_a_smoke_replay_or_test_file(self):
-        for ok in ("agents/replay/cases.json", "orchestrator/test_build_run.py", "templates/starter/backend/src/app.test.ts"):
+        for ok in ("agents/replay/cases.json", "orchestrator/build_run_test.py", "templates/starter/backend/src/app.test.ts"):
             self.assertTrue(pm.lesson_has_fixture([ok]), ok)
         self.assertTrue(pm.lesson_has_fixture(["agents/smoke/fixtures/x.diff", "agents/smoke/expected.json"]))
         self.assertFalse(pm.lesson_has_fixture(["agents/prompts/coder.md", "templates/starter/AGENTS.md"]))
@@ -204,7 +204,7 @@ class Guardrails(unittest.TestCase):
         self.assertIsNone(pm.bad_fixture_reason(texts))
 
 
-class Recurrence(unittest.TestCase):
+class SightingCount(unittest.TestCase):
     def test_a_sighting_is_counted_once_per_run_and_apps_are_counted_apart(self):
         body, runs, apps = pm.with_sighting("A lesson.", "https://x/runs/1", "todo")
         self.assertEqual((runs, apps), (1, 1))
@@ -251,7 +251,7 @@ class Improvements(unittest.TestCase):
             return pm.collect_facts(tmp, {**STATE, "outcome": "released", "improvements": self.IMPS, **over})
 
     def run_main(self, state):
-        """main() with gh mocked; returns the gh calls."""
+        # main() with gh mocked; returns the gh calls.
         from unittest import mock
         work = Path(tempfile.mkdtemp())
         (work / "state.json").write_text(json.dumps(state))
@@ -443,7 +443,7 @@ class Duplicates(unittest.TestCase):
 
 
 class Isolation(unittest.TestCase):
-    """The retrospective Agent runs in a copy of the tree as the Agent user, and only allowed files come back."""
+    # The retrospective Agent runs in a copy of the tree as the Agent user, and only allowed files come back.
 
     def tree(self, files):
         root = Path(tempfile.mkdtemp())
@@ -520,7 +520,7 @@ class Isolation(unittest.TestCase):
 
     def test_the_unit_tests_run_as_the_agent_user_in_a_copy_with_no_credential(self):
         from unittest import mock
-        factory = self.tree({"orchestrator/test_x.py": "pass"})
+        factory = self.tree({"orchestrator/x_test.py": "pass"})
         root = self.tree({})
         seen = {}
 

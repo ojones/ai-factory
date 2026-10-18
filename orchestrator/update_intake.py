@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Update Intake: a change request for a Managed App that already exists.
-
-An update Intake is a GitHub issue made from the "Update Intake" form (label `update-intake`). Adding the label
-`proceed-with-change` starts it at once: `.github/workflows/update-intake.yml` runs `start`, which checks the issue
-and dispatches a Build Run. There is no App Staging; the app, its repo and its flags already exist.
-
-The Build Run then plans (agents/prompts/planner.md), and if the plan is one change set it codes, tests, reviews and
-releases that change. If the plan has several change sets, the Build Run files one child issue per change set
-(labels `update-intake`, `app:<slug>`, `plan:<parent>`) and ends. The first child with nothing to wait for gets
-`proceed-with-change` straight away; the others get `waiting-on-plan`. When a child's Build Run succeeds, `advance`
-gives `proceed-with-change` to the next sibling whose dependencies are now all closed (one at a time). So the children run one after
-another, never two pending runs of one app at once (GitHub keeps only one pending run per concurrency group).
-
-The label is added with the PAT, not the Actions token: events made by the Actions token do not start workflows.
-
-Commands (env: GH_TOKEN, FACTORY_PAT, FACTORY_REPO, ISSUE_NUMBER, ISSUE_BODY, RUN_URL):
-  start     validate the issue, label it app:<slug>, dispatch the Build Run
-  advance   after a child's Build Run succeeded: release its dependents
-"""
+# Update Intake: a change request for a Managed App that already exists.
+#
+# An update Intake is a GitHub issue made from the "Update Intake" form (label `update-intake`). Adding the label
+# `proceed-with-change` starts it at once: `.github/workflows/update-intake.yml` runs `start`, which checks the issue
+# and dispatches a Build Run. There is no App Staging; the app, its repo and its flags already exist.
+#
+# The Build Run then plans (agents/prompts/planner.md), and if the plan is one change set it codes, tests, reviews and
+# releases that change. If the plan has several change sets, the Build Run files one child issue per change set
+# (labels `update-intake`, `app:<slug>`, `plan:<parent>`) and ends. The first child with nothing to wait for gets
+# `proceed-with-change` straight away; the others get `waiting-on-plan`. When a child's Build Run succeeds, `advance`
+# gives `proceed-with-change` to the next sibling whose dependencies are now all closed (one at a time). So the children run one after
+# another, never two pending runs of one app at once (GitHub keeps only one pending run per concurrency group).
+#
+# The label is added with the PAT, not the Actions token: events made by the Actions token do not start workflows.
+#
+# Commands (env: GH_TOKEN, FACTORY_PAT, FACTORY_REPO, ISSUE_NUMBER, ISSUE_BODY, RUN_URL):
+#   start     validate the issue, label it app:<slug>, dispatch the Build Run
+#   advance   after a child's Build Run succeeded: release its dependents
 import json
 import os
 import re
@@ -38,7 +37,7 @@ AUTO_FIX = "auto-fix"
 
 
 def form_section(body, heading):
-    """Text under `### <heading>` in an Issue Form body, surrounding blanks trimmed."""
+    # Text under `### <heading>` in an Issue Form body, surrounding blanks trimmed.
     out, on = [], False
     for line in (body or "").replace("\r", "").split("\n"):
         if line == f"### {heading}":
@@ -51,7 +50,7 @@ def form_section(body, heading):
 
 
 def app_name(body):
-    """The Managed App named in the form, or ValueError."""
+    # The Managed App named in the form, or ValueError.
     name = form_section(body, "App name")
     if not name or name == "_No response_":
         raise ValueError('the "App name" field is empty')
@@ -61,12 +60,12 @@ def app_name(body):
 
 
 def is_factory_repo(description, factory_repo):
-    """True only for a repo App Staging created: its description carries `Intake: <factory repo>#<n>`."""
+    # True only for a repo App Staging created: its description carries `Intake: <factory repo>#<n>`.
     return bool(re.match(rf"^Intake: {re.escape(factory_repo)}#\d+$", (description or "").strip()))
 
 
 def plan_meta(body):
-    """The plan metadata hidden in a child issue's body ({} for any other issue)."""
+    # The plan metadata hidden in a child issue's body ({} for any other issue).
     m = META_RE.search(body or "")
     if not m:
         return {}
@@ -78,13 +77,13 @@ def plan_meta(body):
 
 
 def secrets_marker(needed):
-    """The hidden marker that records which secrets a request declared (names and purposes, never values), so every later start checks them
-    before any Agent is paid for, whichever path it takes."""
+    # The hidden marker that records which secrets a request declared (names and purposes, never values), so every later start checks them
+    # before any Agent is paid for, whichever path it takes.
     return "<!-- factory-secrets:" + json.dumps([{"name": x["name"], "purpose": x.get("purpose", "")} for x in needed], separators=(",", ":")) + " -->"
 
 
 def declared_secrets(issue):
-    """The secrets recorded for this Intake: in a hidden marker in any comment, or in a child issue's plan metadata. [{name, purpose}]."""
+    # The secrets recorded for this Intake: in a hidden marker in any comment, or in a child issue's plan metadata. [{name, purpose}].
     found = {}
     sources = [c.get("body", "") for c in issue.get("comments") or []]
     for text in sources:
@@ -103,8 +102,8 @@ def declared_secrets(issue):
 
 
 def fix_meta(body):
-    """The retry metadata hidden in an automatic fix request ({} for any other issue): which Intake it came from (`origin`),
-    which automatic attempt it is (`attempt`, 1 for the first) and what earlier attempts found (`history`)."""
+    # The retry metadata hidden in an automatic fix request ({} for any other issue): which Intake it came from (`origin`),
+    # which automatic attempt it is (`attempt`, 1 for the first) and what earlier attempts found (`history`).
     m = FIX_RE.search(body or "")
     if not m:
         return {}
@@ -124,7 +123,7 @@ def one_line(text, limit=80):
 
 
 def render_change_set_task(cs, request=None, parent=None):
-    """The task text for one change set: what the coder, tester and reviewer are given as the spec."""
+    # The task text for one change set: what the coder, tester and reviewer are given as the spec.
     lines = [f"Change set {cs['id']}: {cs['title']}", ""]
     if parent:
         lines += [f"Part of a larger request, planned in #{parent}. Do only this change set.", ""]
@@ -143,8 +142,8 @@ def render_change_set_task(cs, request=None, parent=None):
 
 
 def render_plan_comment(plan, questions=()):
-    """The plan as a comment on the Update Intake: change sets with their flags, the assumptions the planner made on the
-    owner's behalf, and any question it needs answered. Anything the owner disagrees with can be corrected in the issue."""
+    # The plan as a comment on the Update Intake: change sets with their flags, the assumptions the planner made on the
+    # owner's behalf, and any question it needs answered. Anything the owner disagrees with can be corrected in the issue.
     sets = plan.get("change_sets") or []
     lines = [f"**Plan: {len(sets)} change set{'s' if len(sets) != 1 else ''}.**", ""]
     for cs in sets:
@@ -159,7 +158,7 @@ def render_plan_comment(plan, questions=()):
 
 
 def child_body(app, task, parent, cs_id, depends_on, cap=None, secrets=None):
-    """A child issue's body: the Update Intake form fields plus hidden plan metadata."""
+    # A child issue's body: the Update Intake form fields plus hidden plan metadata.
     meta = {"parent": parent, "cs": cs_id, "depends_on": depends_on}
     if secrets:
         meta["secrets"] = [{"name": x["name"], "purpose": x.get("purpose", "")} for x in secrets]
@@ -169,10 +168,10 @@ def child_body(app, task, parent, cs_id, depends_on, cap=None, secrets=None):
 
 
 def ready_to_start(children):
-    """The number of the one child to start now, as a list (empty when none). Each child is {number, state, labels,
-    depends_on}. It must be open, waiting, not already started, with every issue it depends on closed (an unknown
-    dependency counts as open). At most one is started, and none while another is open with `proceed-with-change`:
-    one app runs one Build Run at a time, and GitHub drops all but one pending run, so two started together would lose one."""
+    # The number of the one child to start now, as a list (empty when none). Each child is {number, state, labels,
+    # depends_on}. It must be open, waiting, not already started, with every issue it depends on closed (an unknown
+    # dependency counts as open). At most one is started, and none while another is open with `proceed-with-change`:
+    # one app runs one Build Run at a time, and GitHub drops all but one pending run, so two started together would lose one.
     if any(c["state"].upper() == "OPEN" and GO in c["labels"] for c in children):
         return []
     state = {c["number"]: c["state"].upper() for c in children}
@@ -197,8 +196,8 @@ def ensure_label(repo, name, token, color="0e8a16", description=""):
 
 
 def file_children(repo, pat, app, parent, change_sets, order, request, cap=None, secrets=None):
-    """Create one issue per change set, dependencies first, and start those with nothing to wait for.
-    Returns [(change set id, issue number)]."""
+    # Create one issue per change set, dependencies first, and start those with nothing to wait for.
+    # Returns [(change set id, issue number)].
     for name, color, desc in ((FORM_LABEL, "1d76db", "A change request for an existing Managed App"),
                               (WAIT, "fbca04", "Waiting for an earlier change set of the same plan"),
                               (GO, "0e8a16", "Start this change now"), (f"app:{app}", "1d76db", f"Issues about the Managed App {app}"),
@@ -231,7 +230,7 @@ def siblings(repo, pat, parent):
 
 
 def advance(repo, pat, number):
-    """After child #number's Build Run succeeded and its issue is closed: start the siblings it was holding up."""
+    # After child #number's Build Run succeeded and its issue is closed: start the siblings it was holding up.
     body = json.loads(gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], pat).stdout or "{}").get("body", "")
     parent = plan_meta(body).get("parent")
     if not parent:

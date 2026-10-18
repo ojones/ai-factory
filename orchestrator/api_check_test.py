@@ -1,4 +1,4 @@
-"""Tests for the api-check helper (pure logic, plus a run against a throwaway local server). Run: python3 -m unittest discover orchestrator"""
+# Tests for the api-check helper (pure logic, plus a run against a throwaway local server). Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import json
 import sys
 import tempfile

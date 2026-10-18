@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""A static dashboard of the Factory's Build Runs, and a daily digest.
-
-Each Build Run uploads its Report as an artifact, and artifacts expire. This keeps the history: it collects
-the Reports of runs it has not seen yet, merges them into `history.json`, and renders `index.html` beside it.
-The scheduled workflow (.github/workflows/dashboard.yml) keeps both files on the `factory-data` branch, which
-GitHub Pages can serve if it is enabled for that branch; the digest goes to the workflow's run summary.
-
-No server, no database and no new always-on service. The pure functions (summarize, merge, metrics, render)
-are unit-tested; `collect` and `main` talk to GitHub through `gh`.
-
-Usage: dashboard.py <data-dir>        (env GH_TOKEN and GITHUB_REPOSITORY; GITHUB_STEP_SUMMARY optional)
-"""
+# A static dashboard of the Factory's Build Runs, and a daily digest.
+#
+# Each Build Run uploads its Report as an artifact, and artifacts expire. This keeps the history: it collects
+# the Reports of runs it has not seen yet, merges them into `history.json`, and renders `index.html` beside it.
+# The scheduled workflow (.github/workflows/dashboard.yml) keeps both files on the `factory-data` branch, which
+# GitHub Pages can serve if it is enabled for that branch; the digest goes to the workflow's run summary.
+#
+# No server, no database and no new always-on service. The pure functions (summarize, merge, metrics, render)
+# are unit-tested; `collect` and `main` talk to GitHub through `gh`.
+#
+# Usage: dashboard.py <data-dir>        (env GH_TOKEN and GITHUB_REPOSITORY; GITHUB_STEP_SUMMARY optional)
 import calendar
 import collections
 import html
@@ -31,7 +30,7 @@ COST_TARGET_USD = 1.0  # the owner's goal for one Build Run; a target, not a cap
 
 
 def summarize_run(d):
-    """One Report -> one history row (only what the dashboard shows, so history stays small)."""
+    # One Report -> one history row (only what the dashboard shows, so history stays small).
     started, finished = d.get("started_at") or "", d.get("finished_at") or ""
     try:
         fmt = "%Y-%m-%dT%H:%M:%SZ"
@@ -48,7 +47,7 @@ def summarize_run(d):
 
 
 def merge_history(history, rows):
-    """History plus new rows, one per run_url (a newer row replaces an older one), oldest first."""
+    # History plus new rows, one per run_url (a newer row replaces an older one), oldest first.
     by_url = {r["run_url"]: r for r in history if r.get("run_url")}
     by_url.update({r["run_url"]: r for r in rows if r.get("run_url")})
     return sorted(by_url.values(), key=lambda r: r.get("started_at") or "")
@@ -60,14 +59,14 @@ def _avg(xs):
 
 
 def _p90(xs):
-    """The value 90% of the runs are at or below (nearest rank), or None for no runs."""
+    # The value 90% of the runs are at or below (nearest rank), or None for no runs.
     xs = sorted(x for x in xs if x is not None)
     return round(xs[min(len(xs) - 1, -(-9 * len(xs) // 10) - 1)], 2) if xs else None
 
 
 def payoff(rows):
-    """What the pipeline costs per change that shipped: all spend and all rounds (failed runs included) over the accepted runs, and the
-    blocking findings by category per run. The owner's intervention is counted as runs that ended needing a person."""
+    # What the pipeline costs per change that shipped: all spend and all rounds (failed runs included) over the accepted runs, and the
+    # blocking findings by category per run. The owner's intervention is counted as runs that ended needing a person.
     accepted = sum(1 for r in rows if r["outcome"] in ACCEPTED)
     findings = collections.Counter()
     for r in rows:
@@ -81,7 +80,7 @@ def payoff(rows):
 
 
 def metrics(history, lessons=None):
-    """Fleet numbers, overall and per app. `lessons` is {"open": n, "fix_ineffective": n} or None."""
+    # Fleet numbers, overall and per app. `lessons` is {"open": n, "fix_ineffective": n} or None.
     def block(rows):
         ok = [r for r in rows if r["outcome"] in OK]
         return {"runs": len(rows), "ok": len(ok),
@@ -113,7 +112,7 @@ def num(x, prefix=""):
 
 
 def render_digest(history, m, since):
-    """Markdown for the daily summary: what happened since `since` (an ISO timestamp) and what needs a person."""
+    # Markdown for the daily summary: what happened since `since` (an ISO timestamp) and what needs a person.
     recent = [r for r in history if (r.get("started_at") or "") >= since]
     allm = m["all"]
     lines = ["## Factory digest", "",
@@ -195,7 +194,7 @@ def gh_json(args):
 
 
 def collect(repo, known_urls):
-    """Reports of recent Build Runs not yet in history, read from each run's `build-run` artifact."""
+    # Reports of recent Build Runs not yet in history, read from each run's `build-run` artifact.
     rows = []
     runs = gh_json(["run", "list", "--repo", repo, "--workflow", WORKFLOW, "--limit", str(MAX_RUNS_PER_PASS),
                     "--status", "completed", "--json", "databaseId,url"])

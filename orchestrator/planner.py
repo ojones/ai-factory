@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Plan validation for the planner role (agents/prompts/planner.md).
-
-The planner Agent turns a larger Intake into a plan: requirements, the questions only a person can answer, and
-an ordered set of change sets, each one Build Run's work with its own acceptance criteria and flag. This module
-is the deterministic gate between that plan and any coding: nothing is dispatched from a plan that fails it, and
-a plan with an unanswered blocking question ends in a needs-human Issue instead of a guess.
-
-The plan format (JSON):
-
-  {"requirements": [{"id": "REQ-1", "text": "..."}],
-   "assumptions": ["..."],
-   "open_questions": [{"id": "Q-1", "text": "...", "blocking": true}],
-   "change_sets": [{"id": "CS-1", "title": "...", "requirements": ["REQ-1"], "depends_on": [],
-                    "criteria": ["AC-1: ..."], "verification": ["..."], "flag": "slug-or-null",
-                    "internal_only": false, "out_of_scope": ["..."]}]}
-
-Used by the Build Run for an Update Intake (`BuildRun.plan_change`): one change set becomes that run's task; several
-are filed as child Update Intake issues by `update_intake.file_children`, each its own Build Run, in this order.
-
-Usage: planner.py validate <plan.json> [first|update]     (exit 0 valid, 1 invalid, 2 needs a person)
-"""
+# Plan validation for the planner role (agents/prompts/planner.md).
+#
+# The planner Agent turns a larger Intake into a plan: requirements, the questions only a person can answer, and
+# an ordered set of change sets, each one Build Run's work with its own acceptance criteria and flag. This module
+# is the deterministic gate between that plan and any coding: nothing is dispatched from a plan that fails it, and
+# a plan with an unanswered blocking question ends in a needs-human Issue instead of a guess.
+#
+# The plan format (JSON):
+#
+#   {"requirements": [{"id": "REQ-1", "text": "..."}],
+#    "assumptions": ["..."],
+#    "open_questions": [{"id": "Q-1", "text": "...", "blocking": true}],
+#    "change_sets": [{"id": "CS-1", "title": "...", "requirements": ["REQ-1"], "depends_on": [],
+#                     "criteria": ["AC-1: ..."], "verification": ["..."], "flag": "slug-or-null",
+#                     "internal_only": false, "out_of_scope": ["..."]}]}
+#
+# Used by the Build Run for an Update Intake (`BuildRun.plan_change`): one change set becomes that run's task; several
+# are filed as child Update Intake issues by `update_intake.file_children`, each its own Build Run, in this order.
+#
+# Usage: planner.py validate <plan.json> [first|update]     (exit 0 valid, 1 invalid, 2 needs a person)
 import json
 import re
 import sys
@@ -44,7 +43,7 @@ def _ids(items, key="id"):
 
 
 def secret_problems(secrets):
-    """Problems with a plan's `secrets` list: [{name, purpose, read_by}], one entry per service secret the build needs."""
+    # Problems with a plan's `secrets` list: [{name, purpose, read_by}], one entry per service secret the build needs.
     if secrets in (None, []):
         return []
     if not isinstance(secrets, list):
@@ -66,8 +65,8 @@ def secret_problems(secrets):
 
 
 def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, reuse_flags=()):
-    """(problems, questions). `problems` are reasons the plan cannot be used and must be redone; `questions` are
-    the blocking open questions a person has to answer first. A plan is ready only when both are empty."""
+    # (problems, questions). `problems` are reasons the plan cannot be used and must be redone; `questions` are
+    # the blocking open questions a person has to answer first. A plan is ready only when both are empty.
     problems, questions = [], []
     if not isinstance(plan, dict):
         return ["the plan is not a JSON object"], []
@@ -167,7 +166,7 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, re
 
 
 def topological_order(change_sets):
-    """Change set ids in an order that respects `depends_on` (ties keep the listed order), or None if there is a cycle."""
+    # Change set ids in an order that respects `depends_on` (ties keep the listed order), or None if there is a cycle.
     sets = [cs for cs in change_sets if isinstance(cs, dict) and cs.get("id")]
     deps = {cs["id"]: [d for d in cs.get("depends_on") or [] if d in {c["id"] for c in sets}] for cs in sets}
     order, done = [], set()
@@ -182,7 +181,7 @@ def topological_order(change_sets):
 
 def main(argv):
     if len(argv) < 3 or argv[1] != "validate":
-        print(__doc__.strip().splitlines()[-1], file=sys.stderr)
+        print("Usage: planner.py validate <plan.json> [first|update]     (exit 0 valid, 1 invalid, 2 needs a person)", file=sys.stderr)
         return 2
     with open(argv[2]) as f:
         plan = json.load(f)

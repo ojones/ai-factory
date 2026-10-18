@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Replay the reviewer over commits from real Build Runs (issue #41).
-
-Re-runs only the review step against commits the Managed App repos still hold, with the
-current prompts and model, and sets the result beside what the reviewer concluded at the time.
-Minutes and cents, instead of a 90-minute, $2 Build Run.
-
-MODE=single  one model call over a prompt the Orchestrator assembles (the Build Run's default)
-MODE=agent   the exploring OpenHands reviewer (what the Build Run used before)
-
-Env: DEEPINFRA_API_KEY, MODE, MODEL (default: the reviewer's model in agents/profiles.yml),
-CASES (comma-separated ids, default all), REPEAT (runs per case, default 1; the model is not
-deterministic, so judge on 5), WORKERS (default 4), OWNER (default ojones).
-A case's "expect" is a list of regexes, one per real problem a review must find among its blocking
-findings; the report gives how often each was found.
-Prints per-case time, tokens and verdicts; writes replay-results.json.
-"""
-import json, os, re, subprocess, sys, tempfile, time
+# Replay the reviewer over commits from real Build Runs (issue #41).
+#
+# Re-runs only the review step against commits the Managed App repos still hold, with the
+# current prompts and model, and sets the result beside what the reviewer concluded at the time.
+# Minutes and cents, instead of a 90-minute, $2 Build Run.
+#
+# MODE=single  one model call over a prompt the Orchestrator assembles (the Build Run's default)
+# MODE=agent   the exploring OpenHands reviewer (what the Build Run used before)
+#
+# Env: DEEPINFRA_API_KEY, MODE, MODEL (default: the reviewer's model in agents/profiles.yml),
+# CASES (comma-separated ids, default all), REPEAT (runs per case, default 1; the model is not
+# deterministic, so judge on 5), WORKERS (default 4), OWNER (default ojones).
+# A case's "expect" is a list of regexes, one per real problem a review must find among its blocking
+# findings; the report gives how often each was found.
+# Prints per-case time, tokens and verdicts; writes replay-results.json.
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 

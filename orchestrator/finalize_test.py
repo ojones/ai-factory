@@ -1,4 +1,4 @@
-"""The finalize step end to end for a failed run: a real git repo, gh mocked."""
+# The finalize step end to end for a failed run: a real git repo, gh mocked.
 import json
 import os
 import sys
@@ -19,7 +19,7 @@ def stages():
 
 
 class Run:
-    """A run that pushed one commit on top of its base."""
+    # A run that pushed one commit on top of its base.
     d = {"app": "demo", "outcome": "round_limit", "message": "4 rounds without a clean pass", "base_sha": "b" * 40, "head_sha": "h" * 40,
          "commits": ["h" * 40], "release": None}
 

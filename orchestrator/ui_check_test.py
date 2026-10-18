@@ -1,6 +1,5 @@
-"""Tests for the ui-check helper: pure logic always, a real browser run only where Playwright is installed.
-Run: python3 -m unittest discover orchestrator"""
-import json
+# Tests for the ui-check helper: pure logic always, a real browser run only where Playwright is installed.
+# Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import sys
 import tempfile
 import threading

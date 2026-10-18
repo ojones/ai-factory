@@ -1,7 +1,6 @@
-"""The Starter Template's custom lint rules, run against the cases in agents/lint-fixtures/cases.json with the real ESLint."""
+# The Starter Template's custom lint rules, run against the cases in agents/lint-fixtures/cases.json with the real ESLint.
 import json
 import subprocess
-import sys
 import unittest
 from pathlib import Path
 

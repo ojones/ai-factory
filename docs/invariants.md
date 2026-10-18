@@ -1,6 +1,6 @@
 # Design invariants
 
-The "must" rules of the Orchestrator and Starter Template, each with an ID. Every row has a test in [orchestrator/test_invariants.py](../orchestrator/test_invariants.py), named `test_invNN_...`, and a test checks that this table and the test file list exactly the same IDs, so a rule cannot be added here without a test or dropped from the tests silently. The reasoning for each rule is in [ARCHITECTURE.md](../ARCHITECTURE.md) and the [Standards](../STANDARDS.md).
+The "must" rules of the Orchestrator and Starter Template, each with an ID. Every row has a test in [orchestrator/invariants_test.py](../orchestrator/invariants_test.py), named `test_invNN_...`, and a test checks that this table and the test file list exactly the same IDs, so a rule cannot be added here without a test or dropped from the tests silently. The reasoning for each rule is in [ARCHITECTURE.md](../ARCHITECTURE.md) and the [Standards](../STANDARDS.md).
 
 Some tests exercise the code (what the rule says must happen), some read a file (the rule is a property of a workflow, a template or the docs), and some compare the docs with `agents/profiles.yml` so that the two cannot drift apart. [audit.py](../orchestrator/audit.py) checks the same kind of rule against what a real Build Run actually did.
 

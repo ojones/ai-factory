@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Switch one Managed App flag on or off in production by hand (the owner's lever; run by .github/workflows/flag-set.yml).
-
-The release step creates flags and the watchdog switches them off. This is the same call for a person: turning a released flag
-off is the rollback, and turning one on is for a test such as the production-feedback check. It changes the `production`
-environment's `enabled` switch of one existing flag and reads it back; it never creates a flag or edits rules.
-
-  python3 flag_set.py <app> <flag-slug> on|off        Env: GROWTHBOOK_ADMIN_PAT
-Exit 0 if the read-back shows the requested state, 1 otherwise, 2 for bad input.
-"""
+# Switch one Managed App flag on or off in production by hand (the owner's lever; run by .github/workflows/flag-set.yml).
+#
+# The release step creates flags and the watchdog switches them off. This is the same call for a person: turning a released flag
+# off is the rollback, and turning one on is for a test such as the production-feedback check. It changes the `production`
+# environment's `enabled` switch of one existing flag and reads it back; it never creates a flag or edits rules.
+#
+#   python3 flag_set.py <app> <flag-slug> on|off        Env: GROWTHBOOK_ADMIN_PAT
+# Exit 0 if the read-back shows the requested state, 1 otherwise, 2 for bad input.
 import os
 import re
 import sys
@@ -18,7 +17,7 @@ import build_run as b  # noqa: E402
 
 
 def feature_key(app, slug):
-    """The GrowthBook key, or None if the app or slug is not a valid name (so nothing odd is ever put in a URL)."""
+    # The GrowthBook key, or None if the app or slug is not a valid name (so nothing odd is ever put in a URL).
     if not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", app or "") or not b.SLUG_RE.fullmatch(slug or ""):
         return None
     return f"{app}.feature.{slug}"

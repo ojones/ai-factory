@@ -1,4 +1,4 @@
-"""Tests for template sync. Run: python3 -m unittest discover orchestrator"""
+# Tests for template sync. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import sys
 import unittest
 from pathlib import Path

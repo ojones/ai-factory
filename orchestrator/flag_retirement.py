@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
-"""Flag retirement: a feature flag is short-lived, so once a change is proven in production its flag is removed, by itself.
-
-A flag exists for one job: to stage a change dark and release it when it is safe (STANDARDS-FEATURE-FLAGS.md). Nobody uses it for
-anything else, so once a *later* Build Run has also released something, the earlier release has been replaced by a newer one and its
-flag has done its job. A retirement is never a run of its own (that would spend a planner, reviewer, tester, CI and a deploy on a change
-that only deletes a check): the next Update Intake for the same app carries it. At the start of that Build Run the Orchestrator picks
-the oldest eligible flag (`piggyback_slugs`) and adds a "retire these flags in the same change" block to the coder's task; the tester is
-told to check that the behaviour is still on for everyone, and the run archives the flag in GrowthBook when it ends well. Users see no
-change. The owner's standing approval is the standard; nobody reviews a retirement.
-
-A flag is a candidate when all of these hold, read from the app's State issue and `flags.json`:
-  - it is in `flags.json` and the State issue records it as `released` (not one the watchdog switched off: that one is dead, and the fix
-    request replaces it with a new flag);
-  - a later Build Run of the app also released a flag (its run id is higher);
-  - it was released on an earlier day than today (a soak of at least a day, so the production-feedback scans have looked at it).
-The newest release therefore always keeps its flag, and a run that ended `nothing_to_release` retires nothing.
-
-A *dark* feature is the other case: a flagged change that never got through its checks. It stays dark, behind its flag, and is fixed forward
-by the story's automatic retries (`fix_request_max_attempts`). Only after those are used up (the story is labelled `needs-human` and
-`dark-broken`) and a person adds the label `approve-retire` to the story is it removed: `approve` files an Update Intake that deletes the
-flag's check, the code it guarded, its tests and its line in `flags.json`, and starts it. Nothing removes a dark feature on its own.
-
-Limits: `limits.flag_retirement` in agents/profiles.yml (`piggyback_max` flags per run, default 5, so a backlog clears; `min_age_days`).
-"""
+# Flag retirement: a feature flag is short-lived, so once a change is proven in production its flag is removed, by itself.
+#
+# A flag exists for one job: to stage a change dark and release it when it is safe (STANDARDS-FEATURE-FLAGS.md). Nobody uses it for
+# anything else, so once a *later* Build Run has also released something, the earlier release has been replaced by a newer one and its
+# flag has done its job. A retirement is never a run of its own (that would spend a planner, reviewer, tester, CI and a deploy on a change
+# that only deletes a check): the next Update Intake for the same app carries it. At the start of that Build Run the Orchestrator picks
+# the oldest eligible flag (`piggyback_slugs`) and adds a "retire these flags in the same change" block to the coder's task; the tester is
+# told to check that the behaviour is still on for everyone, and the run archives the flag in GrowthBook when it ends well. Users see no
+# change. The owner's standing approval is the standard; nobody reviews a retirement.
+#
+# A flag is a candidate when all of these hold, read from the app's State issue and `flags.json`:
+#   - it is in `flags.json` and the State issue records it as `released` (not one the watchdog switched off: that one is dead, and the fix
+#     request replaces it with a new flag);
+#   - a later Build Run of the app also released a flag (its run id is higher);
+#   - it was released on an earlier day than today (a soak of at least a day, so the production-feedback scans have looked at it).
+# The newest release therefore always keeps its flag, and a run that ended `nothing_to_release` retires nothing.
+#
+# A *dark* feature is the other case: a flagged change that never got through its checks. It stays dark, behind its flag, and is fixed forward
+# by the story's automatic retries (`fix_request_max_attempts`). Only after those are used up (the story is labelled `needs-human` and
+# `dark-broken`) and a person adds the label `approve-retire` to the story is it removed: `approve` files an Update Intake that deletes the
+# flag's check, the code it guarded, its tests and its line in `flags.json`, and starts it. Nothing removes a dark feature on its own.
+#
+# Limits: `limits.flag_retirement` in agents/profiles.yml (`piggyback_max` flags per run, default 5, so a backlog clears; `min_age_days`).
 import base64
 import json
 import os
@@ -51,7 +50,7 @@ def slug_of(key):
 
 
 def issue_of(state_flags):
-    """{slug: story issue number} for the flags the State issue knows the story of."""
+    # {slug: story issue number} for the flags the State issue knows the story of.
     out = {}
     for f in state_flags:
         try:
@@ -62,7 +61,7 @@ def issue_of(state_flags):
 
 
 def age_days(date, today):
-    """Whole days between two YYYY-MM-DD strings, or None if either cannot be read."""
+    # Whole days between two YYYY-MM-DD strings, or None if either cannot be read.
     try:
         a, b_ = time.strptime(date, "%Y-%m-%d"), time.strptime(today, "%Y-%m-%d")
         return int((time.mktime(b_) - time.mktime(a)) // 86400)
@@ -71,7 +70,7 @@ def age_days(date, today):
 
 
 def candidates(state_flags, manifest, today, min_age_days):
-    """The flags to retire, oldest release first: [(slug, run id)]. See the module docstring for the rules."""
+    # The flags to retire, oldest release first: [(slug, run id)]. See the module docstring for the rules.
     released = [f for f in state_flags if f.get("state") == "released"]
     newest = max((run_id(f) for f in released), default=0)
     out = []
@@ -83,12 +82,12 @@ def candidates(state_flags, manifest, today, min_age_days):
 
 
 def piggyback_slugs(state_flags, manifest, today, min_age_days, limit):
-    """The flags this run retires in passing: the oldest eligible ones, at most `limit`."""
+    # The flags this run retires in passing: the oldest eligible ones, at most `limit`.
     return [slug for slug, _ in candidates(state_flags, manifest, today, min_age_days)][:max(0, int(limit))]
 
 
 def retirement_block(slugs):
-    """The text added to a Build Run's task so the coder retires these flags in the same change. Empty for none."""
+    # The text added to a Build Run's task so the coder retires these flags in the same change. Empty for none.
     if not slugs:
         return ""
     lines = "\n".join(f"retire-flag: {s}" for s in slugs)
@@ -100,7 +99,7 @@ def retirement_block(slugs):
 
 
 def retirement_note(slugs):
-    """What the tester and reviewer are told about the retired flags (added to the spec they check against)."""
+    # What the tester and reviewer are told about the retired flags (added to the spec they check against).
     if not slugs:
         return ""
     return ("\n\nThis change also retires the feature flag(s) " + ", ".join(f"`{s}`" for s in slugs) + ", so the behaviour each guarded is now simply on "
@@ -112,7 +111,7 @@ APPROVE = "approve-retire"
 
 
 def dark_removal_target(labels):
-    """(app, slug, None) when a person's approval can retire this story's dark feature, else (None, None, why not)."""
+    # (app, slug, None) when a person's approval can retire this story's dark feature, else (None, None, why not).
     labels = set(labels)
     if "update-intake" not in labels:
         return None, None, "this is not an Update Intake story"
@@ -128,7 +127,7 @@ def dark_removal_target(labels):
 
 
 def dark_removal_task(slug, story):
-    """The request an approved retirement files: remove the feature, since it never released. Users see no difference."""
+    # The request an approved retirement files: remove the feature, since it never released. Users see no difference.
     return (f"Remove the dark feature behind the flag `{slug}`. It was built in #{story}, never passed its checks and was never released, "
             "so no user has ever seen it and its flag is off. A person has approved removing it.\n\n"
             f"Delete the check of `{slug}`, the code it guarded (routes, UI, helpers, migrations that only it used) and the tests that "
@@ -137,8 +136,8 @@ def dark_removal_task(slug, story):
 
 
 def approve(repo, pat, number):
-    """The story #number got the label `approve-retire`: file the removal as an Update Intake and start it. Returns 0 either way (a refusal
-    is a comment on the story, not a failed workflow)."""
+    # The story #number got the label `approve-retire`: file the removal as an Update Intake and start it. Returns 0 either way (a refusal
+    # is a comment on the story, not a failed workflow).
     import update_intake as ui
     env = {**os.environ, "GH_TOKEN": pat}
     story = json.loads(b.sh(["gh", "issue", "view", str(number), "--repo", repo, "--json", "labels,title"], env=env).stdout)
@@ -169,7 +168,7 @@ def approve(repo, pat, number):
 
 
 def app_flags(owner, app, pat):
-    """(state flags from the App State issue, flags.json slugs at main), or (None, None) if either cannot be read."""
+    # (state flags from the App State issue, flags.json slugs at main), or (None, None) if either cannot be read.
     env = {**os.environ, "GH_TOKEN": pat}
     out = b.sh(["gh", "issue", "list", "--repo", f"{owner}/{app}", "--label", appstate.STATE_LABEL, "--state", "open", "--json", "body"], env=env, check=False).stdout
     found = json.loads(out or "[]")

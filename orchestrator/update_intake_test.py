@@ -347,7 +347,9 @@ class Spec(unittest.TestCase):
         self.assertIn("# INTAKE.md", b.build_review_context(git, "base", "head", 10**6))
 
     def test_every_module_agrees_on_what_a_good_ending_is(self):
-        import appstate, audit, dashboard
+        import appstate
+        import audit
+        import dashboard
         self.assertEqual(set(b.OK_OUTCOMES), set(audit.OK_OUTCOMES))
         self.assertEqual(set(b.OK_OUTCOMES), set(appstate.OK))
         self.assertEqual(set(b.OK_OUTCOMES), set(dashboard.OK))

@@ -1,4 +1,4 @@
-"""Rolling the deploy back after a regression: through the app's own CI, never by reverting commits in git."""
+# Rolling the deploy back after a regression: through the app's own CI, never by reverting commits in git.
 import json
 import os
 import sys
@@ -11,7 +11,7 @@ import build_run as b  # noqa: E402
 
 
 def run_state(**over):
-    """The Report of a run that pushed one commit on top of base."""
+    # The Report of a run that pushed one commit on top of base.
     return {"app": "demo", "outcome": "regression", "message": "an old route broke", "base_sha": "b" * 40, "head_sha": "h" * 40,
             "commits": ["h" * 40], "release": None, **over}
 
@@ -34,7 +34,7 @@ class Decision(unittest.TestCase):
 
 
 class Sh:
-    """A stand-in for `sh` that answers `gh run list` from a script and records every command."""
+    # A stand-in for `sh` that answers `gh run list` from a script and records every command.
 
     def __init__(self, lists, dispatch_rc=0):
         self.cmds, self.lists, self.dispatch_rc = [], list(lists), dispatch_rc

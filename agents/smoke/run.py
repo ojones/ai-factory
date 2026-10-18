@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Smoke test for the reviewer model (issue #33).
-
-Checks, against DeepInfra's OpenAI-compatible API, that the model:
-  T1 returns usage.estimated_cost (the cost guardrail depends on it)
-  T2 round-trips a tool call (incl. reasoning_content if the model emits it)
-  T3 produces schema-valid structured JSON
-  T4 does structured output and tools in the same request
-  T5 finds known bugs / passes a clean diff (agents/smoke/fixtures), N trials each
-
-Prints pass/fail only. The key comes from DEEPINFRA_API_KEY and is never printed.
-"""
-import json, os, re, sys, time, urllib.request, urllib.error, pathlib
+# Smoke test for the reviewer model (issue #33).
+#
+# Checks, against DeepInfra's OpenAI-compatible API, that the model:
+#   T1 returns usage.estimated_cost (the cost guardrail depends on it)
+#   T2 round-trips a tool call (incl. reasoning_content if the model emits it)
+#   T3 produces schema-valid structured JSON
+#   T4 does structured output and tools in the same request
+#   T5 finds known bugs / passes a clean diff (agents/smoke/fixtures), N trials each
+#
+# Prints pass/fail only. The key comes from DEEPINFRA_API_KEY and is never printed.
+import json
+import os
+import pathlib
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 MODEL = os.environ.get("MODEL", "deepseek-ai/DeepSeek-V4-Pro-0813")
@@ -54,9 +60,9 @@ def record(name, ok, detail=""):
     print(f"{'PASS' if ok else 'FAIL'}  {name} {detail}", flush=True)
 
 def chat(payload, attempts=5):
-    """One API call. Retries overload (429), server errors (5xx) and timeouts with backoff:
-    those say nothing about the model, and counting them as wrong verdicts made a busy
-    provider look like a regression."""
+    # One API call. Retries overload (429), server errors (5xx) and timeouts with backoff:
+    # those say nothing about the model, and counting them as wrong verdicts made a busy
+    # provider look like a regression.
     extra = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
     body = json.dumps({"model": MODEL, **extra, **payload}).encode()
     req = urllib.request.Request(f"{BASE}/chat/completions", data=body, headers={

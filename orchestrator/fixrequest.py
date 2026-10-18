@@ -1,26 +1,25 @@
-"""A fix request: one GitHub issue for a Build Run that did not end well.
-
-The run's own failure issue (in the Managed App repo) says that it failed. This is the issue that says what has to be fixed:
-what happened, what the Orchestrator already did about it (a deploy rollback, for a regression), an automated analysis, and numbered requirements
-that can be checked afterwards. It is routed by the cause the retrospective named:
-
-  factory  a prompt, planner, Starter Template or orchestrator cause. An ai-factory issue labelled `factory-fix-request`.
-           Adding `ready-for-factory-run` gives it to the Factory Run (the retrospective Agent), which proposes a PR for a person
-           to merge. The app planner is not used: it plans changes to Managed Apps, and this is a change to the Factory.
-  app      the request itself was the problem (unclear, too big for the model, or a release the watchdog switched off). The
-           story's OWN issue is updated, not a new one: a comment says it broke and why, and the retry state is hidden in it
-           (the attempt, the story's flag, what earlier attempts found, the guidance). While attempts remain the PAT puts
-           `proceed-with-change` back on the same issue, so the same story runs again with the same flag; after
-           `fix_request_max_attempts` it stays open, labelled `needs-human`, attached to its flag.
-  info     no cause was named (or an infrastructure one). A `fix-request` issue in ai-factory for a person to read.
-
-Factory and information routes: one open fix request per Intake and route; a run that fails again adds a comment instead of a second issue.
-"""
+# A fix request: one GitHub issue for a Build Run that did not end well.
+#
+# The run's own failure issue (in the Managed App repo) says that it failed. This is the issue that says what has to be fixed:
+# what happened, what the Orchestrator already did about it (a deploy rollback, for a regression), an automated analysis, and numbered requirements
+# that can be checked afterwards. It is routed by the cause the retrospective named:
+#
+#   factory  a prompt, planner, Starter Template or orchestrator cause. An ai-factory issue labelled `factory-fix-request`.
+#            Adding `ready-for-factory-run` gives it to the Factory Run (the retrospective Agent), which proposes a PR for a person
+#            to merge. The app planner is not used: it plans changes to Managed Apps, and this is a change to the Factory.
+#   app      the request itself was the problem (unclear, too big for the model, or a release the watchdog switched off). The
+#            story's OWN issue is updated, not a new one: a comment says it broke and why, and the retry state is hidden in it
+#            (the attempt, the story's flag, what earlier attempts found, the guidance). While attempts remain the PAT puts
+#            `proceed-with-change` back on the same issue, so the same story runs again with the same flag; after
+#            `fix_request_max_attempts` it stays open, labelled `needs-human`, attached to its flag.
+#   info     no cause was named (or an infrastructure one). A `fix-request` issue in ai-factory for a person to read.
+#
+# Factory and information routes: one open fix request per Intake and route; a run that fails again adds a comment instead of a second issue.
 import hashlib
 import json
+import os
 import re
 import subprocess
-import os
 
 import update_intake
 
@@ -32,9 +31,9 @@ MAX_ITEMS = 5
 
 
 def inferred_category(category, outcome, has_bugs=False):
-    """The cause to route by. A run that ran out of money or time was too big for its limits, which is the request's
-    problem: that decides the route unless the retrospective named a Factory cause that is not a prompt (an Agent that fails
-    because its credential ran dry looks like a prompt gap, which it is not). With no cause named, the same rule applies."""
+    # The cause to route by. A run that ran out of money or time was too big for its limits, which is the request's
+    # problem: that decides the route unless the retrospective named a Factory cause that is not a prompt (an Agent that fails
+    # because its credential ran dry looks like a prompt gap, which it is not). With no cause named, the same rule applies.
     if outcome in ("budget_exhausted", "time_limit") and category in (None, "", "prompt_gap", "infra", "unknown", "model_limit"):
         return "model_limit"
     if outcome in ("watchdog_disabled", "regression") and category not in FACTORY_CATEGORIES:
@@ -45,7 +44,7 @@ def inferred_category(category, outcome, has_bugs=False):
 
 
 def route(category):
-    """Where a fix request goes, from the cause the retrospective named: factory, app or info."""
+    # Where a fix request goes, from the cause the retrospective named: factory, app or info.
     if category in FACTORY_CATEGORIES:
         return "factory"
     if category in APP_CATEGORIES:
@@ -54,8 +53,8 @@ def route(category):
 
 
 def fingerprint(app, origin, target, attempt=1):
-    """One per app, original Intake, route and attempt, so a retry chain files a new issue per attempt but a repeat of the
-    same attempt only comments."""
+    # One per app, original Intake, route and attempt, so a retry chain files a new issue per attempt but a repeat of the
+    # same attempt only comments.
     return hashlib.sha1(f"{app}|{origin}|{target}|{attempt}".encode()).hexdigest()[:8]
 
 
@@ -64,7 +63,7 @@ def clip(text, n=300):
 
 
 def rollback_line(rollback):
-    """The rollback, in one sentence for the issue."""
+    # The rollback, in one sentence for the issue.
     if not rollback:
         return "No rollback was attempted."
     status = rollback.get("status")
@@ -78,8 +77,8 @@ def rollback_line(rollback):
 
 
 def requirements(facts, result, rollback, app_side=False):
-    """Numbered, checkable requirements: what must be true once this is fixed. `app_side` is for a retry of the app's own
-    request, which carries no requirements about fixing the Factory."""
+    # Numbered, checkable requirements: what must be true once this is fixed. `app_side` is for a retry of the app's own
+    # request, which carries no requirements about fixing the Factory.
     outcome, message = facts.get("outcome"), clip(facts.get("message"), 200)
     reqs = []
     status = (rollback or {}).get("status")
@@ -122,15 +121,15 @@ def requirements(facts, result, rollback, app_side=False):
 
 
 def should_autostart(target, attempt, lim):
-    """Whether a fix request starts itself. Only the app route does (a Factory fix is a PR that a person merges), only when
-    switched on, and only for the first `fix_request_max_attempts` automatic retries of one Intake: a retry that fails
-    cannot file an endless chain of retries."""
+    # Whether a fix request starts itself. Only the app route does (a Factory fix is a PR that a person merges), only when
+    # switched on, and only for the first `fix_request_max_attempts` automatic retries of one Intake: a retry that fails
+    # cannot file an endless chain of retries.
     return target == "app" and bool(lim.get("fix_request_autostart", True)) and attempt <= int(lim.get("fix_request_max_attempts", 2))
 
 
 def attempt_info(failing_body, failing_number):
-    """(origin Intake, this attempt's number, earlier attempts' findings) for a failing Intake. A failing Intake that was
-    itself an automatic retry carries its metadata; any other is the origin and the next attempt is the first."""
+    # (origin Intake, this attempt's number, earlier attempts' findings) for a failing Intake. A failing Intake that was
+    # itself an automatic retry carries its metadata; any other is the origin and the next attempt is the first.
     meta = update_intake.fix_meta(failing_body)
     if meta:
         return meta.get("origin", failing_number), int(meta.get("attempt", 0)) + 1, [str(h) for h in meta.get("history", [])][-3:]
@@ -142,13 +141,13 @@ RETRYING = "retrying"
 
 
 def with_retry_state(state):
-    """The hidden state of a story's retries, appended to the comment that reports a failure."""
+    # The hidden state of a story's retries, appended to the comment that reports a failure.
     return f"<!-- factory-retry:{json.dumps(state, separators=(',', ':')).replace('--', chr(92) + 'u002d' + chr(92) + 'u002d')} -->"
 
 
 def retry_state(comments):
-    """The newest retry state hidden in a list of comment bodies ({} when the story has never failed): the attempt number, the story's
-    flag(s), what earlier attempts found, the guidance for the next attempt and the failed run it answers."""
+    # The newest retry state hidden in a list of comment bodies ({} when the story has never failed): the attempt number, the story's
+    # flag(s), what earlier attempts found, the guidance for the next attempt and the failed run it answers.
     for body in reversed([c for c in comments if isinstance(c, str)]):
         m = RETRY_RE.search(body)
         if m:
@@ -161,7 +160,7 @@ def retry_state(comments):
 
 
 def retry_note(flags, attempt=None):
-    """What the reviewer and tester are told when a story is retried: its flag is released again once it passes."""
+    # What the reviewer and tester are told when a story is retried: its flag is released again once it passes.
     if not flags:
         return ""
     names = ", ".join(f"`{f}`" for f in flags)
@@ -171,8 +170,8 @@ def retry_note(flags, attempt=None):
 
 
 def retry_decision(state, facts, lim):
-    """(duplicate, attempt, autostart) for a failure of a story whose retry state is `state`. A failure of a run already answered is a
-    duplicate; otherwise this is the next attempt, and it starts itself only while attempts remain."""
+    # (duplicate, attempt, autostart) for a failure of a story whose retry state is `state`. A failure of a run already answered is a
+    # duplicate; otherwise this is the next attempt, and it starts itself only while attempts remain.
     if state.get("last_run") and state.get("last_run") == facts.get("run_url"):
         return True, int(state.get("attempt", 0)), False
     attempt = int(state.get("attempt", 0)) + 1
@@ -192,14 +191,14 @@ GUIDANCE = {
 
 
 def extract_original(text):
-    """The request itself, from a request that may already be wrapped by an earlier fix request (so retries do not nest)."""
+    # The request itself, from a request that may already be wrapped by an earlier fix request (so retries do not nest).
     return text.split(ORIGINAL_MARKER, 1)[1].strip() if ORIGINAL_MARKER in (text or "") else (text or "").strip()
 
 
 def render(facts, result, rollback, target, intake_url="", auto=None, flags=()):
-    """The issue body, or for the app route the comment on the story's own issue. `auto` is None, or {"attempt": n, "max": m, "started": bool}."""
+    # The issue body, or for the app route the comment on the story's own issue. `auto` is None, or {"attempt": n, "max": m, "started": bool}.
     cat = (result or {}).get("category")
-    lines = [f"## What happened", "",
+    lines = ["## What happened", "",
              f"The Build Run for `{facts.get('app')}` ended **{facts.get('outcome')}**: {clip(facts.get('message'), 400)}", "",
              f"- Run: {facts.get('run_url')}", f"- Request: {intake_url or '#' + str(facts.get('issue_number'))}",
              f"- Review passes: {facts.get('review_passes', 0)}; spent ${(facts.get('spent_usd') or 0):.2f} of a ${(facts.get('cap_usd') or 0):.2f} cap"]
@@ -234,8 +233,8 @@ def render(facts, result, rollback, target, intake_url="", auto=None, flags=()):
 
 
 def app_request(facts, result, rollback, original, category=None, history=(), cap_note="", flags=()):
-    """The text of the Update Intake for the app route: what went wrong, what must be true this time, how to approach it,
-    and the original request last (extracted, so a retry of a retry does not nest)."""
+    # The text of the Update Intake for the app route: what went wrong, what must be true this time, how to approach it,
+    # and the original request last (extracted, so a retry of a retry does not nest).
     reqs = requirements(facts, result, rollback, app_side=True)
     parts = [("A previous attempt at the request below did not complete, so it is being asked again with what was learned." if original is not None
               else "A previous attempt at this request did not complete, so it is being tried again with what was learned."), "",
@@ -275,7 +274,7 @@ def gh(args, token):
 
 
 def failing_issue(repo, number, token):
-    """The body of the Intake whose run failed ('' if it cannot be read)."""
+    # The body of the Intake whose run failed ('' if it cannot be read).
     p = gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], token)
     try:
         return json.loads(p.stdout or "{}").get("body") or ""
@@ -296,7 +295,7 @@ def provider_alert_body(facts):
 
 
 def file_provider_alert(repo, token, facts):
-    """One open alert for the whole Factory: later blocked runs add a comment. Returns its URL."""
+    # One open alert for the whole Factory: later blocked runs add a comment. Returns its URL.
     for name, color, desc in (("provider-blocked", "b60205", "The model provider refuses requests (no balance)"),
                               ("needs-human", "b60205", "The Orchestrator stopped and needs a person")):
         update_intake.ensure_label(repo, name, token, color, desc)
@@ -312,7 +311,7 @@ def file_provider_alert(repo, token, facts):
 
 
 def failing_story(repo, number, token):
-    """The Intake whose run failed, as {"body", "comments": [bodies], "url"} (empty values if it cannot be read)."""
+    # The Intake whose run failed, as {"body", "comments": [bodies], "url"} (empty values if it cannot be read).
     p = gh(["issue", "view", str(number), "--repo", repo, "--json", "body,comments,url"], token)
     try:
         doc = json.loads(p.stdout or "{}")
@@ -322,12 +321,12 @@ def failing_story(repo, number, token):
 
 
 def file_app_retry(repo, token, pat, facts, result, rollback, lim, category):
-    """A failure of a story: the SAME issue is updated, never a new one. The failure, what was done about it and what to do next go in a
-    comment, with the retry state hidden in it (the attempt, the story's flag, what earlier attempts found, the guidance for the next
-    attempt). While attempts remain the PAT puts `proceed-with-change` back on the issue, so the same issue, with the same flag, runs
-    again; after `fix_request_max_attempts` it stays open, labelled `needs-human`, attached to its flag.
-    Returns {target, url, started, attempt}."""
-    app, number = facts.get("app"), facts.get("issue_number")
+    # A failure of a story: the SAME issue is updated, never a new one. The failure, what was done about it and what to do next go in a
+    # comment, with the retry state hidden in it (the attempt, the story's flag, what earlier attempts found, the guidance for the next
+    # attempt). While attempts remain the PAT puts `proceed-with-change` back on the issue, so the same issue, with the same flag, runs
+    # again; after `fix_request_max_attempts` it stays open, labelled `needs-human`, attached to its flag.
+    # Returns {target, url, started, attempt}.
+    number = facts.get("issue_number")
     story = failing_story(repo, number, token)
     state = retry_state(story["comments"])
     duplicate, attempt, autostart = retry_decision(state, facts, lim)
@@ -337,7 +336,7 @@ def file_app_retry(repo, token, pat, facts, result, rollback, lim, category):
     history.append(f"attempt {attempt - 1 or 'zero (the original request)'}: ended {facts.get('outcome')}: {clip(facts.get('message'), 160)}")
     flags = [f for f in (facts.get("flags") or state.get("flags") or []) if isinstance(f, str)]
     # A retry gets the cap the request had, never more: a story that could not finish inside it is too big for one pass, and the fix is to do less.
-    cap_note = (f"The last attempt ran out of money, and the cost cap is not raised for this one: do less in one pass, with the smallest change sets that work."
+    cap_note = ("The last attempt ran out of money, and the cost cap is not raised for this one: do less in one pass, with the smallest change sets that work."
                 if facts.get("outcome") == "budget_exhausted" else "")
     auto = {"attempt": attempt, "max": int(lim.get("fix_request_max_attempts", 2)), "started": autostart}
     new_state = {"attempt": attempt, "flags": flags, "history": history, "last_run": facts.get("run_url"),
@@ -356,9 +355,9 @@ def file_app_retry(repo, token, pat, facts, result, rollback, lim, category):
 
 
 def file_fix_request(repo, token, pat, facts, result, rollback, lim=None):
-    """For the Factory and information routes, create the fix request (or comment on the open one for this attempt). For the app route,
-    update the story's own issue and retry it (file_app_retry). `token` is the Actions token; `pat` adds the start label (events made by
-    the Actions token do not start workflows). Returns {target, url, started, attempt}."""
+    # For the Factory and information routes, create the fix request (or comment on the open one for this attempt). For the app route,
+    # update the story's own issue and retry it (file_app_retry). `token` is the Actions token; `pat` adds the start label (events made by
+    # the Actions token do not start workflows). Returns {target, url, started, attempt}.
     lim = lim or {}
     category = inferred_category((result or {}).get("category"), facts.get("outcome"), bool(facts.get("bugs")))
     result = dict(result or {}, category=category) if category else result

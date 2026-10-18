@@ -1,4 +1,4 @@
-"""Tests for the Fly orphan audit. Run: python3 -m unittest discover orchestrator"""
+# Tests for the Fly orphan audit. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import sys
 import unittest
 from pathlib import Path
@@ -35,6 +35,7 @@ class Ledger(unittest.TestCase):
 
     def test_record_agent_spend_writes_one_ledger_line_and_never_raises(self):
         from unittest import mock
+
         import build_run as b
         import retrospective as pm
         budget = mock.Mock()

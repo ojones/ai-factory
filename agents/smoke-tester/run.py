@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
-"""Seeded-bug screen for the tester (.wayfinder orchestrator-hardening, ticket 07).
-
-The reviewer has had seeded-bug fixtures since #33; nothing showed whether the tester fails a broken app, and the tester
-has twice marked a check passed that it could not have observed. This runs the real tester prompt (agents/prompts/tester.md)
-against a small flagged feature served locally, once correct and several times with exactly one bug seeded, and measures
-how often the tester notices.
-
-The app under test is the Starter Template with a notes API behind the flag `notes-api`. A local stub stands in for
-GrowthBook (kill switch on), so nothing touches production. The tester gets the spec, a git checkout with a "previous
-release" commit and a head commit (so `git log -p flags.json` shows the new flag), the app's URL and a Preview Token.
-
-Scoring, per run: the tester's report is read the way the Orchestrator reads it (`derive_test`, which also downgrades a
-`passed` check whose evidence admits it was not observed). A buggy app is caught if that says "not passed"; it is caught
-for the right reason if a failing check also matches the fixture's pattern. The correct app must pass.
-
-  python3 agents/smoke-tester/run.py --validate    no model: prove the correct feature passes an independent checker and every
-                                                   seeded bug is observable from outside (needs npm)
-  python3 agents/smoke-tester/run.py               run the screen (needs openhands and DEEPINFRA_API_KEY; costs real money,
-                                                   about $0.05 to $0.12 per run)
-
-Env: FIXTURES (comma-separated ids, default all), TRIALS (per fixture, default 2), WORKERS (default 3), TIMEOUT_MIN (per run,
-default 20), MODEL (default the tester in agents/profiles.yml), KEEP=1 (keep the working directories).
-Writes smoke-tester-results.json.
-"""
+# Seeded-bug screen for the tester (.wayfinder orchestrator-hardening, ticket 07).
+#
+# The reviewer has had seeded-bug fixtures since #33; nothing showed whether the tester fails a broken app, and the tester
+# has twice marked a check passed that it could not have observed. This runs the real tester prompt (agents/prompts/tester.md)
+# against a small flagged feature served locally, once correct and several times with exactly one bug seeded, and measures
+# how often the tester notices.
+#
+# The app under test is the Starter Template with a notes API behind the flag `notes-api`. A local stub stands in for
+# GrowthBook (kill switch on), so nothing touches production. The tester gets the spec, a git checkout with a "previous
+# release" commit and a head commit (so `git log -p flags.json` shows the new flag), the app's URL and a Preview Token.
+#
+# Scoring, per run: the tester's report is read the way the Orchestrator reads it (`derive_test`, which also downgrades a
+# `passed` check whose evidence admits it was not observed). A buggy app is caught if that says "not passed"; it is caught
+# for the right reason if a failing check also matches the fixture's pattern. The correct app must pass.
+#
+#   python3 agents/smoke-tester/run.py --validate    no model: prove the correct feature passes an independent checker and every
+#                                                    seeded bug is observable from outside (needs npm)
+#   python3 agents/smoke-tester/run.py               run the screen (needs openhands and DEEPINFRA_API_KEY; costs real money,
+#                                                    about $0.05 to $0.12 per run)
+#
+# Env: FIXTURES (comma-separated ids, default all), TRIALS (per fixture, default 2), WORKERS (default 3), TIMEOUT_MIN (per run,
+# default 20), MODEL (default the tester in agents/profiles.yml), KEEP=1 (keep the working directories).
+# Writes smoke-tester-results.json.
 import importlib.util
 import json
 import os
@@ -58,8 +57,8 @@ MOUNT = {"import": 'import { notesRouter } from "./routes/notes";', "use": "app.
 
 
 def apply_edits(source, edits):
-    """The base source with each [old, new] edit applied exactly once; an edit that does not apply is an error, so a
-    fixture cannot silently turn into the correct feature."""
+    # The base source with each [old, new] edit applied exactly once; an edit that does not apply is an error, so a
+    # fixture cannot silently turn into the correct feature.
     for old, new in edits:
         if source.count(old) != 1:
             raise ValueError(f"edit does not apply exactly once ({source.count(old)} matches): {old[:60]!r}")
@@ -72,9 +71,9 @@ def spec_for(fixtures, fixture):
 
 
 def judge(fixture, doc, flag):
-    """Score one tester report against what the fixture expects. Returns
-    {"outcome": caught|missed|false_alarm|correct|unusable, "right_reason": bool|None, "failed": [...]}.
-    `doc` is the report as parsed (or None). The Orchestrator's own reading is used: derive_test."""
+    # Score one tester report against what the fixture expects. Returns
+    # {"outcome": caught|missed|false_alarm|correct|unusable, "right_reason": bool|None, "failed": [...]}.
+    # `doc` is the report as parsed (or None). The Orchestrator's own reading is used: derive_test.
     if doc is None:
         return {"outcome": "unusable", "right_reason": None, "failed": []}
     try:
@@ -96,7 +95,7 @@ def judge(fixture, doc, flag):
 
 
 def summarize(results, fixtures):
-    """Per fixture and overall: how often a bug was caught, caught for the right reason, and a correct app flagged."""
+    # Per fixture and overall: how often a bug was caught, caught for the right reason, and a correct app flagged.
     rows, by = [], {f["id"]: f for f in fixtures}
     for fid, fixture in by.items():
         mine = [r for r in results if r["fixture"] == fid]
@@ -129,8 +128,8 @@ def free_port():
 
 
 class GrowthBookStub:
-    """Serves the SDK payload GrowthBook would: the kill switch on, no other flags (a feature flag that is not in the payload
-    reads as off, which is how a dark feature behaves)."""
+    # Serves the SDK payload GrowthBook would: the kill switch on, no other flags (a feature flag that is not in the payload
+    # reads as off, which is how a dark feature behaves).
 
     def __init__(self):
         slug = SLUG
@@ -157,7 +156,7 @@ class GrowthBookStub:
 
 
 def build_checkout(base, fixtures, fixture, dest):
-    """A git checkout with a 'previous release' commit (the Starter Template) and a head commit (the feature and its flag)."""
+    # A git checkout with a 'previous release' commit (the Starter Template) and a head commit (the feature and its flag).
     shutil.copytree(base, dest, symlinks=True)
     for cmd in (["git", "init", "-q", "-b", "main"], ["git", "config", "user.email", "smoke@ai-factory.local"],
                 ["git", "config", "user.name", "smoke"], ["git", "add", "-A"], ["git", "commit", "-qm", "previous release"]):
@@ -225,7 +224,7 @@ def http(method, url, body=None, token=False, timeout=10):
 
 
 def oracle(base):
-    """An independent checker for the spec: [(check name, ok)]. It is the answer key, not part of the tester."""
+    # An independent checker for the spec: [(check name, ok)]. It is the answer key, not part of the tester.
     out = []
     url = base + "/api/notes"
     out.append(("dark without the token", http("GET", url)[0] == 404 and http("POST", url, {"text": "x"})[0] == 404))
@@ -256,7 +255,7 @@ def load():
 
 
 def validate():
-    """No model: the correct feature passes the independent checker, and every seeded bug fails at least the check it should."""
+    # No model: the correct feature passes the independent checker, and every seeded bug fails at least the check it should.
     data, ok = load(), True
     with tempfile.TemporaryDirectory() as tmp:
         base = sc.prepare_base(Path(tmp))

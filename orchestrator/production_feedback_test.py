@@ -1,4 +1,4 @@
-"""Tests for the production-feedback scan. Run: python3 -m unittest discover orchestrator"""
+# Tests for the production-feedback scan. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import json
 import sys
 import unittest

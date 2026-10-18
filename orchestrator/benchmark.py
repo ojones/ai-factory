@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Whole-run benchmark: is a candidate model (or prompt) as good as the current one, and what does it save?
-
-The Factory swaps models as better, cheaper, faster or more specialised ones appear. A swap is only safe if it is measured on the real thing,
-the whole Build Run, not on one role in isolation. This runs a fixed SUITE of Intakes (agents/benchmark/suite.json) through the real Build Run
-workflow against one disposable bench app, resets that app to a frozen commit before every task, and scores each task with an ORACLE: `api_check`
-scenarios run against the deployed app, plus the outcome the task expects. Code decides pass or fail, never a model. The result is compared with
-the accepted BASELINE (agents/benchmark/baseline.json) under fixed RULES (agents/benchmark/rules.json), and the report says whether to accept the
-candidate and how much cost and time it saves.
-
-  python3 orchestrator/benchmark.py plan   [--candidate coder=ID,tester=ID] [--tasks a,b]    what a pass would do and cost (no spend)
-  python3 orchestrator/benchmark.py run    --label NAME [--candidate ...] [--tasks ...] [--execute]   a pass (without --execute it only prints the plan)
-  python3 orchestrator/benchmark.py compare RESULT.json                                       compare a result with the baseline
-  python3 orchestrator/benchmark.py accept  RESULT.json                                       make a result the new baseline
-  python3 orchestrator/benchmark.py freeze                                                    record the bench app's current main as the frozen base
-
-A candidate is a branch whose agents/profiles.yml names the candidate models; the runner dispatches the real `build-run.yml` from that branch, so
-production code carries no "benchmark mode". The branch also pins the limits that would make passes incomparable (no flag retirement
-ride-along, a short watchdog, no daily cap). See docs/benchmark-protocol.md.
-"""
+# Whole-run benchmark: is a candidate model (or prompt) as good as the current one, and what does it save?
+#
+# The Factory swaps models as better, cheaper, faster or more specialised ones appear. A swap is only safe if it is measured on the real thing,
+# the whole Build Run, not on one role in isolation. This runs a fixed SUITE of Intakes (agents/benchmark/suite.json) through the real Build Run
+# workflow against one disposable bench app, resets that app to a frozen commit before every task, and scores each task with an ORACLE: `api_check`
+# scenarios run against the deployed app, plus the outcome the task expects. Code decides pass or fail, never a model. The result is compared with
+# the accepted BASELINE (agents/benchmark/baseline.json) under fixed RULES (agents/benchmark/rules.json), and the report says whether to accept the
+# candidate and how much cost and time it saves.
+#
+#   python3 orchestrator/benchmark.py plan   [--candidate coder=ID,tester=ID] [--tasks a,b]    what a pass would do and cost (no spend)
+#   python3 orchestrator/benchmark.py run    --label NAME [--candidate ...] [--tasks ...] [--execute]   a pass (without --execute it only prints the plan)
+#   python3 orchestrator/benchmark.py compare RESULT.json                                       compare a result with the baseline
+#   python3 orchestrator/benchmark.py accept  RESULT.json                                       make a result the new baseline
+#   python3 orchestrator/benchmark.py freeze                                                    record the bench app's current main as the frozen base
+#
+# A candidate is a branch whose agents/profiles.yml names the candidate models; the runner dispatches the real `build-run.yml` from that branch, so
+# production code carries no "benchmark mode". The branch also pins the limits that would make passes incomparable (no flag retirement
+# ride-along, a short watchdog, no daily cap). See docs/benchmark-protocol.md.
 import json
 import re
 import sys
@@ -39,7 +38,7 @@ DEFAULT_RULES = {"max_pass_drop": 1, "max_cost_ratio": 1.3, "max_rounds_delta": 
 
 
 def parse_candidate(text):
-    """{role: model} from 'coder=a/b,tester=c/d'. A blank string means the current profile (a baseline pass). Raises ValueError for a bad pair."""
+    # {role: model} from 'coder=a/b,tester=c/d'. A blank string means the current profile (a baseline pass). Raises ValueError for a bad pair.
     out = {}
     for pair in [p.strip() for p in (text or "").split(",") if p.strip()]:
         role, _, model = pair.partition("=")
@@ -50,7 +49,7 @@ def parse_candidate(text):
 
 
 def candidate_profile(profile_text, overrides):
-    """The profiles.yml text for a pass: the given roles switched to the candidate models, and the limits that keep passes comparable."""
+    # The profiles.yml text for a pass: the given roles switched to the candidate models, and the limits that keep passes comparable.
     doc = yaml.safe_load(profile_text)
     for role, model in overrides.items():
         if role not in doc.get("roles", {}):
@@ -64,7 +63,7 @@ def candidate_profile(profile_text, overrides):
 
 
 def validate_suite(suite):
-    """Problems with a suite file (empty means usable)."""
+    # Problems with a suite file (empty means usable).
     problems, seen = [], set()
     tasks = suite.get("tasks") if isinstance(suite, dict) else None
     if not isinstance(tasks, list) or not tasks:
@@ -104,8 +103,8 @@ def select_tasks(suite, names):
 
 
 def score_task(task, report, oracle_results):
-    """One task's score from its Build Run Report (state.json) and the oracle's results. The outcome must be one the task expects, the cost must
-    stay under any `max_cost` it sets, and every oracle check must pass: nothing here asks a model."""
+    # One task's score from its Build Run Report (state.json) and the oracle's results. The outcome must be one the task expects, the cost must
+    # stay under any `max_cost` it sets, and every oracle check must pass: nothing here asks a model.
     outcome = (report or {}).get("outcome")
     expected = task.get("expected") or {}
     cost = float((report or {}).get("spent_usd") or 0)
@@ -119,7 +118,7 @@ def score_task(task, report, oracle_results):
 
 
 def minutes_between(a, b):
-    """Minutes between two ISO timestamps, or None if either cannot be read."""
+    # Minutes between two ISO timestamps, or None if either cannot be read.
     try:
         fmt = "%Y-%m-%dT%H:%M:%S"
         return round((time.mktime(time.strptime(b[:19], fmt)) - time.mktime(time.strptime(a[:19], fmt))) / 60, 1)
@@ -128,7 +127,7 @@ def minutes_between(a, b):
 
 
 def aggregate(scores):
-    """Totals over a pass: how many tasks passed, total cost and time, mean rounds of the tasks that ran Agents, and the failures by task."""
+    # Totals over a pass: how many tasks passed, total cost and time, mean rounds of the tasks that ran Agents, and the failures by task.
     n = len(scores)
     ran = [s for s in scores if s["rounds"]]
     minutes = [s["minutes"] for s in scores if s["minutes"] is not None]
@@ -138,10 +137,10 @@ def aggregate(scores):
 
 
 def compare(candidate, baseline, rules=None):
-    """{accept, reasons, deltas, improvement} for a candidate pass against the accepted baseline under the rules. The candidate is accepted only
-    if its pass count is within `max_pass_drop` of the baseline's, every task tagged in `must_pass_tags` that passed in the baseline still passes,
-    its cost is within `max_cost_ratio` times the baseline's and its mean rounds rise by at most `max_rounds_delta`. A faster or cheaper candidate
-    that stays inside those bounds is reported as an improvement."""
+    # {accept, reasons, deltas, improvement} for a candidate pass against the accepted baseline under the rules. The candidate is accepted only
+    # if its pass count is within `max_pass_drop` of the baseline's, every task tagged in `must_pass_tags` that passed in the baseline still passes,
+    # its cost is within `max_cost_ratio` times the baseline's and its mean rounds rise by at most `max_rounds_delta`. A faster or cheaper candidate
+    # that stays inside those bounds is reported as an improvement.
     rules = {**DEFAULT_RULES, **(rules or {})}
     reasons = []
     drop = baseline["passed"] - candidate["passed"]
@@ -181,7 +180,7 @@ def render_report(label, candidate_models, agg, verdict=None):
 
 
 def estimate(tasks):
-    """A rough price and duration for a pass, from what real runs have cost ($0.1 to $0.6 and 16 to 35 minutes an update run, a refusal about nothing)."""
+    # A rough price and duration for a pass, from what real runs have cost ($0.1 to $0.6 and 16 to 35 minutes an update run, a refusal about nothing).
     ran = [t for t in tasks if "refusal" not in t.get("tags", [])]
     return {"runs": len(ran), "refusals": len(tasks) - len(ran), "cost_low": round(0.12 * len(ran), 2), "cost_high": round(0.6 * len(ran) + 0.1 * (len(tasks) - len(ran)), 2),
             "hours_low": round(0.27 * len(ran), 1), "hours_high": round(0.6 * len(ran), 1)}
@@ -204,7 +203,7 @@ def gh(args, token=None, check=True):
 
 
 def publish_branch(repo, branch, profile_text):
-    """Create `branch` from main with agents/profiles.yml replaced by `profile_text` (through the API, so no local checkout is needed)."""
+    # Create `branch` from main with agents/profiles.yml replaced by `profile_text` (through the API, so no local checkout is needed).
     import base64
     sha = gh(["api", f"repos/{repo}/git/ref/heads/main", "--jq", ".object.sha"]).strip()
     gh(["api", "-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch}", "-f", f"sha={sha}"])
@@ -218,8 +217,8 @@ def delete_branch(repo, branch):
 
 
 def reset_bench(owner, app, base_sha):
-    """Force the bench app's main back to the frozen commit, and wait for that commit's deploy if main moved (an older deploy finishing
-    after a newer one would put the app back). Returns True if main moved."""
+    # Force the bench app's main back to the frozen commit, and wait for that commit's deploy if main moved (an older deploy finishing
+    # after a newer one would put the app back). Returns True if main moved.
     import os
     import subprocess
     import tempfile
@@ -246,6 +245,7 @@ def reset_bench(owner, app, base_sha):
 
 def file_task_issue(repo, app, pass_id, task):
     import os
+
     import fixrequest
     import update_intake
     token = os.environ["FACTORY_PAT"]
@@ -257,8 +257,7 @@ def file_task_issue(repo, app, pass_id, task):
 
 
 def dispatch_and_wait(repo, app, branch, issue, timeout_min=75):
-    """Dispatch the real Build Run workflow from the candidate branch and wait for it. Returns the run id."""
-    t0 = time.time() - 5
+    # Dispatch the real Build Run workflow from the candidate branch and wait for it. Returns the run id.
     gh(["workflow", "run", "build-run.yml", "--repo", repo, "--ref", branch, "-f", f"issue_number={issue}", "-f", f"app_name={app}"])
     run_id, deadline = None, time.time() + timeout_min * 60
     while time.time() < deadline:
@@ -282,7 +281,7 @@ def read_report(repo, run_id):
 
 
 def run_oracle(app, task):
-    """The task's setup checks, then its oracle checks, through api_check against the deployed bench app."""
+    # The task's setup checks, then its oracle checks, through api_check against the deployed bench app.
     import os
     sys.path.insert(0, str(Path(__file__).parent))
     import api_check
@@ -297,7 +296,7 @@ def run_oracle(app, task):
 
 
 def archive_bench_flags(app, keep=("bench-seed",)):
-    """Archive the features a pass created (GrowthBook cannot delete one), so a later pass starts clean. Best effort."""
+    # Archive the features a pass created (GrowthBook cannot delete one), so a later pass starts clean. Best effort.
     import os
     sys.path.insert(0, str(Path(__file__).parent))
     import build_run as b

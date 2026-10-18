@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Triage: what the Factory refuses before it spends anything.
-
-Two checks stop a request before a coder, tester or reviewer is paid for:
-
-  secrets   Intake issues and the app repos are PUBLIC. A request that contains a real secret value (a private key block, a provider token,
-            a password assignment) is refused at once, and the comment says what kind of thing was found and never repeats it. The owner
-            should rotate it, because it is already visible on the Intake issue.
-  feasible  The planner judges whether the request can be built here at all: inside the pinned Express + React stack, with free dependencies,
-            and without payments, a third-party secret or API key, or personal data. When it cannot, the planner says so in its plan
-            (`feasibility`) and the Build Run ends as `refused` after the planner call, nothing built, nothing retried.
-
-Nothing here asks a person: a refusal is a clear answer with the reason and what would make the request possible, on the Intake issue.
-"""
+# Triage: what the Factory refuses before it spends anything.
+#
+# Two checks stop a request before a coder, tester or reviewer is paid for:
+#
+#   secrets   Intake issues and the app repos are PUBLIC. A request that contains a real secret value (a private key block, a provider token,
+#             a password assignment) is refused at once, and the comment says what kind of thing was found and never repeats it. The owner
+#             should rotate it, because it is already visible on the Intake issue.
+#   feasible  The planner judges whether the request can be built here at all: inside the pinned Express + React stack, with free dependencies,
+#             and without payments, a third-party secret or API key, or personal data. When it cannot, the planner says so in its plan
+#             (`feasibility`) and the Build Run ends as `refused` after the planner call, nothing built, nothing retried.
+#
+# Nothing here asks a person: a refusal is a clear answer with the reason and what would make the request possible, on the Intake issue.
 import re
 
 # (kind, pattern). Specific shapes only, so an ordinary sentence about passwords is not refused.
@@ -44,7 +43,7 @@ POSSIBLE_IF = {
 
 
 def find_secrets(text):
-    """The kinds of secret in `text` (each once, in order), never the values. Empty when there is none."""
+    # The kinds of secret in `text` (each once, in order), never the values. Empty when there is none.
     kinds = []
     for kind, pattern in SECRET_PATTERNS:
         for m in pattern.finditer(text or ""):
@@ -58,7 +57,7 @@ def find_secrets(text):
 
 
 def secret_name_problem(name):
-    """Why `name` cannot be an app secret's name, or None."""
+    # Why `name` cannot be an app secret's name, or None.
     if not isinstance(name, str) or not SECRET_NAME_RE.match(name):
         return f"{name!r} is not a valid secret name (capitals, digits and underscores, starting with a letter, such as OPENWEATHER_API_KEY)"
     if name in RESERVED_SECRET_NAMES or name.startswith(("GITHUB_", "FLY_")):
@@ -67,13 +66,13 @@ def secret_name_problem(name):
 
 
 def diff_secrets(patch):
-    """The kinds of real secret value on the lines a diff adds (each once, never the values)."""
+    # The kinds of real secret value on the lines a diff adds (each once, never the values).
     added = "\n".join(l[1:] for l in (patch or "").splitlines() if l.startswith("+") and not l.startswith("+++"))
     return [k for k in find_secrets(added) if k in DIFF_SECRET_KINDS]
 
 
 def secrets_request(secrets, app_repo):
-    """The Intake comment that asks the owner for the values: each name and purpose and the exact command, never a value."""
+    # The Intake comment that asks the owner for the values: each name and purpose and the exact command, never a value.
     lines = ["This request needs a third-party secret, which no Agent may hold and the public repositories cannot store. Nothing was built.", "",
              "Set each one as a GitHub Actions secret on the app's repository (the command prompts for the value, so it never appears in an issue, a log or a commit):", ""]
     for x in secrets:
@@ -90,7 +89,7 @@ def secret_refusal(kinds):
 
 
 def feasibility(plan):
-    """(blocked, category, reasons, possible_if) from a plan's `feasibility` object; not blocked when it is absent or malformed."""
+    # (blocked, category, reasons, possible_if) from a plan's `feasibility` object; not blocked when it is absent or malformed.
     f = plan.get("feasibility") if isinstance(plan, dict) else None
     if not isinstance(f, dict) or f.get("status") != "blocked":
         return False, "", [], ""

@@ -1,4 +1,4 @@
-"""Tests for the benchmark's pure logic. Run: python3 -m unittest discover orchestrator"""
+# Tests for the benchmark's pure logic. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import json
 import sys
 import unittest
@@ -7,8 +7,8 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
-import benchmark as bm  # noqa: E402
 import api_check  # noqa: E402
+import benchmark as bm  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 

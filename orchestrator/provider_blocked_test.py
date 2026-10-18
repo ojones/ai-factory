@@ -1,5 +1,5 @@
-"""A model provider that refuses every request because the account has no balance (found when DeepInfra answered 402 mid-session).
-Nothing retries, files a self-starting fix request or runs a retrospective Agent for it; one alert asks for a top-up."""
+# A model provider that refuses every request because the account has no balance (found when DeepInfra answered 402 mid-session).
+# Nothing retries, files a self-starting fix request or runs a retrospective Agent for it; one alert asks for a top-up.
 import json
 import sys
 import tempfile

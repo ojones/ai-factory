@@ -29,6 +29,15 @@ If the gate fails after a push, the same Build Run keeps watching the GitHub Act
 Purely mechanical — checks are the style guide, not prose. The Starter Template ships Prettier (`npm run format`) and ESLint (`npm run lint`, part of `npm run check` and so of the Test Gate); formatting itself is not a gate, so an old file is never failed for its layout, but the coder runs `npm run format` first, before the build and the tests. No prose conventions (naming philosophy, comment density) for an Agent to probabilistically get wrong. Beyond formatting, the lint config carries the Factory's own rules for what recurring review findings showed (a test must not assert on source text or on `flags.json`, no committed `.only`, a test must make an assertion, and one whose only assertions are `toBeTruthy`/`toBeDefined` is a warning; anything named `expect*`, `assert*`, `verify*` or `should*` counts as an assertion, so a helper such as `expectStatus` is fine); each has failing and passing cases in `agents/lint-fixtures/cases.json`. The lint and formatter config belongs to the Orchestrator: the coder cannot edit it or suppress a rule to get past it, it fixes the code. New rules arrive through template sync and the coder fixes what they report in that Update Intake.
 → [issues/11](.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
 
+## Factory Python
+
+The Factory's own Python (`orchestrator/`, `agents/`) is linted with [ruff](https://docs.astral.sh/ruff/), configured in `pyproject.toml` (`ruff check`, a step of the `unit` job in `factory-checks.yml`). Rules are added there one at a time, so the set only grows.
+
+- **Test files** are named `<name>_test.py`, beside the module they test (`build_run.py` → `build_run_test.py`), never `test_<name>.py`. CI runs `python -m unittest discover -p "*_test.py" orchestrator`, which only finds that suffix, so a misnamed file would silently never run. Test methods inside a file keep the `test_` prefix, which `unittest` requires.
+- **Comments are `#` comments. No docstrings**, and no bare string standing in for a comment. Say what a module, class or function is for in `#` lines at the top of its body. Triple-quoted strings are fine as data (a prompt, a fixture), just not as a statement on their own. Code must not read `__doc__`.
+
+`orchestrator/style_test.py` enforces both (ruff has no rule for either) and fails the build.
+
 ## Git workflow
 
 Only the coder Agent pushes, and it pushes directly to `main` — no branches, no PRs. Review happens after the push, on `main`, while the new feature is still dark behind its feature flag ([STANDARDS-FEATURE-FLAGS.md](STANDARDS-FEATURE-FLAGS.md#release-and-retirement)). The flag is the gate for going public, the test gate is the gate for a healthy build, and a self-merged PR would add a step without adding safety.

@@ -1,6 +1,5 @@
-"""The pure logic of agents/smoke-tester/run.py: how a bug is seeded and how a tester report is judged."""
+# The pure logic of agents/smoke-tester/run.py: how a bug is seeded and how a tester report is judged.
 import importlib.util
-import json
 import sys
 import unittest
 from pathlib import Path

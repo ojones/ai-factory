@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-"""ui-check: the tester states what a page should show and do; this drives a real browser, observes, and compares.
-
-The browser counterpart of api_check.py, for the part of a Managed App only a browser sees: what renders, what a form does, what a
-flagged control looks like with and without the Preview Token. The model's job is to say *which* screens and interactions the spec
-calls for and what each should show. This opens the page headless (Chromium through Playwright), performs the steps, reads what is
-actually there and compares it mechanically. Every result is appended to `$UI_CHECK_LOG`, which the Orchestrator reads
-(build_run.reconcile_ui_checks), so a failure the helper saw cannot be reported as a pass or left out.
-
-  python3 ui_check.py checks.json [--base https://app.fly.dev]
-
-Env: PREVIEW_TOKEN (opens the page with the Preview Token for a check with "auth": "preview"; never printed, logged or screenshotted),
-UI_CHECK_BASE (the base URL if --base is not given), UI_CHECK_LOG (JSONL results), UI_CHECK_DIR (where failure screenshots go),
-PLAYWRIGHT_BROWSERS_PATH. Exit 0 if every check passed, 1 if any failed, 2 if the file is unusable.
-
-A checks file is {"checks": [...]}. Each check is a scenario in a fresh browser context:
-
-  {"id": "add-todo", "name": "Adding a todo shows it in the list", "start": "/", "auth": "preview" | "none",
-   "steps": [{"fill": {"label": "New todo", "value": "factory-test-a"}}, {"click": {"role": "button", "name": "Add"}},
-             {"press": "Enter"}, {"goto": "/other"}, {"wait_for": {"text": "factory-test-a"}}, {"check": {"label": "Done"}}],
-   "expect": {"visible": [LOC], "hidden": [LOC], "text": [{...LOC, "contains": "x"} or {...LOC, "equals": "x"}],
-              "count": [{...LOC, "is": 1}], "url_path": "/", "title_contains": "Todo", "no_console_errors": true}}
-
-LOC (a locator) is one of {"role": "button", "name": "Add"}, {"label": "New todo"}, {"text": "Hello"}, {"placeholder": "..."},
-{"test_id": "..."}, with optional "exact": true. Role and label locators are preferred: they are what a user sees. Checks run in order,
-at most 30 per file and 20 steps per check, 8 seconds per action, and only the base URL's origin is ever requested.
-"""
+# ui-check: the tester states what a page should show and do; this drives a real browser, observes, and compares.
+#
+# The browser counterpart of api_check.py, for the part of a Managed App only a browser sees: what renders, what a form does, what a
+# flagged control looks like with and without the Preview Token. The model's job is to say *which* screens and interactions the spec
+# calls for and what each should show. This opens the page headless (Chromium through Playwright), performs the steps, reads what is
+# actually there and compares it mechanically. Every result is appended to `$UI_CHECK_LOG`, which the Orchestrator reads
+# (build_run.reconcile_ui_checks), so a failure the helper saw cannot be reported as a pass or left out.
+#
+#   python3 ui_check.py checks.json [--base https://app.fly.dev]
+#
+# Env: PREVIEW_TOKEN (opens the page with the Preview Token for a check with "auth": "preview"; never printed, logged or screenshotted),
+# UI_CHECK_BASE (the base URL if --base is not given), UI_CHECK_LOG (JSONL results), UI_CHECK_DIR (where failure screenshots go),
+# PLAYWRIGHT_BROWSERS_PATH. Exit 0 if every check passed, 1 if any failed, 2 if the file is unusable.
+#
+# A checks file is {"checks": [...]}. Each check is a scenario in a fresh browser context:
+#
+#   {"id": "add-todo", "name": "Adding a todo shows it in the list", "start": "/", "auth": "preview" | "none",
+#    "steps": [{"fill": {"label": "New todo", "value": "factory-test-a"}}, {"click": {"role": "button", "name": "Add"}},
+#              {"press": "Enter"}, {"goto": "/other"}, {"wait_for": {"text": "factory-test-a"}}, {"check": {"label": "Done"}}],
+#    "expect": {"visible": [LOC], "hidden": [LOC], "text": [{...LOC, "contains": "x"} or {...LOC, "equals": "x"}],
+#               "count": [{...LOC, "is": 1}], "url_path": "/", "title_contains": "Todo", "no_console_errors": true}}
+#
+# LOC (a locator) is one of {"role": "button", "name": "Add"}, {"label": "New todo"}, {"text": "Hello"}, {"placeholder": "..."},
+# {"test_id": "..."}, with optional "exact": true. Role and label locators are preferred: they are what a user sees. Checks run in order,
+# at most 30 per file and 20 steps per check, 8 seconds per action, and only the base URL's origin is ever requested.
 import json
 import os
 import re
@@ -42,7 +41,7 @@ LOCATORS = ("role", "label", "text", "placeholder", "test_id")
 
 
 def loc_key(loc):
-    """A short readable name for a locator, used in problems and as the key of what was observed."""
+    # A short readable name for a locator, used in problems and as the key of what was observed.
     kind = next((k for k in LOCATORS if k in loc), None)
     if kind is None:
         return "?"
@@ -55,7 +54,7 @@ def valid_locator(loc):
 
 
 def validate(doc):
-    """(checks, error). Unique ids, known actions, valid locators, and only paths on the base URL."""
+    # (checks, error). Unique ids, known actions, valid locators, and only paths on the base URL.
     checks = doc.get("checks") if isinstance(doc, dict) else doc
     if not isinstance(checks, list) or not checks:
         return None, "the file needs a non-empty list of checks"
@@ -95,8 +94,8 @@ def validate(doc):
 
 
 def compare(expect, obs):
-    """The problems found when what the page showed (`obs`) is held against `expect`. Empty: the check passed.
-    obs: {"visible": {key: bool}, "text": {key: str or None}, "count": {key: int}, "url_path": str, "title": str, "console_errors": [str]}"""
+    # The problems found when what the page showed (`obs`) is held against `expect`. Empty: the check passed.
+    # obs: {"visible": {key: bool}, "text": {key: str or None}, "count": {key: int}, "url_path": str, "title": str, "console_errors": [str]}
     problems = []
     for loc in expect.get("visible", []):
         if not obs["visible"].get(loc_key(loc)):
@@ -187,9 +186,9 @@ def observe(page, expect, console_errors, token, text_timeout=3000):
 
 
 def settle(page, expect, console_errors, token, patience=EXPECT_PATIENCE_S):
-    """What the page shows once it has had a few seconds to settle, with the problems found. A page updates after a network call, so
-    the expectations are re-read until they hold or the patience runs out (the way Playwright's own assertions wait), and only the
-    last reading counts. Without this a correct page fails because the check looked a moment too soon."""
+    # What the page shows once it has had a few seconds to settle, with the problems found. A page updates after a network call, so
+    # the expectations are re-read until they hold or the patience runs out (the way Playwright's own assertions wait), and only the
+    # last reading counts. Without this a correct page fails because the check looked a moment too soon.
     deadline = time.time() + patience
     while True:
         obs = observe(page, expect, console_errors, token, text_timeout=400)
@@ -219,8 +218,9 @@ def do_step(page, step, base):
 
 
 def run_checks(checks, base, token, log_path=None, shot_dir=None):
-    from playwright.sync_api import sync_playwright
     from urllib.parse import urlparse
+
+    from playwright.sync_api import sync_playwright
     origin = "{0.scheme}://{0.netloc}".format(urlparse(base))
     results = []
     with sync_playwright() as p:
@@ -234,8 +234,8 @@ def run_checks(checks, base, token, log_path=None, shot_dir=None):
             ctx.set_default_timeout(ACTION_TIMEOUT_MS)
             ctx.route("**/*", lambda route, request: route.continue_() if request.url.startswith(origin) or request.url.startswith("data:") else route.abort())
             page, console_errors = ctx.new_page(), []
-            page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
-            page.on("pageerror", lambda e: console_errors.append(str(e)))
+            page.on("console", lambda m, errs=console_errors: errs.append(m.text) if m.type == "error" else None)
+            page.on("pageerror", lambda e, errs=console_errors: errs.append(str(e)))
             try:
                 if c.get("auth") == "preview":
                     if not token:

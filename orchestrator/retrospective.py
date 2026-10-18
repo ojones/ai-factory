@@ -1,41 +1,40 @@
 #!/usr/bin/env python3
-"""After every Build Run, released or not: record what it taught, propose the fix as a PR, and report back on the issue that started it.
-
-A run is a chance to improve the whole system, whether it released or stopped. The retrospective reads what the run found: why it
-ended as it did, the minor findings it shipped with (they no longer cause rounds, so they would otherwise be lost), and the
-`improvements` the reviewer and tester suggested for avoiding what they found. Runs as its own workflow step after
-`build_run.py finalize`, on every run, and never fails the run:
-
-1. Facts: a deterministic record of the run (outcome, per-round blocking findings and which recurred,
-   time and cost per stage, the improvements suggested), written as an artifact.
-2. Issue: one `factory-learning` issue in ai-factory per distinct failure (a fingerprint in the title
-   collapses repeats into a comment on the existing issue).
-3. Improvements: each one the reviewer or tester suggested becomes a suggestion issue in the Managed App's repo (target
-   `managed_app`) or a `factory-learning` issue in ai-factory (target `factory`), deduplicated and capped per run. The Agents only
-   suggest; the Orchestrator files.
-4. Retrospective Agent: reads the facts, names a root-cause category, and edits the Factory checkout
-   (prompts, Starter Template, orchestrator) with the smallest change that would have prevented it. It runs only when there is
-   something new to look at.
-5. Pull request: the Orchestrator, not the Agent, validates the changed paths, runs the unit tests,
-   commits to a branch and opens a PR for a human to review. The Agent never holds a credential.
-6. Report: a short summary of the retrospective is commented on the issue that started the run (the story), so the story keeps what
-   the run found and what was filed.
-
-A run that finishes can still teach the Factory, so `lessons_from` also records: a
-release the watchdog switched off, a run that needed many review rounds, a first test pass the coder had to
-fix, a run that spent most of its budget, and a stage that ran very long. Each is a `factory-learning` issue
-with a fingerprint. A lesson that was closed (its fix merged) and comes back is reopened as `fix-ineffective`,
-so a change that did not work is visible. `lesson <issue>` (the Factory Run workflow) runs the same Agent and
-PR path for an older lesson on demand.
-
-Minor findings still open at the end of a run (clean or not) also become: a suggestion issue in the
-Managed App's own repo (its backlog), and a `factory-learning` issue in ai-factory per distinct finding,
-which the Agent considers for a generalizing prompt or template change straight away (no threshold:
-the Agent must justify that it generalizes or decline, and a human reviews the PR). A finding whose
-issue already records a proposed PR is not sent to the Agent again.
-
-Usage: retrospective.py   (env as for build_run.py finalize, plus DEEPINFRA_API_KEY and FACTORY_PAT)
-"""
+# After every Build Run, released or not: record what it taught, propose the fix as a PR, and report back on the issue that started it.
+#
+# A run is a chance to improve the whole system, whether it released or stopped. The retrospective reads what the run found: why it
+# ended as it did, the minor findings it shipped with (they no longer cause rounds, so they would otherwise be lost), and the
+# `improvements` the reviewer and tester suggested for avoiding what they found. Runs as its own workflow step after
+# `build_run.py finalize`, on every run, and never fails the run:
+#
+# 1. Facts: a deterministic record of the run (outcome, per-round blocking findings and which recurred,
+#    time and cost per stage, the improvements suggested), written as an artifact.
+# 2. Issue: one `factory-learning` issue in ai-factory per distinct failure (a fingerprint in the title
+#    collapses repeats into a comment on the existing issue).
+# 3. Improvements: each one the reviewer or tester suggested becomes a suggestion issue in the Managed App's repo (target
+#    `managed_app`) or a `factory-learning` issue in ai-factory (target `factory`), deduplicated and capped per run. The Agents only
+#    suggest; the Orchestrator files.
+# 4. Retrospective Agent: reads the facts, names a root-cause category, and edits the Factory checkout
+#    (prompts, Starter Template, orchestrator) with the smallest change that would have prevented it. It runs only when there is
+#    something new to look at.
+# 5. Pull request: the Orchestrator, not the Agent, validates the changed paths, runs the unit tests,
+#    commits to a branch and opens a PR for a human to review. The Agent never holds a credential.
+# 6. Report: a short summary of the retrospective is commented on the issue that started the run (the story), so the story keeps what
+#    the run found and what was filed.
+#
+# A run that finishes can still teach the Factory, so `lessons_from` also records: a
+# release the watchdog switched off, a run that needed many review rounds, a first test pass the coder had to
+# fix, a run that spent most of its budget, and a stage that ran very long. Each is a `factory-learning` issue
+# with a fingerprint. A lesson that was closed (its fix merged) and comes back is reopened as `fix-ineffective`,
+# so a change that did not work is visible. `lesson <issue>` (the Factory Run workflow) runs the same Agent and
+# PR path for an older lesson on demand.
+#
+# Minor findings still open at the end of a run (clean or not) also become: a suggestion issue in the
+# Managed App's own repo (its backlog), and a `factory-learning` issue in ai-factory per distinct finding,
+# which the Agent considers for a generalizing prompt or template change straight away (no threshold:
+# the Agent must justify that it generalizes or decline, and a human reviews the PR). A finding whose
+# issue already records a proposed PR is not sent to the Agent again.
+#
+# Usage: retrospective.py   (env as for build_run.py finalize, plus DEEPINFRA_API_KEY and FACTORY_PAT)
 import filecmp
 import hashlib
 import json
@@ -65,7 +64,7 @@ SLOW_STAGE_SECONDS = 900
 AUTO_MERGE_RE = re.compile(r"^templates/starter/(\.eslintrc[^/]*|eslint\.config\.[cm]?[jt]s|\.prettierrc[^/]*|"
                            r"prettier\.config\.[cm]?[jt]s|\.editorconfig)$")
 # A lesson's change should come with something that would have caught it: a smoke or replay case, a test.
-FIXTURE_RE = re.compile(r"^(agents/replay/cases\.json|agents/lint-fixtures/|agents/smoke-coder/tasks/|orchestrator/test_|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
+FIXTURE_RE = re.compile(r"^(agents/replay/cases\.json|agents/lint-fixtures/|agents/smoke-coder/tasks/|orchestrator/[^/]+_test\.py|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
 SMOKE_DIFF_RE = re.compile(r"^agents/smoke/fixtures/[^/]+\.diff$")
 SMOKE_EXPECTED = "agents/smoke/expected.json"
 # Emphasis a prompt change must not add: a louder sentence is not a fix, and a model that was told so still adds it.
@@ -79,13 +78,13 @@ def allowed_path(path):
 
 
 def normalize(summary):
-    """The first few meaningful words of a finding, so rewordings of one problem match."""
+    # The first few meaningful words of a finding, so rewordings of one problem match.
     words = [w for w in re.findall(r"[a-z0-9]+", summary.lower()) if w not in STOP_WORDS]
     return " ".join(words[:6])
 
 
 def collect_facts(work, d):
-    """Deterministic facts about a run. `work` holds findings-N.json written per round."""
+    # Deterministic facts about a run. `work` holds findings-N.json written per round.
     rounds, seen, final_minor = [], {}, []
     for path in sorted(Path(work).glob("findings-*.json"), key=lambda p: p.name):
         doc = b.load_json(path) or {}
@@ -112,7 +111,7 @@ def collect_facts(work, d):
 
 
 def fingerprint(facts):
-    """Stable across runs of the same failure: outcome plus the recurring (else final) findings."""
+    # Stable across runs of the same failure: outcome plus the recurring (else final) findings.
     basis = facts["recurring_findings"] or sorted(normalize(s) for s in facts["final_blocking"])
     return hashlib.sha1(json.dumps([facts["outcome"], basis]).encode()).hexdigest()[:8]
 
@@ -122,8 +121,8 @@ def lesson_fingerprint(kind, basis):
 
 
 def lessons_from(facts):
-    """Things a run taught the Factory beyond being stuck. Each is {kind, title, severe, detail}; at most
-    MAX_LESSONS, the severe ones first. A stuck run is recorded separately by record_issue."""
+    # Things a run taught the Factory beyond being stuck. Each is {kind, title, severe, detail}; at most
+    # MAX_LESSONS, the severe ones first. A stuck run is recorded separately by record_issue.
     outcome, ok = facts["outcome"], facts["outcome"] in b.OK_OUTCOMES
     found = []
 
@@ -155,27 +154,27 @@ def lessons_from(facts):
 
 
 def pick_existing(issues, title):
-    """(open issue number, closed issue number) among issues whose title matches exactly."""
+    # (open issue number, closed issue number) among issues whose title matches exactly.
     open_n = next((i["number"] for i in issues if i["title"] == title and i.get("state", "OPEN").upper() == "OPEN"), None)
     closed_n = next((i["number"] for i in issues if i["title"] == title and i.get("state", "").upper() == "CLOSED"), None)
     return open_n, closed_n
 
 
 def added_lines(patch_text):
-    """The lines a unified diff adds (not the `+++` file headers)."""
+    # The lines a unified diff adds (not the `+++` file headers).
     return [l[1:] for l in patch_text.splitlines() if l.startswith("+") and not l.startswith("+++")]
 
 
 def adds_emphasis(patch_text):
-    """True if a diff of agents/prompts/*.md adds shouting (CRITICAL, WARNING, MUST, a warning sign...). Only the
-    added lines count, so a prompt that already says MUST somewhere is not blamed for it."""
+    # True if a diff of agents/prompts/*.md adds shouting (CRITICAL, WARNING, MUST, a warning sign...). Only the
+    # added lines count, so a prompt that already says MUST somewhere is not blamed for it.
     return any(EMPHASIS_RE.search(l) for l in added_lines(patch_text))
 
 
 def bad_fixture_reason(fixture_diffs):
-    """Why new reviewer smoke fixtures cannot be used, or None. `fixture_diffs` maps each new
-    agents/smoke/fixtures/*.diff path to its text. The reviewer is shown a Managed App's change, so a fixture that is
-    not a diff of app code (for example a diff of a Factory prompt) tests nothing the reviewer ever sees."""
+    # Why new reviewer smoke fixtures cannot be used, or None. `fixture_diffs` maps each new
+    # agents/smoke/fixtures/*.diff path to its text. The reviewer is shown a Managed App's change, so a fixture that is
+    # not a diff of app code (for example a diff of a Factory prompt) tests nothing the reviewer ever sees.
     for path, text in fixture_diffs.items():
         if not APP_PATH_RE.search(text):
             return f"{path} is not a diff of Managed App code (it must change files under backend/ or frontend/)"
@@ -183,18 +182,18 @@ def bad_fixture_reason(fixture_diffs):
 
 
 def wants_fix_request(d, limits):
-    """A fix request is filed for every Build Run that did not end well (`planned` and the good endings do not)."""
+    # A fix request is filed for every Build Run that did not end well (`planned` and the good endings do not).
     return bool(limits.get("fix_requests", True)) and d.get("outcome") not in b.OK_OUTCOMES and d.get("outcome") not in ("provider_blocked", "refused", "awaiting_secret")
 
 
 def records_stuck_issue(outcome):
-    """Whether a run's ending gets the generic `Stuck run` lesson. A release the watchdog switched off is already a
-    specific, severe lesson (`watchdog_disabled`); recording it twice made two issues and two analyses for one event."""
+    # Whether a run's ending gets the generic `Stuck run` lesson. A release the watchdog switched off is already a
+    # specific, severe lesson (`watchdog_disabled`); recording it twice made two issues and two analyses for one event.
     return outcome not in b.OK_OUTCOMES and outcome not in ("watchdog_disabled", "provider_blocked", "refused", "awaiting_secret")
 
 
 def lesson_has_fixture(paths):
-    """True when a change set includes a test, smoke case or replay case alongside the fix."""
+    # True when a change set includes a test, smoke case or replay case alongside the fix.
     # A reviewer smoke fixture only counts as a pair: the diff the reviewer is shown and its expected.json entry. The
     # harness runs every fixtures/*.diff, so stray files in that folder would exercise nothing.
     if any(SMOKE_DIFF_RE.match(p) for p in paths) and SMOKE_EXPECTED in paths:
@@ -203,8 +202,8 @@ def lesson_has_fixture(paths):
 
 
 def auto_merge_eligible(numstat):
-    """`git diff --numstat` lines -> True only if every changed file is lint/formatter config in the
-    Starter Template and nothing was deleted (the change can only add or tighten a check)."""
+    # `git diff --numstat` lines -> True only if every changed file is lint/formatter config in the
+    # Starter Template and nothing was deleted (the change can only add or tighten a check).
     rows = [line.split("\t") for line in numstat.splitlines() if line.strip()]
     if not rows:
         return False
@@ -242,7 +241,7 @@ def gh(args, token, check=False):
 
 
 def record_issue(repo, token, facts):
-    """Create the learning issue, or comment on the open one for the same fingerprint. Returns its number."""
+    # Create the learning issue, or comment on the open one for the same fingerprint. Returns its number.
     gh(["label", "create", LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
     title = title_for(facts)
     found = gh(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--search", f"{fingerprint(facts)} in:title",
@@ -258,8 +257,8 @@ def record_issue(repo, token, facts):
 
 
 def record_lesson(repo, token, lesson, facts):
-    """Create or update the `factory-learning` issue for a lesson. Returns (number, status) with status
-    `new`, `again` (an open one exists) or `reopened` (a closed one came back: the fix did not work)."""
+    # Create or update the `factory-learning` issue for a lesson. Returns (number, status) with status
+    # `new`, `again` (an open one exists) or `reopened` (a closed one came back: the fix did not work).
     gh(["label", "create", LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
     gh(["label", "create", "fix-ineffective", "--repo", repo, "--color", "b60205", "--description", "A lesson came back after its fix merged"], token)
     found = gh(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "all", "--search", f"{lesson['title']} in:title",
@@ -305,9 +304,9 @@ def content_words(text):
 
 
 def similar_open_issue(repo, token, summary, label=None, threshold=SIMILAR):
-    """The number of an open issue in `repo` that is about the same problem as `summary`, or None. Reworded titles still match (compared by
-    their content words, ignoring the `[fingerprint]` and the Improvement/Suggestion prefix), so a repeat adds context to the issue that
-    exists instead of opening a second one. Looks at the 100 most recent open issues."""
+    # The number of an open issue in `repo` that is about the same problem as `summary`, or None. Reworded titles still match (compared by
+    # their content words, ignoring the `[fingerprint]` and the Improvement/Suggestion prefix), so a repeat adds context to the issue that
+    # exists instead of opening a second one. Looks at the 100 most recent open issues.
     wanted = content_words(str(summary)[:60])
     if not wanted:
         return None
@@ -327,7 +326,7 @@ RECURRING_LABEL = "recurring"
 
 
 def sightings(body):
-    """{run url: app} recorded in an issue body's hidden `seen` marker."""
+    # {run url: app} recorded in an issue body's hidden `seen` marker.
     m = SEEN_RE.search(body or "")
     try:
         return dict(json.loads(m.group(1))) if m else {}
@@ -336,8 +335,8 @@ def sightings(body):
 
 
 def with_sighting(body, run_url, app):
-    """The body with this run added to its hidden marker, and the counts: (body, distinct runs, distinct apps). Keyed by run URL, so a
-    retry of the same run, or the same run reported twice, is one sighting."""
+    # The body with this run added to its hidden marker, and the counts: (body, distinct runs, distinct apps). Keyed by run URL, so a
+    # retry of the same run, or the same run reported twice, is one sighting.
     seen = sightings(body)
     seen[run_url] = app
     marker = f"<!-- seen:{json.dumps(seen, sort_keys=True)} -->"
@@ -346,8 +345,8 @@ def with_sighting(body, run_url, app):
 
 
 def note_sighting(repo, token, number, facts, promote_after):
-    """Count this run against a `factory-learning` issue (hidden marker in its body; the label `recurring` once `promote_after` distinct
-    runs have seen it). Returns the number of distinct runs."""
+    # Count this run against a `factory-learning` issue (hidden marker in its body; the label `recurring` once `promote_after` distinct
+    # runs have seen it). Returns the number of distinct runs.
     out = gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], token).stdout
     body, runs, _ = with_sighting((json.loads(out or "{}")).get("body") or "", facts["run_url"], facts["app"])
     gh(["issue", "edit", str(number), "--repo", repo, "--body", body] + (["--add-label", RECURRING_LABEL] if runs >= max(promote_after, 2) else []), token)
@@ -355,8 +354,8 @@ def note_sighting(repo, token, number, facts, promote_after):
 
 
 def ready_for_fix(runs, promote_after, severe=False):
-    """Whether an issue earns the Agent's analysis and fix PR: at once when it is severe or `promote_after` is 1 or less, otherwise once
-    that many distinct runs have seen it. One-off findings are still recorded and counted."""
+    # Whether an issue earns the Agent's analysis and fix PR: at once when it is severe or `promote_after` is 1 or less, otherwise once
+    # that many distinct runs have seen it. One-off findings are still recorded and counted.
     return severe or promote_after <= 1 or runs >= promote_after
 
 
@@ -366,8 +365,8 @@ def already_proposed(repo, token, number):
 
 
 def record_minors(repo, token, app_repo, pat, facts):
-    """Suggestion issues in the Managed App's repo; one factory-learning issue per distinct finding.
-    Returns [(factory issue number, already proposed)]."""
+    # Suggestion issues in the Managed App's repo; one factory-learning issue per distinct finding.
+    # Returns [(factory issue number, already proposed)].
     gh(["label", "create", LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
     recorded = []
     for m in facts["final_minor"][:MAX_MINORS]:
@@ -398,7 +397,7 @@ BUG_LABEL = "bug"
 
 
 def bug_notes(facts):
-    """The bugs the tester noted, as the text added to the story's own issue."""
+    # The bugs the tester noted, as the text added to the story's own issue.
     lines = ["## Bugs the tester saw", "", f"Run: {facts['run_url']}", ""]
     for x in facts["bugs"][:MAX_BUGS]:
         what = "behaviour that was live before this change stopped working" if x["kind"] == "regression" else f"a check of the new change failed (flag `{x['flag'] or 'none'}`)"
@@ -407,9 +406,9 @@ def bug_notes(facts):
 
 
 def note_bugs_on_story(repo, token, number, facts, carried):
-    """The bugs belong to the Managed App's own story, so they go on the Update Intake that started the run, not into a new issue: the
-    story gets the `bug` label and, unless the retry comment already carries them (`carried`), a comment listing them. The retry (the
-    start label added again) is the fix request's job and is bounded by `fix_request_max_attempts`. Once per run."""
+    # The bugs belong to the Managed App's own story, so they go on the Update Intake that started the run, not into a new issue: the
+    # story gets the `bug` label and, unless the retry comment already carries them (`carried`), a comment listing them. The retry (the
+    # start label added again) is the fix request's job and is bounded by `fix_request_max_attempts`. Once per run.
     if not facts.get("bugs"):
         return False
     gh(["label", "create", BUG_LABEL, "--repo", repo, "--color", "d73a4a", "--description", "Something is not working"], token)
@@ -428,9 +427,9 @@ def improvement_title(i):
 
 
 def record_improvements(repo, token, app_repo, pat, facts):
-    """File what the reviewer and tester suggested. A `managed_app` improvement is a suggestion in the app's own repo (once, while one is
-    open); a `factory` improvement is a `factory-learning` issue in ai-factory (a comment when it is already open). Capped per run.
-    Returns ([(factory issue number, already proposed)], [{target, summary, url}]) for the Agent and for the report."""
+    # File what the reviewer and tester suggested. A `managed_app` improvement is a suggestion in the app's own repo (once, while one is
+    # open); a `factory` improvement is a `factory-learning` issue in ai-factory (a comment when it is already open). Capped per run.
+    # Returns ([(factory issue number, already proposed)], [{target, summary, url}]) for the Agent and for the report.
     gh(["label", "create", LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
     for_agent, filed = [], []
     for i in facts.get("improvements", [])[:MAX_MINORS]:
@@ -463,7 +462,7 @@ def record_improvements(repo, token, app_repo, pat, facts):
 
 
 def render_retrospective(facts, filed, lessons, result=None, bugs=()):
-    """The short summary commented on the issue that started the run."""
+    # The short summary commented on the issue that started the run.
     notes = []
     if facts.get("dark_broken"):
         notes.append("**Dark feature left behind**: its flag stays off and the next attempt fixes it forward behind the same flag.")
@@ -491,7 +490,7 @@ def render_retrospective(facts, filed, lessons, result=None, bugs=()):
 
 
 def post_retrospective(repo, token, number, run_id, body):
-    """Comment the summary on the issue that started the run, once per run (a re-run of this step does not post it twice)."""
+    # Comment the summary on the issue that started the run, once per run (a re-run of this step does not post it twice).
     marker = f"<!-- retrospective:{run_id} -->"
     seen = gh(["issue", "view", str(number), "--repo", repo, "--json", "comments"], token).stdout or ""
     if marker in seen:
@@ -501,8 +500,8 @@ def post_retrospective(repo, token, number, run_id, body):
 
 
 def mint_agent(cfg, parent_key):
-    """(credential, budget): a single-model DeepInfra credential limited to `retrospective_cost_cap_usd`, so the Agent never
-    holds the parent key and one analysis cannot spend more than the cap. (None, None) if one cannot be minted."""
+    # (credential, budget): a single-model DeepInfra credential limited to `retrospective_cost_cap_usd`, so the Agent never
+    # holds the parent key and one analysis cannot spend more than the cap. (None, None) if one cannot be minted.
     try:
         limits = cfg["limits"]
         budget = b.Budget(parent_key, float(limits.get("retrospective_cost_cap_usd", 0.5)), int(limits["jwt_ttl_seconds"]))
@@ -517,7 +516,7 @@ def mint_agent_key(cfg, parent_key):
 
 
 def record_agent_spend(budget, key, repo, token, run_id):
-    """Add what the Agent actually spent to the spend ledger, so the daily cap sees it (best effort, never fails the run)."""
+    # Add what the Agent actually spent to the spend ledger, so the daily cap sees it (best effort, never fails the run).
     try:
         spent = budget.refresh(key)
         b.log(f"retrospective agent spent ${spent:.4f}")
@@ -534,13 +533,13 @@ def agent_user():
 
 
 def share_with(path, user):
-    """Make what the Orchestrator just created readable and writable by the Agent user too (a copy's permissions drop the ACL's reach)."""
+    # Make what the Orchestrator just created readable and writable by the Agent user too (a copy's permissions drop the ACL's reach).
     if user:
         b.sh(["sudo", "-n", "setfacl", "-R", "-m", f"u:{user}:rwX,u:{os.environ.get('USER', 'runner')}:rwX", str(path)], check=False)
 
 
 def listing(root):
-    """({relative path: file} for regular files, {relative path: target} for symlinks) of a tree, skipping `.git`."""
+    # ({relative path: file} for regular files, {relative path: target} for symlinks) of a tree, skipping `.git`.
     files, links = {}, {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
@@ -555,8 +554,8 @@ def listing(root):
 
 
 def tree_changes(before, after):
-    """What the Agent did to its copy of the tree: ({path: "A" | "M" | "D"} for regular files, [symlinks it added or changed]). Two
-    plain trees are compared, never a git directory the Agent could have booby-trapped (a hook or config the Orchestrator would run)."""
+    # What the Agent did to its copy of the tree: ({path: "A" | "M" | "D"} for regular files, [symlinks it added or changed]). Two
+    # plain trees are compared, never a git directory the Agent could have booby-trapped (a hook or config the Orchestrator would run).
     bf, bl = listing(before)
     af, al = listing(after)
     changes = {}
@@ -572,8 +571,8 @@ def tree_changes(before, after):
 
 
 def apply_changes(before, after, changes):
-    """Copy the Agent's changes into the Orchestrator's own checkout, only for paths the Agent may change and files of a sane size.
-    Returns the paths applied. Nothing the Agent made outside those paths ever reaches the checkout git runs in."""
+    # Copy the Agent's changes into the Orchestrator's own checkout, only for paths the Agent may change and files of a sane size.
+    # Returns the paths applied. Nothing the Agent made outside those paths ever reaches the checkout git runs in.
     applied = []
     for rel, kind in sorted(changes.items()):
         if not allowed_path(rel):
@@ -591,8 +590,8 @@ def apply_changes(before, after, changes):
 
 
 def scratch_root():
-    """A fresh directory for one Agent run, inside the Agent user's area when isolation is on (the Orchestrator's own temp
-    directories are closed to it)."""
+    # A fresh directory for one Agent run, inside the Agent user's area when isolation is on (the Orchestrator's own temp
+    # directories are closed to it).
     base = Path(os.environ.get("BUILD_RUN_DIR") or tempfile.gettempdir())
     root = base / f"retrospective-{os.getpid()}-{int(time.time())}"
     root.mkdir(parents=True)
@@ -600,8 +599,8 @@ def scratch_root():
 
 
 def run_tests(factory, root, user):
-    """The orchestrator's unit tests over the Factory tree as it will be proposed, run as the Agent user in a throwaway copy with no
-    credential in its environment: the Agent may have edited test files, and a test is code. True when they pass."""
+    # The orchestrator's unit tests over the Factory tree as it will be proposed, run as the Agent user in a throwaway copy with no
+    # credential in its environment: the Agent may have edited test files, and a test is code. True when they pass.
     verify = root / "verify"
     shutil.copytree(factory, verify, ignore=shutil.ignore_patterns(".git", "node_modules"), symlinks=True)
     share_with(verify, user)
@@ -611,16 +610,16 @@ def run_tests(factory, root, user):
         (root / name).mkdir(exist_ok=True)
     share_with(root, user)
     out = root / "tests.out"
-    rc = b.run_watched([sys.executable, "-m", "unittest", "discover", "orchestrator"], verify, env, out, 900, 0, user=user,
+    rc = b.run_watched([sys.executable, "-m", "unittest", "discover", "-p", "*_test.py", "orchestrator"], verify, env, out, 900, 0, user=user,
                        pidfile=root / "pgid-tests.txt")
     return rc == 0
 
 
 def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
-    """Run the retrospective Agent in a copy of the Factory tree, as the unprivileged Agent user when isolation is on (the same
-    account and self-check as the Build Run's Agents), with a scrubbed environment and a capped scoped key. Whatever it changes is
-    carried back into `factory` by `apply_changes`, only for allowed paths; its answer is copied to `result_path`. Returns False when
-    isolation is on but cannot be proven, in which case no Agent runs."""
+    # Run the retrospective Agent in a copy of the Factory tree, as the unprivileged Agent user when isolation is on (the same
+    # account and self-check as the Build Run's Agents), with a scrubbed environment and a capped scoped key. Whatever it changes is
+    # carried back into `factory` by `apply_changes`, only for allowed paths; its answer is copied to `result_path`. Returns False when
+    # isolation is on but cannot be proven, in which case no Agent runs.
     user = agent_user()
     if user:
         problems = b.run_isolation_probes(user)
@@ -664,7 +663,7 @@ def open_learning_prs(repo, token):
 
 
 def rejected_proposal(factory, paths):
-    """The guardrails that look at what the Agent actually changed. Returns the reason to discard it, or None."""
+    # The guardrails that look at what the Agent actually changed. Returns the reason to discard it, or None.
     prompts = [p for p in paths if p.startswith("agents/prompts/") and p.endswith(".md")]
     if prompts:
         patch_text = b.sh(["git", "diff", "HEAD", "--", *prompts], cwd=factory).stdout
@@ -676,9 +675,9 @@ def rejected_proposal(factory, paths):
 
 
 def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
-    """Validate what the Agent changed, test it, and open a PR. Returns the PR URL or None.
-    The PR is labelled `auto-merge-candidate` only for an additive lint/formatter change; the PR checks
-    workflow recomputes that and merges after its checks pass. Everything else waits for a human."""
+    # Validate what the Agent changed, test it, and open a PR. Returns the PR URL or None.
+    # The PR is labelled `auto-merge-candidate` only for an additive lint/formatter change; the PR checks
+    # workflow recomputes that and merges after its checks pass. Everything else waits for a human.
     changed = [l[3:].strip() for l in b.sh(["git", "status", "--porcelain"], cwd=factory).stdout.splitlines() if l]
     bad = [c for c in changed if not allowed_path(c)]
     for c in bad:  # drop anything outside the allowed paths rather than refusing the whole proposal
@@ -733,7 +732,7 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
 
 
 def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path, targets, run_id):
-    """Run the Agent once for these lesson issues, comment its analysis on each, and open the PR."""
+    # Run the Agent once for these lesson issues, comment its analysis on each, and open the PR.
     key, budget = mint_agent(cfg, parent_key)
     if not key:
         return None
@@ -757,7 +756,7 @@ def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path,
 
 
 def lesson_main(number):
-    """The Factory Run: analyse one existing lesson issue (label `ready-for-factory-run`) on demand."""
+    # The Factory Run: analyse one existing lesson issue (label `ready-for-factory-run`) on demand.
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     issue = json.loads(gh(["issue", "view", str(number), "--repo", repo, "--json", "title,body,comments,labels"], token).stdout)
@@ -850,8 +849,8 @@ def main():
 
 
 def auto_merge_check(base, head):
-    """Exit 0 only if the diff base...head is an additive lint/formatter change. The PR checks workflow
-    calls this before merging a PR labelled `auto-merge-candidate`; it does not trust the label."""
+    # Exit 0 only if the diff base...head is an additive lint/formatter change. The PR checks workflow
+    # calls this before merging a PR labelled `auto-merge-candidate`; it does not trust the label.
     numstat = b.sh(["git", "diff", "--numstat", f"{base}...{head}"], cwd=b.FACTORY_DIR).stdout
     ok = auto_merge_eligible(numstat)
     print("auto-merge eligible" if ok else "not eligible for auto-merge (a human merges this)")

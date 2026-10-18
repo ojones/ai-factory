@@ -1,8 +1,7 @@
-"""One test per design invariant in docs/invariants.md. Run: python3 -m unittest discover orchestrator
-
-The meta test at the bottom keeps the table and these tests in step: every INV-NN row has exactly one
-`test_invNN_...` here and every test here has a row.
-"""
+# One test per design invariant in docs/invariants.md. Run: python3 -m unittest discover -p "*_test.py" orchestrator
+#
+# The meta test at the bottom keeps the table and these tests in step: every INV-NN row has exactly one
+# `test_invNN_...` here and every test here has a row.
 import json
 import os
 import re
@@ -235,7 +234,9 @@ class Invariants(unittest.TestCase):
         self.assertEqual(u.ready_to_start([kid(1, "OPEN", [u.GO], []), kid(2, "OPEN", [u.WAIT], [])]), [])
 
     def test_inv24_only_the_go_label_on_an_update_intake_starts_a_run_and_modules_agree_on_good_endings(self):
-        import appstate, audit, dashboard
+        import appstate
+        import audit
+        import dashboard
         wf = yaml.safe_load((ROOT / ".github/workflows/update-intake.yml").read_text())
         self.assertEqual(wf[True]["issues"]["types"], ["labeled"])  # YAML reads the key `on` as True
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
@@ -264,7 +265,8 @@ class Invariants(unittest.TestCase):
         self.assertTrue(audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
 
     def test_inv26_a_bad_ending_is_handled_on_the_stories_own_issue_or_as_one_fix_request(self):
-        import fixrequest as fr, retrospective as pm
+        import fixrequest as fr
+        import retrospective as pm
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
             self.assertTrue(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release", "planned"):
@@ -310,7 +312,7 @@ class Invariants(unittest.TestCase):
         self.assertEqual(b.check_state({"status": "passed", "evidence": "Cannot see logs, but npm run test:file shows 1 passed"}), "passed")
 
     def test_inv29_a_provider_with_no_balance_stops_the_run_and_retries_nothing(self):
-        import fixrequest as fr, retrospective as pm
+        import retrospective as pm
         event = '{"code": "LLMBadRequestError", "detail": "OpenAIException - You need positive balance to do inference", "kind": "ConversationErrorEvent"}'
         self.assertTrue(b.provider_blocked_text(event))
         self.assertFalse(b.provider_blocked_text("the spec mentions a positive balance"))
@@ -442,8 +444,8 @@ class Invariants(unittest.TestCase):
             self.assertTrue(hasattr(b.BuildRun, fn))
 
     def test_inv40_an_impossible_request_is_refused_before_anything_is_built(self):
-        import triage as tr
         import retrospective as pm2
+        import triage as tr
         self.assertEqual(tr.find_secrets("key sk-" + "x1y2z3w4v5u6t7s8r9q0p1o2"), ["an API key (sk- style)"])
         self.assertEqual(tr.find_secrets("add a password field"), [])
         self.assertTrue(tr.feasibility({"feasibility": {"status": "blocked", "category": "payments", "reasons": ["card"]}})[0])
@@ -481,8 +483,8 @@ class Invariants(unittest.TestCase):
         self.assertLess(run_src.index("review_before_push"), run_src.index("self.push(head)"))
         self.assertLess(run_src.index("self.push(head)"), run_src.index("test_deployed"))
         self.assertIn("PipelineFix", run_src)  # a fix CI needed is reviewed again before it is pushed
-        # and the run's rounds, exercised end to end with the stages stubbed (test_build_run.RoundLoop)
-        from test_build_run import RoundLoop
+        # and the run's rounds, exercised end to end with the stages stubbed (build_run_test.RoundLoop)
+        from build_run_test import RoundLoop
         t = RoundLoop()
         run = t.make([t.BLOCKED, t.CLEAN], [t.PASSED])
         t.go(run)
@@ -517,6 +519,7 @@ class Invariants(unittest.TestCase):
 
     def test_inv45_the_retrospective_agent_is_isolated_like_the_build_run_agents(self):
         import inspect
+
         import retrospective as pm
         src = inspect.getsource(pm.run_agent)
         self.assertIn("run_isolation_probes", src)
@@ -533,7 +536,7 @@ class Invariants(unittest.TestCase):
         self.assertEqual(pm.tree_changes.__module__, "retrospective")
 
     def test_inv46_what_blocks_or_retries_is_decided_from_structure_not_labels(self):
-        from test_build_run import RoundLoop, finding
+        from build_run_test import RoundLoop, finding
         self.assertFalse(b.derive_review({"findings": [finding()]})[0])
         for weak in (finding(evidence_kind="opinion"), finding(category="style"), finding(file="", line="")):
             self.assertTrue(b.derive_review({"findings": [weak]})[0])

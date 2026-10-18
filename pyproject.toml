@@ -1,0 +1,11 @@
+# Lint config for the Factory's own Python (orchestrator/, agents/). Run: ruff check
+# Comments are written with #, never docstrings: orchestrator/style_test.py enforces that, because ruff has no rule for it.
+[tool.ruff]
+target-version = "py312"
+line-length = 160
+extend-exclude = [".scratch", ".wayfinder", "templates", ".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+# Style-only rules the existing code does not follow; add them back one at a time when the code is ready.
+ignore = ["E501", "E741", "E731", "B904", "B905"]

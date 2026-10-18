@@ -1,36 +1,35 @@
 #!/usr/bin/env python3
-"""api-check: the tester states what a request should return; this observes what it does return and compares them.
-
-The tester agent used to run `curl` and judge for itself whether the answer was right, and the seeded-bug benchmark
-(agents/smoke-tester) showed that judgement slipping: a 200 where the spec says 201 was waved through. Here the model's
-job is only to say *which* checks the spec calls for and what each expects. The comparison is mechanical, and every result
-is appended to a log (`$API_CHECK_LOG`) that the Orchestrator reads, so a failure the helper saw cannot be reported as a
-pass, or left out of the report (build_run.reconcile_api_checks).
-
-  python3 api_check.py checks.json [--base https://app.fly.dev]
-
-Env: PREVIEW_TOKEN (sent as X-Preview-Token for a check with "auth": "preview"; never printed or logged),
-API_CHECK_BASE (the base URL if --base is not given), API_CHECK_LOG (a JSONL file each result is appended to).
-Exit status 0 if every check passed, 1 if any failed, 2 if the file is unusable. Standard library only.
-
-A checks file is {"checks": [...]} (or the list itself). Each check:
-
-  {"id": "create-201",                         unique; the report refers to it
-   "name": "POST /api/notes with valid text answers 201",
-   "request": {"method": "POST", "path": "/api/notes", "auth": "preview" | "none",
-               "json": {"text": "a"}  or  "body": "raw text, e.g. malformed JSON",  "headers": {"X-Other": "v"}},
-   "expect": {"status": 201 | [200, 201],
-              "json": {"id": "<integer>", "text": "a"},     a subset match: extra keys in the answer are fine, lists must
-                                                            be the same length, and "<number>", "<integer>", "<string>",
-                                                            "<nonempty-string>", "<boolean>", "<array>", "<object>",
-                                                            "<null>" and "<any>" stand for any value of that kind
-              "body_contains": ["..."], "body_not_contains": ["..."],
-              "headers": {"content-type": "application/json"}, "header_absent": ["x-secret"]},
-   "capture": {"note_id": "id"}}               remember a value from the answer (dotted path, e.g. "items.0.id") and use
-                                               it as {note_id} in later paths and JSON
-
-Checks run in order, one request each, 15 seconds at most per request, at most 100 per file, and only against the base URL.
-"""
+# api-check: the tester states what a request should return; this observes what it does return and compares them.
+#
+# The tester agent used to run `curl` and judge for itself whether the answer was right, and the seeded-bug benchmark
+# (agents/smoke-tester) showed that judgement slipping: a 200 where the spec says 201 was waved through. Here the model's
+# job is only to say *which* checks the spec calls for and what each expects. The comparison is mechanical, and every result
+# is appended to a log (`$API_CHECK_LOG`) that the Orchestrator reads, so a failure the helper saw cannot be reported as a
+# pass, or left out of the report (build_run.reconcile_api_checks).
+#
+#   python3 api_check.py checks.json [--base https://app.fly.dev]
+#
+# Env: PREVIEW_TOKEN (sent as X-Preview-Token for a check with "auth": "preview"; never printed or logged),
+# API_CHECK_BASE (the base URL if --base is not given), API_CHECK_LOG (a JSONL file each result is appended to).
+# Exit status 0 if every check passed, 1 if any failed, 2 if the file is unusable. Standard library only.
+#
+# A checks file is {"checks": [...]} (or the list itself). Each check:
+#
+#   {"id": "create-201",                         unique; the report refers to it
+#    "name": "POST /api/notes with valid text answers 201",
+#    "request": {"method": "POST", "path": "/api/notes", "auth": "preview" | "none",
+#                "json": {"text": "a"}  or  "body": "raw text, e.g. malformed JSON",  "headers": {"X-Other": "v"}},
+#    "expect": {"status": 201 | [200, 201],
+#               "json": {"id": "<integer>", "text": "a"},     a subset match: extra keys in the answer are fine, lists must
+#                                                             be the same length, and "<number>", "<integer>", "<string>",
+#                                                             "<nonempty-string>", "<boolean>", "<array>", "<object>",
+#                                                             "<null>" and "<any>" stand for any value of that kind
+#               "body_contains": ["..."], "body_not_contains": ["..."],
+#               "headers": {"content-type": "application/json"}, "header_absent": ["x-secret"]},
+#    "capture": {"note_id": "id"}}               remember a value from the answer (dotted path, e.g. "items.0.id") and use
+#                                                it as {note_id} in later paths and JSON
+#
+# Checks run in order, one request each, 15 seconds at most per request, at most 100 per file, and only against the base URL.
 import json
 import os
 import re
@@ -60,7 +59,7 @@ TYPES = {
 
 
 def mismatches(expected, observed, path="$"):
-    """What differs between an expectation and an observed JSON value; an empty list means it matches."""
+    # What differs between an expectation and an observed JSON value; an empty list means it matches.
     if isinstance(expected, str) and expected in TYPES:
         return [] if TYPES[expected](observed) else [f"{path}: expected {expected[1:-1]}, got {short(observed)}"]
     if isinstance(expected, dict):
@@ -93,7 +92,7 @@ def short(value, n=80):
 
 
 def dig(value, dotted):
-    """The value at a dotted path ('items.0.id'), or raises KeyError."""
+    # The value at a dotted path ('items.0.id'), or raises KeyError.
     for part in str(dotted).split("."):
         if isinstance(value, list):
             value = value[int(part)]
@@ -105,7 +104,7 @@ def dig(value, dotted):
 
 
 def substitute(value, captures):
-    """{name} replaced by a captured value in a string or inside nested JSON; unknown names are left as they are."""
+    # {name} replaced by a captured value in a string or inside nested JSON; unknown names are left as they are.
     if isinstance(value, str):
         return re.sub(r"\{([A-Za-z_]\w*)\}", lambda m: str(captures[m.group(1)]) if m.group(1) in captures else m.group(0), value)
     if isinstance(value, dict):
@@ -116,7 +115,7 @@ def substitute(value, captures):
 
 
 def compare(expect, status, body_text, body_json, headers):
-    """The problems found when an answer is held against `expect` (empty list: the check passed)."""
+    # The problems found when an answer is held against `expect` (empty list: the check passed).
     problems = []
     if "status" in expect:
         want = expect["status"] if isinstance(expect["status"], list) else [expect["status"]]
@@ -145,7 +144,7 @@ def compare(expect, status, body_text, body_json, headers):
 
 
 def validate(doc):
-    """(checks, error). The file must be a list of checks (or {"checks": [...]}) with unique ids."""
+    # (checks, error). The file must be a list of checks (or {"checks": [...]}) with unique ids.
     checks = doc.get("checks") if isinstance(doc, dict) else doc
     if not isinstance(checks, list) or not checks:
         return None, "the file needs a non-empty list of checks"
@@ -171,7 +170,7 @@ def validate(doc):
 
 
 def do_request(base, request, captures, token):
-    """(status, body text, parsed JSON or None, headers, error). A connection failure is status 0 with an error."""
+    # (status, body text, parsed JSON or None, headers, error). A connection failure is status 0 with an error.
     method = str(request.get("method", "GET")).upper()
     url = base.rstrip("/") + substitute(request["path"], captures)
     headers = {k: str(substitute(v, captures)) for k, v in (request.get("headers") or {}).items()}
@@ -203,7 +202,7 @@ def do_request(base, request, captures, token):
 
 
 def run_checks(checks, base, token, log_path=None):
-    """Run the checks in order. Returns the result dicts; appends each to `log_path` as one JSON line."""
+    # Run the checks in order. Returns the result dicts; appends each to `log_path` as one JSON line.
     captures, results = {}, []
     for c in checks:
         began = time.time()

@@ -1,4 +1,4 @@
-"""Unit tests for the Build Run's deterministic logic. Run: python3 -m unittest discover orchestrator"""
+# Unit tests for the Build Run's deterministic logic. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import json
 import os
 import subprocess
@@ -34,7 +34,7 @@ class Intake(unittest.TestCase):
 
 
 def finding(**over):
-    """A reviewer finding as the schema requires it: blocking, backed by a cited file and line."""
+    # A reviewer finding as the schema requires it: blocking, backed by a cited file and line.
     return {"severity": "blocking", "category": "correctness", "evidence_kind": "cited", "summary": "x", "evidence": "e",
             "file": "backend/src/a.ts", "line": "3", "requirement": "", "suggested_fix": "", "repro": "", **over}
 
@@ -152,7 +152,7 @@ class Guards(unittest.TestCase):
 
 
 class Prompts(unittest.TestCase):
-    """Every role prompt's placeholders are exactly the ones the orchestrator supplies."""
+    # Every role prompt's placeholders are exactly the ones the orchestrator supplies.
     SUPPLIED = {
         "coder": {"app_name", "round", "task", "findings_path", "build_kind", "issue_ref"},
         "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "build_kind", "spec"},
@@ -344,7 +344,7 @@ class CoderModelPerRound(unittest.TestCase):
 
 
 class ReviewBeforePushThenTest(unittest.TestCase):
-    """The reviewer reads the local commit before the push; the tester drives the deployed app after it. Agents are stubbed; git is faked."""
+    # The reviewer reads the local commit before the push; the tester drives the deployed app after it. Agents are stubbed; git is faked.
 
     def make(self, head_flags, agent):
         run = object.__new__(b.BuildRun)
@@ -479,7 +479,7 @@ class SuppressionsAndLintConfig(unittest.TestCase):
         self.assertEqual(b.suppression_findings(lambda *a: "", "base", "head"), [])
 
     def run_with_template(self, files, labels=("template-sync",)):
-        """A real app checkout with a base commit, and a Starter Template folder holding `files`."""
+        # A real app checkout with a base commit, and a Starter Template folder holding `files`.
         import subprocess
         import tempfile
         tmp = Path(tempfile.mkdtemp())
@@ -534,8 +534,8 @@ class SuppressionsAndLintConfig(unittest.TestCase):
 
 
 class RoundLoop(unittest.TestCase):
-    """The order of a Build Run's rounds with every stage stubbed: review the local commit, push only a clean one, wait for the deploy,
-    then test it."""
+    # The order of a Build Run's rounds with every stage stubbed: review the local commit, push only a clean one, wait for the deploy,
+    # then test it.
 
     def make(self, reviews, tests, pipeline_fix=False):
         run = object.__new__(b.BuildRun)
@@ -978,7 +978,6 @@ class JsonOutput(unittest.TestCase):
         self.assertIn("not accepted", b.json_problem(self.write('{"a": 1}'), lambda d: False))
 
     def test_the_second_attempt_is_told_what_was_wrong_with_the_first(self):
-        from unittest import mock
         run = object.__new__(b.BuildRun)
         path = self.write(None)
         notes, attempts = [], []
@@ -1055,7 +1054,8 @@ class RunWatched(unittest.TestCase):
         self.assertFalse(b.silent_too_long(0, 10**6, 0))
 
     def test_a_silent_process_is_killed_as_a_stall_and_a_chatty_one_finishes(self):
-        import sys, tempfile
+        import sys
+        import tempfile
         out = Path(tempfile.mkdtemp()) / "o.jsonl"
         started = time.time()
         rc = b.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
@@ -1240,7 +1240,7 @@ class MisplacedFile(unittest.TestCase):
 
 class ModelFallback(unittest.TestCase):
     def run_for(self, answers, roles=None, update=True):
-        """A BuildRun whose provider answers per model id (status, body)."""
+        # A BuildRun whose provider answers per model id (status, body).
         run = object.__new__(b.BuildRun)
         run.update_intake = update
         run.cfg = {"provider": {"base_url": "https://llm"}, "roles": roles or {
@@ -1300,7 +1300,7 @@ class ModelFallback(unittest.TestCase):
     def test_the_status_of_a_model_is_read_from_the_answer(self):
         for answer, expected in (((200, {}), "ok"), ((404, "x"), "missing"), ((400, {"error": "model foo not found"}), "missing"),
                                  ((500, "boom"), "unknown"), ((429, "slow"), "unknown")):
-            with mock.patch.object(b, "http", lambda *a, **k: answer):
+            with mock.patch.object(b, "http", lambda *a, answer=answer, **k: answer):
                 self.assertEqual(b.model_status("https://llm", "k", "m"), expected, answer)
 
 
@@ -1325,7 +1325,7 @@ class ScoreboardCategories(unittest.TestCase):
 
 
 class CheckProblem(unittest.TestCase):
-    """The Orchestrator's own `npm run check` on the coder's commit, before the reviewer."""
+    # The Orchestrator's own `npm run check` on the coder's commit, before the reviewer.
 
     def make(self, scripts, exit_code=0, output="src/a.ts(3,1): error TS2322"):
         import tempfile

@@ -1,15 +1,14 @@
-"""Where each Managed App stands, kept in GitHub issues the Orchestrator maintains.
-
-- The **App State issue** (label `factory-state`) in each Managed App's repo: its recent Build Runs and every flag
-  a Build Run released, with the flag's last known state. This is how a person, or the next Build Run, learns
-  "what is in flight, what is released" without reading logs. It is an issue, not a file on `main`: a commit
-  would redeploy the app, race the release step, and break "only the coder's work reaches main".
-- The **registry issue** (label `factory-registry`) in ai-factory: one row per Managed App, linking each State issue.
-
-Each body carries its data as JSON in an HTML comment, so a rewrite never has to parse the tables. `finalize`
-calls `update_state_issue` and `update_registry` after every Build Run, best effort: a failure here never changes
-a run's outcome. The rendering functions are pure and unit-tested.
-"""
+# Where each Managed App stands, kept in GitHub issues the Orchestrator maintains.
+#
+# - The **App State issue** (label `factory-state`) in each Managed App's repo: its recent Build Runs and every flag
+#   a Build Run released, with the flag's last known state. This is how a person, or the next Build Run, learns
+#   "what is in flight, what is released" without reading logs. It is an issue, not a file on `main`: a commit
+#   would redeploy the app, race the release step, and break "only the coder's work reaches main".
+# - The **registry issue** (label `factory-registry`) in ai-factory: one row per Managed App, linking each State issue.
+#
+# Each body carries its data as JSON in an HTML comment, so a rewrite never has to parse the tables. `finalize`
+# calls `update_state_issue` and `update_registry` after every Build Run, best effort: a failure here never changes
+# a run's outcome. The rendering functions are pure and unit-tested.
 import json
 import re
 
@@ -46,13 +45,13 @@ def day(d):
 
 
 def story_link(flag):
-    """A link to the issue a flag came from, built from the run URL's repository (the story lives in the Factory repo), or '-'."""
+    # A link to the issue a flag came from, built from the run URL's repository (the story lives in the Factory repo), or '-'.
     m = re.match(r"(https://github\.com/[^/]+/[^/]+)/actions/", flag.get("run_url") or "")
     return f"[#{flag['issue']}]({m.group(1)}/issues/{flag['issue']})" if m and flag.get("issue") else "-"
 
 
 def render_state(prev_body, d):
-    """The App State issue body after this run. `d` is the Build Run Report."""
+    # The App State issue body after this run. `d` is the Build Run Report.
     data = load(prev_body)
     runs = data.get("runs", [])
     runs.append({"date": day(d), "outcome": d.get("outcome"), "kind": d.get("build_kind") or "", "run_url": d.get("run_url") or "",
@@ -91,7 +90,7 @@ def render_state(prev_body, d):
 
 
 def render_registry(prev_body, d, state_url):
-    """The registry body after this run: one row per app, keyed by app name."""
+    # The registry body after this run: one row per app, keyed by app name.
     data = load(prev_body)
     apps = data.get("apps", {})
     row = apps.get(d.get("app"), {"runs": 0, "ok": 0})

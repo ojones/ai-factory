@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Model canary: find out that a pinned model is gone before an unattended night run does.
-
-Models are retired and replaced. Each night this sends a one-token request (a fraction of a cent) for every model in agents/profiles.yml: each
-role's `model` and its `fallback_model`. If a primary is no longer served, the Build Run would fall back to the role's fallback (build_run.check_models)
-and the owner should choose a new pinned model; if a fallback is gone too, the next retirement stops runs. Either way one deduplicated
-`model-drift` issue in ai-factory says which role and which model, and it closes itself once every model answers again. Nothing is changed here.
-
-Env: DEEPINFRA_API_KEY, FACTORY_GH_TOKEN, GITHUB_REPOSITORY.
-"""
+# Model canary: find out that a pinned model is gone before an unattended night run does.
+#
+# Models are retired and replaced. Each night this sends a one-token request (a fraction of a cent) for every model in agents/profiles.yml: each
+# role's `model` and its `fallback_model`. If a primary is no longer served, the Build Run would fall back to the role's fallback (build_run.check_models)
+# and the owner should choose a new pinned model; if a fallback is gone too, the next retirement stops runs. Either way one deduplicated
+# `model-drift` issue in ai-factory says which role and which model, and it closes itself once every model answers again. Nothing is changed here.
+#
+# Env: DEEPINFRA_API_KEY, FACTORY_GH_TOKEN, GITHUB_REPOSITORY.
 import json
 import os
 import sys
@@ -21,7 +20,7 @@ LABEL = "model-drift"
 
 
 def drift(cfg, status_of):
-    """[(role, model, kind)] for every configured model that is missing. kind is 'primary' or 'fallback'; `status_of(model)` returns ok, missing or unknown."""
+    # [(role, model, kind)] for every configured model that is missing. kind is 'primary' or 'fallback'; `status_of(model)` returns ok, missing or unknown.
     out = []
     for role, profile in (cfg.get("roles") or {}).items():
         for kind, key in (("primary", "model"), ("fallback", "fallback_model")):

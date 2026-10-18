@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""Production feedback: errors a deployed Managed App logs, and defects its owner reports, become Update Intakes by themselves.
-
-The watchdog (build_run.py) only looks for ten minutes after a release. A bug that shows up later reaches the Factory only if
-someone files it. This scheduled scan closes that:
-
-  logs    Each Managed App's Fly log is read, error-level JSON lines are grouped by a fingerprint (the message with ids and
-          numbers removed, plus the first stack frame), and a fingerprint seen `min_occurrences` times in one scan becomes an
-          Update Intake for the app, started at once (the PAT adds `proceed-with-change`). Nobody reviews it first: the planner,
-          coder, tester and reviewer run, the change ships behind a flag, and a bad ending is fixed forward and files a fix request.
-  label   An open issue labelled `escaped-defect` in the app's repo, written by the repo's owner, becomes the same Update Intake.
-          Issues by anyone else are ignored: only owner-written text may reach an Agent.
-
-Flood control: one open production-feedback Intake per fingerprint (a repeat adds a comment with the count), at most one open per
-app at a time, and at most `max_per_app_per_day` new ones per app per day. Log text can contain what a user typed, so the Intake
-carries only the cleaned message and the first stack frame, clipped, inside a code block, and says it is data.
-
-Env: FLY_API_TOKEN, FACTORY_PAT, FACTORY_GH_TOKEN, GITHUB_REPOSITORY.   Config: `limits.production_feedback` in agents/profiles.yml.
-"""
+# Production feedback: errors a deployed Managed App logs, and defects its owner reports, become Update Intakes by themselves.
+#
+# The watchdog (build_run.py) only looks for ten minutes after a release. A bug that shows up later reaches the Factory only if
+# someone files it. This scheduled scan closes that:
+#
+#   logs    Each Managed App's Fly log is read, error-level JSON lines are grouped by a fingerprint (the message with ids and
+#           numbers removed, plus the first stack frame), and a fingerprint seen `min_occurrences` times in one scan becomes an
+#           Update Intake for the app, started at once (the PAT adds `proceed-with-change`). Nobody reviews it first: the planner,
+#           coder, tester and reviewer run, the change ships behind a flag, and a bad ending is fixed forward and files a fix request.
+#   label   An open issue labelled `escaped-defect` in the app's repo, written by the repo's owner, becomes the same Update Intake.
+#           Issues by anyone else are ignored: only owner-written text may reach an Agent.
+#
+# Flood control: one open production-feedback Intake per fingerprint (a repeat adds a comment with the count), at most one open per
+# app at a time, and at most `max_per_app_per_day` new ones per app per day. Log text can contain what a user typed, so the Intake
+# carries only the cleaned message and the first stack frame, clipped, inside a code block, and says it is data.
+#
+# Env: FLY_API_TOKEN, FACTORY_PAT, FACTORY_GH_TOKEN, GITHUB_REPOSITORY.   Config: `limits.production_feedback` in agents/profiles.yml.
 import hashlib
 import json
 import os
@@ -43,7 +42,7 @@ FRAME = re.compile(r"\(?((?:/|[A-Za-z]:)?[^\s()]*?[\w.-]+\.(?:ts|js|mjs|cjs|tsx|
 
 
 def parse_events(log_text):
-    """The error-level structured log entries in `flyctl logs` output. Lines carry a prefix (time, machine, region) before the JSON."""
+    # The error-level structured log entries in `flyctl logs` output. Lines carry a prefix (time, machine, region) before the JSON.
     out = []
     for line in (log_text or "").splitlines():
         start = line.find("{")
@@ -59,7 +58,7 @@ def parse_events(log_text):
 
 
 def first_frame(entry):
-    """The first application stack frame (a file path, no line number), or ''. node_modules and node internals are skipped."""
+    # The first application stack frame (a file path, no line number), or ''. node_modules and node internals are skipped.
     for key in ("stack", "err", "error"):
         text = entry.get(key)
         text = text.get("stack") if isinstance(text, dict) else text
@@ -86,7 +85,7 @@ def fingerprint(entry):
 
 
 def group(events):
-    """{fingerprint: {"count", "message", "frame"}} for a scan."""
+    # {fingerprint: {"count", "message", "frame"}} for a scan.
     out = {}
     for e in events:
         fp = fingerprint(e)
@@ -100,8 +99,8 @@ def title_for(app, fp):
 
 
 def decide(groups, open_fps, open_for_app, created_today, cfg):
-    """(new fingerprints to file, fingerprints to comment on). `open_fps` are fingerprints with an open Intake already,
-    `open_for_app` is how many production-feedback Intakes the app has open, `created_today` how many were filed today."""
+    # (new fingerprints to file, fingerprints to comment on). `open_fps` are fingerprints with an open Intake already,
+    # `open_for_app` is how many production-feedback Intakes the app has open, `created_today` how many were filed today.
     minimum, room = int(cfg["min_occurrences"]), int(cfg["max_per_app_per_day"]) - created_today
     new, seen_again = [], []
     for fp, g in sorted(groups.items(), key=lambda kv: -kv[1]["count"]):
@@ -161,8 +160,8 @@ def intakes(repo, token, app, state="open"):
 
 def file_intake(repo, token, pat, app, title, request, label=LABEL, label_desc="Filed and started by the Orchestrator from production feedback",
                 started_note="Started automatically from production feedback. The planner runs first."):
-    """Create an Update Intake for the app and start it. The PAT adds the start label, because an event made by the Actions token
-    does not start workflows. Returns the issue number, or None."""
+    # Create an Update Intake for the app and start it. The PAT adds the start label, because an event made by the Actions token
+    # does not start workflows. Returns the issue number, or None.
     for name, color, desc in ((update_intake.FORM_LABEL, "1d76db", "A change request for an existing Managed App"), (f"app:{app}", "1d76db", ""),
                               (label, "fbca04", label_desc), (update_intake.GO, "0e8a16", "Start this change now")):
         update_intake.ensure_label(repo, name, token, color, desc)
@@ -195,7 +194,7 @@ def scan_app(repo, token, pat, app, cfg):
 
 
 def scan_defect_labels(repo, token, pat, app, cfg):
-    """Owner-written `escaped-defect` issues in the app's repo that have no Intake yet."""
+    # Owner-written `escaped-defect` issues in the app's repo that have no Intake yet.
     owner = repo.split("/")[0]
     out = gh(["issue", "list", "--repo", f"{owner}/{app}", "--label", DEFECT_LABEL, "--state", "open", "--json", "number,title,body,author"], pat).stdout
     open_now = intakes(repo, token, app)

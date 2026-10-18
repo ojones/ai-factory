@@ -1,4 +1,4 @@
-"""Tests for the model canary. Run: python3 -m unittest discover orchestrator"""
+# Tests for the model canary. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import sys
 import unittest
 from pathlib import Path

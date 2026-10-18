@@ -1,4 +1,4 @@
-"""Tests for flag retirement (it rides along in an update run). Run: python3 -m unittest discover orchestrator"""
+# Tests for flag retirement (it rides along in an update run). Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import json
 import sys
 import unittest
@@ -76,7 +76,7 @@ class BuildRunSide(unittest.TestCase):
 
 
 class Choosing(unittest.TestCase):
-    """BuildRun.choose_flags_to_retire with the State issue and manifest mocked."""
+    # BuildRun.choose_flags_to_retire with the State issue and manifest mocked.
 
     def run_for(self, flags, *, update=True, fix=None, kind="update", task="Add a button", manifest="a,b,c,d", boom=False):
         run = object.__new__(b.BuildRun)
