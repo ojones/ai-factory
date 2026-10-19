@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
+from shared import http_client  # noqa: E402
 
 
 def feature_key(app, slug):
@@ -29,17 +30,17 @@ def main(argv):
         return 2
     key, want = feature_key(argv[1], argv[2]), argv[3] == "on"
     token = os.environ["GROWTHBOOK_ADMIN_PAT"]
-    status, r = b.http("GET", f"{b.GROWTHBOOK_API}/features/{key}", token)
+    status, r = http_client.request("GET", f"{b.GROWTHBOOK_API}/features/{key}", token)
     if status != 200:
         print(f"{key}: no such flag (HTTP {status}); nothing changed", file=sys.stderr)
         return 1
     prod = (((r.get("feature") or r) if isinstance(r, dict) else {}).get("environments") or {}).get("production") or {}
     # The API wants the environment's rules with the switch (the watchdog sends rules too); send the current ones back unchanged.
-    code, reply = b.http("POST", f"{b.GROWTHBOOK_API}/features/{key}", token,
+    code, reply = http_client.request("POST", f"{b.GROWTHBOOK_API}/features/{key}", token,
                          {"environments": {"production": {"enabled": want, "rules": prod.get("rules") or []}}})
     if code != 200:
         print(f"{key}: the update answered HTTP {code}: {str(reply)[:300]}", file=sys.stderr)
-    status, r = b.http("GET", f"{b.GROWTHBOOK_API}/features/{key}", token)
+    status, r = http_client.request("GET", f"{b.GROWTHBOOK_API}/features/{key}", token)
     now = (((r.get("feature") or r) if isinstance(r, dict) else {}).get("environments") or {}).get("production", {}).get("enabled")
     print(f"{key}: production is now {'on' if now else 'off'} (asked for {argv[3]})")
     return 0 if status == 200 and now is want else 1

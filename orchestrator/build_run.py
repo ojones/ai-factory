@@ -23,8 +23,6 @@ import subprocess
 import sys
 import time
 import traceback
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import appstate
@@ -33,11 +31,11 @@ import fixrequest
 import planner
 import triage
 import update_intake
-from shared import config, github, outcomes
+from shared import agent_output, agent_process, agent_runner, agent_usage, config, github, http_client, outcomes, provider, run_stops, spend_budget
+from shared.console import log
 from update_intake import form_section  # noqa: F401 - the Issue Form parser lives with Update App Intake
 
 FACTORY_DIR = Path(__file__).resolve().parent.parent
-DEEPINFRA = "https://api.deepinfra.com"
 GROWTHBOOK_API = os.environ.get("GROWTHBOOK_API_HOST", "https://ai-factory-growthbook.fly.dev:3100") + "/api/v1"
 NOT_STARTED_CONCLUSIONS = ("action_required", "startup_failure")  # a workflow run GitHub ended before any job started: no log to diagnose
 PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to Fly", "deploy-fly.yml")]
@@ -58,22 +56,10 @@ API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the
 UI_CHECK = str(FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser counterpart (see ui_check.py)
 
 
-class BudgetExhausted(Exception):
-    pass
 
 
-class ProviderBlocked(Exception):
-    # The model provider refuses every request because the account has no balance (HTTP 402). Nothing a retry, a fix request
-    # or a retrospective Agent does can help until someone tops it up, and each of them would fail the same way.
-    pass
 
 
-class NeedsHuman(Exception):
-    # kind: round_limit | time_limit | stuck | pipeline | other
-
-    def __init__(self, kind, message):
-        super().__init__(message)
-        self.kind = kind
 
 
 # --- pure logic (unit-tested) -------------------------------------------------
@@ -83,16 +69,16 @@ def parse_intake(body, default_cap, ceiling):
     # A new app's Intake asks "What should be built?"; an update Intake asks "What should change?".
     task = form_section(body, "What should be built?") or form_section(body, "What should change?")
     if not task or task == "_No response_":
-        raise NeedsHuman("other", "The Intake's request field (\"What should be built?\" or \"What should change?\") is empty.")
+        raise run_stops.NeedsHuman("other", "The Intake's request field (\"What should be built?\" or \"What should change?\") is empty.")
     raw = form_section(body, "Cost cap override (USD)").lstrip("$")
     if not raw or raw == "_No response_":
         return task, float(default_cap)
     try:
         cap = float(raw)
     except ValueError:
-        raise NeedsHuman("other", f"Cost cap override {raw!r} is not a number.")
+        raise run_stops.NeedsHuman("other", f"Cost cap override {raw!r} is not a number.")
     if not 0 < cap <= float(ceiling):
-        raise NeedsHuman("other", f"Cost cap override ${cap} must be > 0 and <= the ${ceiling} ceiling.")
+        raise run_stops.NeedsHuman("other", f"Cost cap override ${cap} must be > 0 and <= the ${ceiling} ceiling.")
     return task, cap
 
 
@@ -104,14 +90,14 @@ def identify_intake(issue, app, number):
     body = issue.get("body") or ""
     if update_intake.FORM_LABEL not in labels:
         if issue["title"].strip() != app:
-            raise NeedsHuman("other", f"Intake #{number} is titled {issue['title']!r}, not {app!r}.")
+            raise run_stops.NeedsHuman("other", f"Intake #{number} is titled {issue['title']!r}, not {app!r}.")
         return False, {}
     try:
         named = update_intake.app_name(body)
     except ValueError as e:
-        raise NeedsHuman("other", f"Update App Intake #{number}: {e}.")
+        raise run_stops.NeedsHuman("other", f"Update App Intake #{number}: {e}.")
     if named != app or f"app:{app}" not in labels:
-        raise NeedsHuman("other", f"Update App Intake #{number} names {named!r} and is labelled "
+        raise run_stops.NeedsHuman("other", f"Update App Intake #{number} names {named!r} and is labelled "
                                   f"{sorted(l for l in labels if l.startswith('app:'))}, not {app!r}.")
     return True, update_intake.plan_meta(body)
 
@@ -643,33 +629,8 @@ def preview_token(master_secret, slug):
     return hmac.new(master_secret.encode(), slug.encode(), hashlib.sha256).hexdigest()
 
 
-def summarize_token_usage(base_state):
-    # Per-invocation context stats from OpenHands' persisted base_state.json.
-    #
-    # prompt_tokens of one LLM call is that call's context size, so the max over calls is the
-    # invocation's peak context. The condenser's own calls are counted separately.
-    metrics = (base_state.get("stats") or {}).get("usage_to_metrics") or {}
-    agent = (metrics.get("agent") or {}).get("token_usages") or []
-    condenser = (metrics.get("condenser") or {}).get("token_usages") or []
-    prompts = [u.get("prompt_tokens", 0) for u in agent]
-    latencies = (metrics.get("agent") or {}).get("response_latencies") or []
-    return {"calls": len(agent), "condenser_calls": len(condenser),
-            "peak_context": max(prompts, default=0), "last_context": prompts[-1] if prompts else 0,
-            "prompt_tokens": sum(prompts), "completion_tokens": sum(u.get("completion_tokens", 0) for u in agent),
-            "cache_read_tokens": sum(u.get("cache_read_tokens", 0) for u in agent),
-            "llm_seconds": round(sum(l.get("latency", 0) for l in latencies), 1), "seconds": 0.0}
 
 
-def merge_usage(a, b):
-    # Combine two invocations' stats (a retry of the same role).
-    if not a:
-        return b
-    if not b:
-        return a
-    out = {k: a[k] + b[k] for k in a if k not in ("peak_context", "last_context")}
-    out["peak_context"] = max(a["peak_context"], b["peak_context"])
-    out["last_context"] = b["last_context"]
-    return out
 
 
 def load_prompt(prompt_path):
@@ -836,7 +797,7 @@ def single_call_review(base_url, key, model, system, user, timeout=300, attempts
             "response_format": {"type": "json_schema", "json_schema": {"name": "review_verdict", "schema": REVIEW_SCHEMA, "strict": True}}}
     last = None
     for attempt in range(1, attempts + 1):
-        status, r = http("POST", f"{base_url}/chat/completions", key, body, timeout=timeout)
+        status, r = http_client.request("POST", f"{base_url}/chat/completions", key, body, timeout=timeout)
         if status == 200 and isinstance(r, dict):
             try:
                 doc = json.loads(r["choices"][0]["message"]["content"])
@@ -847,7 +808,7 @@ def single_call_review(base_url, key, model, system, user, timeout=300, attempts
         else:
             last = f"HTTP {status}: {str(r)[:200]}"
             if status == 402:
-                raise ProviderBlocked(BLOCKED_MESSAGE)
+                raise run_stops.ProviderBlocked(provider.BLOCKED_MESSAGE)
         if attempt < attempts and (status in (0, 429) or status >= 500 or status == 200):
             time.sleep(5 * attempt)
         else:
@@ -858,8 +819,6 @@ def single_call_review(base_url, key, model, system, user, timeout=300, attempts
 # --- plumbing -----------------------------------------------------------------
 
 
-def log(msg):
-    print(msg, flush=True)
 
 
 def git_auth_env(header):
@@ -868,100 +827,16 @@ def git_auth_env(header):
     return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraheader", "GIT_CONFIG_VALUE_0": header}
 
 
-def agent_command(cmd, env, user, pidfile=None):
-    # `cmd` as it is run for an Agent. With a `user` (limits.agent_isolation: user) it runs as that unprivileged account through
-    # sudo: the variables in `env` are passed by name, so no value shows on a command line, and a wrapper records the process group
-    # in `pidfile` so the runner (which cannot signal another user's processes) can kill it through sudo.
-    if not user:
-        return cmd
-    names = ",".join(k for k in env if k != "PATH")
-    wrapper = []
-    if pidfile:
-        wrapper = ["bash", "-c", 'ps -o pgid= -p $$ | tr -d " " > "$0"; exec "$@"', str(pidfile)]
-    return ["sudo", "-n", "-u", user, f"--preserve-env={names}", "env", f"PATH={env.get('PATH', '')}", *wrapper, *cmd]
 
 
-def run_isolation_probes(agent_user):
-    # Run probes as the Agent user (no model involved) and return what is wrong; see isolation_problems.
-    marker = subprocess.Popen(["sleep", "60"], env={**os.environ, "ISOLATION_MARK": "SELF-CHECK-SECRET"}, start_new_session=True)
-    try:
-        env = {"PATH": os.environ.get("PATH", "")}
-        workspace = os.environ.get("GITHUB_WORKSPACE", "/home/runner/work")
-        probes = {"whoami": "id -un", "environ": f"cat /proc/{marker.pid}/environ 2>/dev/null | tr '\\0' '\\n'",
-                  "workspace": f"ls '{workspace}' 2>/dev/null",
-                  "env_names": "env | cut -d= -f1 | grep -E '^(FACTORY_|FLY_API|GROWTHBOOK|DEEPINFRA|PREVIEW_MASTER|GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL)' || true",
-                  "sudo": "sudo -n true 2>/dev/null && echo yes || echo no"}
-        outputs = {}
-        for name, script in probes.items():
-            p = subprocess.run(agent_command(["bash", "-c", script], env, agent_user), env=env, capture_output=True, text=True, timeout=60)
-            outputs[name] = p.stdout
-        return isolation_problems(outputs)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return [f"the self-check could not run: {type(e).__name__}: {e}"]
-    finally:
-        marker.kill()
 
 
-def kill_agent(proc, user, pidfile):
-    # Kill an Agent's whole process group, whether it runs as the runner or, through sudo, as the Agent user.
-    import signal
-    if user and pidfile:
-        try:
-            pgid = Path(pidfile).read_text().strip()
-            if pgid.isdigit():
-                subprocess.run(["sudo", "-n", "kill", "-KILL", "--", f"-{pgid}"], capture_output=True, timeout=30)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:
-        proc.kill()
 
 
-def isolation_problems(outputs):
-    # What an isolation self-check found wrong, from {probe: output of the probe run as the Agent user}. Empty means isolated.
-    problems = []
-    if outputs.get("whoami", "").strip() in ("", os.environ.get("USER", "runner"), "runner"):
-        problems.append("the Agent user is not a different account from the Orchestrator's")
-    if "SELF-CHECK-SECRET" in outputs.get("environ", ""):
-        problems.append("an Agent can read the Orchestrator's environment through /proc")
-    if outputs.get("workspace", "").strip():
-        problems.append("an Agent can list the runner's workspace")
-    if outputs.get("env_names", "").strip():
-        problems.append("the Agent's environment holds credential variables: " + outputs["env_names"].strip().replace("\n", ", "))
-    if outputs.get("sudo", "").strip() == "yes":
-        problems.append("the Agent user can use sudo")
-    return problems
 
 
-def silent_too_long(last_progress, now, stall_seconds):
-    # True when an Agent's output has not grown for `stall_seconds` (0 turns the check off).
-    return stall_seconds > 0 and now - last_progress >= stall_seconds
 
 
-def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0, user=None, pidfile=None):
-    # Run an Agent writing its event stream to `out_path`. Returns its exit status, or "timeout" after `timeout_s` of wall time,
-    # or "stall" when the stream stops growing for `stall_s` seconds (the process group is killed either way). A real run once sat
-    # 45 minutes twice with no output at all, so a silent Agent is cut off long before the overall timeout.
-    with open(out_path, "w") as f:
-        proc = subprocess.Popen(agent_command(cmd, env, user, pidfile), cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT,
-                                start_new_session=True)
-        began = last_change = time.time()
-        size = -1
-        while True:
-            try:
-                return proc.wait(timeout=poll)
-            except subprocess.TimeoutExpired:
-                pass
-            now = time.time()
-            current = os.path.getsize(out_path)
-            if current != size:
-                size, last_change = current, now
-            reason = "timeout" if now - began >= timeout_s else "stall" if silent_too_long(last_change, now, stall_s) else None
-            if reason:
-                kill_agent(proc, user, pidfile)
-                proc.wait()
-                return reason
 
 
 def sh(cmd, cwd=None, env=None, check=True, timeout=None):
@@ -971,106 +846,14 @@ def sh(cmd, cwd=None, env=None, check=True, timeout=None):
     return p
 
 
-def http(method, url, token=None, body=None, timeout=60):
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, method=method, headers=headers,
-                                 data=json.dumps(body).encode() if body is not None else None)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read()
-            try:
-                return r.status, (json.loads(raw) if raw else {})
-            except ValueError:
-                return r.status, raw[:500].decode(errors="replace")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read()[:500].decode(errors="replace")
-    except (urllib.error.URLError, OSError) as e:
-        return 0, str(e)
 
 
-def adopt_misplaced_file(path, cwd):
-    # If `path` was not written but a file of the same name sits directly in the Agent's working directory, copy it to `path`. Returns True
-    # when it did. Never overwrites an existing file.
-    if not cwd or Path(path).exists():
-        return False
-    stray = Path(cwd) / Path(path).name
-    if stray.is_file():
-        try:
-            shutil.copyfile(stray, path)
-            log(f"The Agent wrote {stray.name} in its working directory instead of {path}; using that copy.")
-            return True
-        except OSError:
-            return False
-    return False
 
 
-def json_problem(path, check=None):
-    # Why an Agent's output file cannot be used, in words the Agent can act on; None when it can. Used to tell the
-    # Agent on its second attempt what was wrong with its first.
-    try:
-        text = Path(path).read_text()
-    except OSError:
-        return f"the file {path} was not written (write it at exactly that absolute path, not relative to your working directory)"
-    if not text.strip():
-        return f"the file {path} is empty"
-    try:
-        doc = json.loads(text)
-    except ValueError as e:
-        where = f" at line {e.lineno} column {e.colno}" if hasattr(e, "lineno") else ""
-        return (f"it is not valid JSON ({getattr(e, 'msg', e)}{where}); the usual cause is a quote, newline or backslash "
-                "inside a string that was not escaped")
-    try:
-        if check is not None and check(doc) is False:
-            return "its contents were not accepted"
-    except (ValueError, AttributeError, TypeError) as e:
-        return f"its contents were not accepted: {e}"
-    return None
 
 
-def load_json(path):
-    try:
-        return json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return None
 
 
-class Budget:
-    # The run's one cap, enforced and metered by DeepInfra scoped JWTs.
-    #
-    # A spending-limited JWT can carry only one model, so each Agent invocation gets its own
-    # single-model JWT limited to what is left of the run's cap. DeepInfra refuses the first call
-    # after a JWT's limit (403) and the crossing call completes. The run's spend is the sum of every
-    # JWT's spending_current, so there are still no per-Agent budgets.
-
-    def __init__(self, admin_key, cap, ttl):
-        self.admin_key, self.cap, self.ttl = admin_key, cap, ttl
-        self.tokens = {}  # jwt -> last read spending_current
-
-    def mint(self, model):
-        remaining = round(self.cap - self.spent_known(), 6)
-        if remaining <= 0:
-            raise BudgetExhausted(f"${self.spent_known():.4f} spent against a ${self.cap:.2f} cap")
-        status, r = http("POST", f"{DEEPINFRA}/v1/scoped-jwt", self.admin_key,
-                         {"api_key_name": "auto", "models": [model], "expires_delta": self.ttl, "spending_limit": remaining})
-        if status == 402:
-            raise ProviderBlocked(BLOCKED_MESSAGE)
-        if status != 200 or "token" not in r:
-            raise RuntimeError(f"could not mint scoped JWT: HTTP {status} {r}")
-        print(f"::add-mask::{r['token']}", flush=True)
-        self.tokens[r["token"]] = 0.0
-        return r["token"]
-
-    def spent_known(self):
-        return sum(self.tokens.values())
-
-    def refresh(self, jwt):
-        status, r = http("GET", f"{DEEPINFRA}/v1/scoped-jwt?jwtoken={jwt}", self.admin_key)
-        if status != 200:
-            raise RuntimeError(f"could not read JWT spend: HTTP {status}")
-        self.tokens[jwt] = float(r["spending_current"])
-        return self.spent_known()
 
 
 class State:
@@ -1154,9 +937,9 @@ class BuildRun:
 
     def check_limits(self):
         if self.meter and self.cap is not None and self.state.d["spent_usd"] >= self.cap:
-            raise BudgetExhausted(f"${self.state.d['spent_usd']:.4f} spent against a ${self.cap:.2f} cap")
+            raise run_stops.BudgetExhausted(f"${self.state.d['spent_usd']:.4f} spent against a ${self.cap:.2f} cap")
         if time.time() > self.deadline:
-            raise NeedsHuman("time_limit", f"the {self.lim['time_limit_minutes']}-minute time limit was reached")
+            raise run_stops.NeedsHuman("time_limit", f"the {self.lim['time_limit_minutes']}-minute time limit was reached")
 
     def record_spend(self, jwt):
         self.state.d["spent_usd"] = round(self.meter.refresh(jwt), 6)
@@ -1206,7 +989,8 @@ class BuildRun:
         self.prepare_agent_user()
         self.check_models()
         self.wait_for_capacity()
-        self.meter = Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
+        self.meter = spend_budget.Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
+        self.make_runner()
         self.preview = preview_token(os.environ["PREVIEW_MASTER_SECRET"], self.app)
         print(f"::add-mask::{self.preview}", flush=True)
         # Clone with the PAT passed per command only, so the checkout stores no credential
@@ -1327,7 +1111,7 @@ class BuildRun:
 
         def status(model):
             if model not in seen:
-                seen[model] = model_status(base, key, model)
+                seen[model] = provider.model_status(base, key, model)
             return seen[model]
 
         for role in ["coder", "tester", "reviewer"] + (["planner"] if self.update_intake else []):
@@ -1339,7 +1123,7 @@ class BuildRun:
                 continue
             fallback = profile.get("fallback_model")
             if not fallback or status(fallback) == "missing":
-                raise NeedsHuman("other", f"the {role} model `{model}` is no longer served by the provider and "
+                raise run_stops.NeedsHuman("other", f"the {role} model `{model}` is no longer served by the provider and "
                                           + (f"its fallback `{fallback}` is not either" if fallback else "the role has no `fallback_model`")
                                           + ": choose a model in agents/profiles.yml")
             profile["model"] = fallback
@@ -1364,11 +1148,11 @@ class BuildRun:
         self.state.d["isolation"] = {"user": self.agent_user, "problems": problems}
         self.state.save()
         if problems:
-            raise NeedsHuman("other", "Agent isolation is on but not effective: " + "; ".join(problems))
+            raise run_stops.NeedsHuman("other", "Agent isolation is on but not effective: " + "; ".join(problems))
         log(f"Agent isolation: Agents run as {self.agent_user}; self-check passed")
 
     def isolation_self_check(self):
-        return run_isolation_probes(self.agent_user)
+        return agent_process.run_isolation_probes(self.agent_user)
 
     def share_with_agent(self, path):
         # Make `path` readable and writable by both the Agent user and this process (what was just cloned or installed was created
@@ -1386,7 +1170,7 @@ class BuildRun:
         began = time.time()
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
         try:
-            code = sh(agent_command(["npm", "ci", "--no-audit", "--no-fund"], env, self.agent_user), cwd=self.app_dir, env=env,
+            code = sh(agent_process.agent_command(["npm", "ci", "--no-audit", "--no-fund"], env, self.agent_user), cwd=self.app_dir, env=env,
                       check=False, timeout=900).returncode
             self.share_with_agent(self.app_dir)
         except (subprocess.TimeoutExpired, OSError):
@@ -1415,7 +1199,7 @@ class BuildRun:
         total = ledger_total(out.split("\n"), day)
         self.state.d["daily_spent_usd"] = total
         if total >= cap:
-            raise NeedsHuman("other", f"today's Build Runs have already spent ${total:.2f} of the ${cap:.2f} daily cap; "
+            raise run_stops.NeedsHuman("other", f"today's Build Runs have already spent ${total:.2f} of the ${cap:.2f} daily cap; "
                                       "try again tomorrow or raise `limits.daily_cost_cap_usd`")
 
     def wait_for_capacity(self):
@@ -1428,134 +1212,38 @@ class BuildRun:
             if len(others) < cap:
                 return
             if time.time() > give_up:
-                raise NeedsHuman("other", f"{len(others)} other Build Run(s) in flight (cap {cap}) for 30 minutes")
+                raise run_stops.NeedsHuman("other", f"{len(others)} other Build Run(s) in flight (cap {cap}) for 30 minutes")
             log(f"{len(others)} other Build Run(s) in flight (cap {cap}); waiting")
             time.sleep(60)
 
     # --- agents
 
-    def model_for(self, role, label):
-        # The role's model. The coder may name a stronger `fix_model` for every attempt after round 1.
-        profile = self.cfg["roles"][role]
-        if role == "coder" and str(label) != "1" and profile.get("fix_model"):
-            return profile["fix_model"]
-        return profile["model"]
-
-    def agent_env(self, role, jwt, extra=None, home=None, model=None):
-        env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
-        if home:
-            env["HOME"] = str(home)
-        profile = self.cfg["roles"][role]
-        env.update({"LLM_MODEL": "openai/" + (model or profile["model"]), "LLM_BASE_URL": self.cfg["provider"]["base_url"],
-                    "LLM_API_KEY": jwt, "RUNTIME": "process"})
-        env.update(extra or {})
-        return env
+    def make_runner(self):
+        self.runner = agent_runner.AgentRunner(self.cfg, self.meter, self.art, self.work, self.app_dir, self.agent_user,
+                                               check_limits=lambda: self.check_limits(), on_spend=self.record_spend)
 
     def invoke(self, role, label, values, extra_env=None, cwd=None, home=None, note=None):
-        # One headless OpenHands invocation. Safe to call from several threads at once when each
-        # has its own `home` (OpenHands keeps its conversations there) and `cwd`.
-        # Returns (exit status, 'timeout' if killed; cost; token usage).
-        self.check_limits()
-        model = self.model_for(role, label)
+        # One headless OpenHands invocation of `role`, with its prompt rendered for this run. Returns (exit status, cost, token usage).
         prompt = render(load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, "build_kind": self.build_kind,
                                                                          "spec": getattr(self, "spec", None) or getattr(self, "task", ""), **values})
-        if note:
-            prompt += (f"\n\nYour previous attempt was rejected: {note}. Do the work again as needed and write the file again. "
-                       "Build the JSON with a short Python script and json.dump, not by typing it by hand.")
-        jwt = self.meter.mint(model)
-        if self.agent_user and not home:
-            home = self.work / "home-agent"  # the runner's own home is closed to the Agent user
-        if home:
-            Path(home).mkdir(parents=True, exist_ok=True)
-        jsonl = self.art / f"openhands-{role}-{label}.jsonl"
-        known = self.conversation_dirs(home)
-        began = time.time()
-        rc = run_watched(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd or self.app_dir,
-                         self.agent_env(role, jwt, extra_env, home, model), jsonl, self.lim["agent_timeout_minutes"] * 60,
-                         float(self.lim.get("agent_stall_minutes", 0)) * 60, user=self.agent_user,
-                         pidfile=self.work / f"pgid-{role}-{label}.txt")
-        if rc == "stall":
-            log(f"{role} ({label}): no output for {self.lim.get('agent_stall_minutes')} minutes; killed it so the attempt can restart")
-        after = self.record_spend(jwt)
-        blocked = scan_for_provider_block(jsonl)
-        if blocked:  # the account ran dry (possibly mid-run): stop everything, do not count it as the Agent's failure
-            log(f"{role} ({label}): {blocked}")
-            raise ProviderBlocked(blocked)
-        usage = self.collect_usage(role, label, known, home)
-        if usage:
-            usage["seconds"] = round(time.time() - began, 1)  # wall time; minus llm_seconds is tool and wait time
-        cost = self.meter.tokens[jwt]
-        lines = [f"::group::{role} ({label})",
-                 f"{role} ({label}) exited {rc}; cost ${cost:.4f}; run total ${after:.4f} of ${self.cap:.2f}", "::endgroup::"]
-        if usage:
-            goal = self.lim.get("context_goal_tokens", 100000)
-            lines.insert(2, f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens; "
-                         f"{usage['seconds']:.0f}s wall, {usage['llm_seconds']:.0f}s in the model"
-                         + (f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""))
-        for line in lines:
-            log(line)
-        return rc, cost, usage
+        return self.runner.run(role, label, agent_output.retry_prompt(prompt, note), extra_env, cwd, home)
 
     def run_agent(self, role, label, values, extra_env=None):
         # The sequential form: records cost and usage on the Build Run for the caller to read.
         rc, self._last_cost, usage = self.invoke(role, label, values, extra_env)
-        self._usage = merge_usage(self._usage, usage)
+        self._usage = agent_usage.merge_usage(self._usage, usage)
         return rc
-
-    def conversations_root(self, home=None):
-        return Path(home or os.environ.get("HOME", "~")).expanduser() / ".openhands" / "conversations"
-
-    def conversation_dirs(self, home=None):
-        root = self.conversations_root(home)
-        return {p.name for p in root.iterdir()} if root.is_dir() else set()
-
-    def collect_usage(self, role, label, known, home=None):
-        # Read the conversation this invocation created and keep its raw state as an artifact.
-        root = self.conversations_root(home)
-        for name in sorted(self.conversation_dirs(home) - known):
-            src = root / name / "base_state.json"
-            doc = load_json(src)
-            if doc is not None:
-                (self.art / f"openhands-{role}-{label}-state.json").write_text(src.read_text())
-                return summarize_token_usage(doc)
-        return None
 
     def take_usage(self):
         usage, self._usage = self._usage, None
         return usage
 
     def agent_json(self, role, label, values, path, extra_env=None, check=None, cwd=None, home=None):
-        # Run a role that writes a JSON file; one retry if the file is missing or malformed. If the Agent wrote the file under its working
-        # directory instead of the path it was given (it has done so, twice, with the right content), that copy is used.
-        # Returns (document, cost, token usage).
-        total_cost, usage, note, attempts, exhausted = 0.0, None, None, 0, False
-        for attempt in (1, 2):
-            Path(path).unlink(missing_ok=True)
-            attempt_label = f"{label}{'' if attempt == 1 else 'b'}"
-            _, cost, used = self.invoke(role, attempt_label, values, extra_env, cwd, home, note=note)
-            attempts += 1
-            total_cost += cost
-            usage = merge_usage(usage, used)
-            adopt_misplaced_file(path, cwd)
-            doc = load_json(path)
-            try:
-                if doc is not None and (check is None or check(doc) is not False):
-                    return doc, total_cost, usage
-            except (ValueError, AttributeError, TypeError):
-                pass
-            note = json_problem(path, check)  # read before the next attempt removes the file
-            self.restore_tree(cwd)
-            if spending_limit_hit(self.art / f"openhands-{role}-{attempt_label}.jsonl"):
-                # The Agent spent its whole credential and still wrote nothing usable. A second attempt gets a credential of the same
-                # size and goes the same way, so it only spends the money again (a tester did this for about $0.50 a time).
-                exhausted = True
-                break
-        # What a failed Agent cost is spent either way; give it a stage so the Report accounts for it.
-        self.state.stage(f"{role.capitalize()} failed", role, label, total_cost, f"no usable output after {attempts} attempt(s)", usage)
-        if exhausted:
-            raise NeedsHuman("other", f"the {role} spent its whole credential (${total_cost:.2f}) without writing a usable output file"
-                                      + (f" (last problem: {note})" if note else "") + "; a second attempt would only repeat it")
-        raise NeedsHuman("other", f"the {role} produced no valid output file twice" + (f" (last problem: {note})" if note else ""))
+        # Run a role that writes a JSON file (agent_runner.json_output): one retry if it is missing or malformed. Returns (document, cost, usage).
+        return agent_runner.json_output(
+            lambda attempt_label, note: self.invoke(role, attempt_label, values, extra_env, cwd, home, note=note), path, role, label,
+            lambda r, lab: self.art / f"openhands-{r}-{lab}.jsonl", cwd, check, restore=self.restore_tree,
+            record_failed=lambda cost, message, usage: self.state.stage(f"{role.capitalize()} failed", role, label, cost, message, usage))
 
     def restore_tree(self, cwd=None):
         # Read-only roles must leave the tree untouched; undo it if they did not.
@@ -1601,7 +1289,7 @@ class BuildRun:
                 attempts += 1
                 self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
                 if attempts >= 3:
-                    raise NeedsHuman("other", f"the coder could not produce an acceptable commit: {problem}")
+                    raise run_stops.NeedsHuman("other", f"the coder could not produce an acceptable commit: {problem}")
                 task = f"{problem}\n\nOriginal task:\n{task0}"
                 continue
             self.check_limits()
@@ -1646,7 +1334,7 @@ class BuildRun:
         self.restore_tree()
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "TMPDIR", "CI") if k in os.environ}
         try:
-            p = sh(agent_command(["npm", "run", "check"], env, self.agent_user), cwd=self.app_dir, env=env, check=False, timeout=300)
+            p = sh(agent_process.agent_command(["npm", "run", "check"], env, self.agent_user), cwd=self.app_dir, env=env, check=False, timeout=300)
         except (subprocess.TimeoutExpired, OSError) as e:
             log(f"npm run check could not be run ({type(e).__name__}); leaving it to the Test Gate")
             return None
@@ -1683,7 +1371,7 @@ class BuildRun:
             if runs and runs[-1]["status"] == "completed":
                 return runs[-1]
             time.sleep(10)
-        raise NeedsHuman("pipeline", f"{workflow} did not finish for {sha[:8]} within {self.lim['pipeline_timeout_minutes']} minutes")
+        raise run_stops.NeedsHuman("pipeline", f"{workflow} did not finish for {sha[:8]} within {self.lim['pipeline_timeout_minutes']} minutes")
 
     def deploy_skipped(self, run_id):
         out = self.gh(["run", "view", str(run_id), "--repo", self.app_repo, "--json", "jobs"], check=False).stdout
@@ -1695,7 +1383,7 @@ class BuildRun:
 
     def healthy(self):
         for _ in range(12):
-            status, body = http("GET", f"https://{self.app}.fly.dev/api/health", timeout=20)
+            status, body = http_client.request("GET", f"https://{self.app}.fly.dev/api/health", timeout=20)
             if status == 200:
                 return True
             time.sleep(5)
@@ -1736,7 +1424,7 @@ class BuildRun:
                 return sha
             if failed[1] and failed[1]["conclusion"] in NOT_STARTED_CONCLUSIONS:
                 # GitHub did not run it (no jobs, no log), so there is nothing for the Pipeline Agent to read: say so, and spend nothing.
-                raise NeedsHuman("pipeline", f"{failed[0]} did not start: GitHub ended the run as {failed[1]['conclusion']!r} before any job ran "
+                raise run_stops.NeedsHuman("pipeline", f"{failed[0]} did not start: GitHub ended the run as {failed[1]['conclusion']!r} before any job ran "
                                              f"({failed[1]['url']}). Approve or fix it in the app's Actions tab, then add `proceed-with-change` again.")
             n += 1
             ctx = self.failure_context(failed, sha, n)
@@ -1745,7 +1433,7 @@ class BuildRun:
                 "pipeline", f"p{n}", {"head_sha": sha, "failure_run_url": url, "context_dir": ctx,
                                       "diagnosis_path": self.work / f"diagnosis-{n}.json"},
                 self.work / f"diagnosis-{n}.json", check=lambda d: d.get("category") in ("code", "workflow", "infra", "flaky"))
-            diag = load_json(self.work / f"diagnosis-{n}.json")
+            diag = agent_output.load_json(self.work / f"diagnosis-{n}.json")
             self.state.stage(f"{failed[0]} failed", "pipeline", n, cost, diag["category"], usage)
             cat = diag["category"]
             if cat in ("flaky", "infra") and diag.get("retry_recommended") and retries > 0:
@@ -1757,7 +1445,7 @@ class BuildRun:
             if cat == "code" and diag.get("fix_request") and getattr(self, "pipeline_fixes", 0) < self.lim["pipeline_fix_attempts"]:
                 self.pipeline_fixes = getattr(self, "pipeline_fixes", 0) + 1
                 raise PipelineFix(self.coder(f"fix{self.pipeline_fixes}", diag["fix_request"], str(self.work / "findings-none.json")))
-            raise NeedsHuman("pipeline", f"{failed[0]} failed ({cat}): {diag.get('summary', '')[:500]}")
+            raise run_stops.NeedsHuman("pipeline", f"{failed[0]} failed ({cat}): {diag.get('summary', '')[:500]}")
 
     # --- review + test
 
@@ -1849,7 +1537,7 @@ class BuildRun:
                      **({"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {})},
                     check=lambda doc: derive_test(doc, flags) and None,
                     cwd=tester_tree, home=self.work / f"home-tester-{rnd}")
-            except NeedsHuman:
+            except run_stops.NeedsHuman:
                 # No usable report, but if a helper saw something fail that is a finding the coder can act on: use it
                 # instead of stopping for a person. With nothing failed there is nothing to act on, so it stops as before.
                 tdoc = report_from_helper_failures(load_api_results(self.work / f"api-check-{rnd}.jsonl"),
@@ -1875,7 +1563,7 @@ class BuildRun:
         return passed, failures, impact
 
     def gb(self, method, path, body=None):
-        return http(method, f"{GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
+        return http_client.request(method, f"{GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
 
     def link_flags_to_issue(self, slugs):
         # The story names its flag: a `flag:<slug>` label, the flag in the title, and a comment with the full key (the flag, in turn, links
@@ -1923,7 +1611,7 @@ class BuildRun:
         released, kept = [], []
         for slug in flags:
             if not SLUG_RE.fullmatch(slug):
-                raise NeedsHuman("other", f"flag slug {slug!r} is not a valid slug; nothing released")
+                raise run_stops.NeedsHuman("other", f"flag slug {slug!r} is not a valid slug; nothing released")
         for slug in flags:
             key = f"{self.app}.feature.{slug}"
             status, existing = self.gb("GET", f"/features/{key}")
@@ -2004,7 +1692,7 @@ class BuildRun:
         log(f"watching {self.app} for {minutes:g} minutes after the release")
         while time.time() < end:
             time.sleep(interval)
-            status, _ = http("GET", f"https://{self.app}.fly.dev/api/health", timeout=20)
+            status, _ = http_client.request("GET", f"https://{self.app}.fly.dev/api/health", timeout=20)
             samples.append({"healthy": status == 200, "errors": self.app_error_count()})
             reason = watchdog_trip(samples, baseline, int(self.lim.get("watchdog_max_failures", 3)),
                                    int(self.lim.get("watchdog_max_errors", 5)))
@@ -2034,9 +1722,9 @@ class BuildRun:
 
         try:
             doc, cost, usage = self.agent_json("planner", "1", {"task": self.task, "plan_path": path}, path, check=check)
-        except NeedsHuman:
+        except run_stops.NeedsHuman:
             if problems:
-                raise NeedsHuman("other", "the planner's plan was rejected: " + "; ".join(problems))
+                raise run_stops.NeedsHuman("other", "the planner's plan was rejected: " + "; ".join(problems))
             raise
         blocked, category, reasons, possible = triage.feasibility(doc)
         if blocked:
@@ -2056,7 +1744,7 @@ class BuildRun:
         (self.art / "plan.json").write_text(json.dumps(doc, indent=2))
         self.post_plan(doc, questions)
         if questions:
-            raise NeedsHuman("other", "the plan needs a person to answer first: " + " | ".join(questions)
+            raise run_stops.NeedsHuman("other", "the plan needs a person to answer first: " + " | ".join(questions)
                              + ". Put the answers in the Update App Intake issue, then add `proceed-with-change` again.")
         needed = [x for x in doc.get("secrets") or [] if isinstance(x, dict)]
         if needed:
@@ -2082,7 +1770,7 @@ class BuildRun:
         # against them, and with `record` leaves a hidden marker on the Intake so every later start checks them before paying for anything.
         out = self.gh(["secret", "list", "--repo", self.app_repo, "--json", "name"], check=False)
         if out.returncode != 0:
-            raise NeedsHuman("other", "could not read the names of the app's GitHub secrets, so the request's secrets cannot be confirmed")
+            raise run_stops.NeedsHuman("other", "could not read the names of the app's GitHub secrets, so the request's secrets cannot be confirmed")
         have = {x.get("name") for x in json.loads(out.stdout or "[]")}
         self.state.d["secrets"] = [x["name"] for x in needed]
         missing = [x for x in needed if x["name"] not in have]
@@ -2156,7 +1844,7 @@ class BuildRun:
                         # Nothing failed, but checks were blocked or not run. The coder cannot fix that, so it gets no round for it: the
                         # tester looks again at the same deployed commit, and a run that still cannot verify it stops for a person.
                         if retests <= 0:
-                            raise NeedsHuman("other", unverified_message(test_failures))
+                            raise run_stops.NeedsHuman("other", unverified_message(test_failures))
                         retests -= 1
                         log(f"{len(test_failures)} check(s) could not be verified; testing the same deployed commit again")
                 all_blocking = (
@@ -2186,12 +1874,12 @@ class BuildRun:
                 if failed_checks(test_failures):
                     failed_tests += 1
                     if failed_tests >= int(self.lim.get("test_rounds", 0) or 10**6):
-                        raise NeedsHuman("round_limit", f"{failed_tests} deployed tests failed; each costs a push, a deploy and a tester pass, "
+                        raise run_stops.NeedsHuman("round_limit", f"{failed_tests} deployed tests failed; each costs a push, a deploy and a tester pass, "
                                                         "so the run stops for a person instead of trying again")
                 if rnd == self.lim["review_rounds"]:
-                    raise NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
+                    raise run_stops.NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
                 if stalled(self.state.d["scoreboard"], int(self.lim.get("stuck_rounds", 0))):
-                    raise NeedsHuman("stuck", f"the last {self.lim['stuck_rounds']} rounds left the same checks failing and the "
+                    raise run_stops.NeedsHuman("stuck", f"the last {self.lim['stuck_rounds']} rounds left the same checks failing and the "
                                               "same findings open; more fix rounds are not changing anything")
                 summary = "\n".join(describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
@@ -2203,11 +1891,11 @@ class BuildRun:
             self.state.d.update(outcome="refused", message=str(e))
         except AwaitingSecret as e:
             self.state.d.update(outcome="awaiting_secret", message=str(e))
-        except ProviderBlocked as e:
+        except run_stops.ProviderBlocked as e:
             self.state.d.update(outcome="provider_blocked", message=str(e))
-        except BudgetExhausted as e:
+        except run_stops.BudgetExhausted as e:
             self.state.d.update(outcome="budget_exhausted", message=str(e))
-        except NeedsHuman as e:
+        except run_stops.NeedsHuman as e:
             outcome, message = ending_for(e.kind, str(e), self.state.d.get("spent_usd"), self.cap)
             self.state.d.update(outcome=outcome, message=message)
         except Exception as e:  # noqa: BLE001 - any crash must still reach finalize
@@ -2351,72 +2039,20 @@ def update_state_issues(d, factory_repo, pat, factory_token):
 NEAR_CAP = 0.9  # spend at or above this share of the cap makes an Agent's failure a budget ending
 
 
-BLOCKED_MESSAGE = ("The model provider refused the request because the account has no balance (HTTP 402, \"You need positive balance to "
-                   "do inference\"). Add balance (or turn on auto top-up) in the provider's dashboard, then add `proceed-with-change` "
-                   "again to retry.")
-BLOCKED_LINE_RE = re.compile(r"positive balance|insufficient (funds|balance|credits?)|payment required", re.I)
-BLOCKED_EVENT_RE = re.compile(r"BadRequestError|ConversationErrorEvent|LLMError|\b402\b")
 
 
-def provider_blocked_text(text):
-    # True if some line of an Agent's output is an error from the provider saying the account has no balance. Both parts
-    # are needed on one line (an error event and the billing wording), so a prompt or a log that merely mentions balances
-    # does not trip it.
-    return any(BLOCKED_LINE_RE.search(line) and BLOCKED_EVENT_RE.search(line) for line in (text or "").splitlines())
 
 
-SPENDING_LIMIT_RE = re.compile(r"token spending limit exceeded", re.I)
 
 
-def spending_limit_hit(path, tail_bytes=300_000):
-    # True when the end of an Agent's JSONL output shows its own scoped credential ran out (the provider's "token spending limit exceeded"),
-    # which is the credential's cap, not an empty account (that is `scan_for_provider_block`).
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - tail_bytes))
-            return bool(SPENDING_LIMIT_RE.search(f.read().decode(errors="replace")))
-    except OSError:
-        return False
 
 
-def scan_for_provider_block(path, tail_bytes=300_000):
-    # BLOCKED_MESSAGE if the end of an Agent's JSONL output shows the provider refusing for lack of balance, else None.
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - tail_bytes))
-            text = f.read().decode(errors="replace")
-    except OSError:
-        return None
-    return BLOCKED_MESSAGE if provider_blocked_text(text) else None
 
 
-MODEL_MISSING_RE = re.compile(r"(?i)model[^\"]{0,60}(not found|does not exist|not available|unknown|invalid|deprecated|unsupported|no longer)")
 
 
-def model_status(base_url, key, model):
-    # 'ok', 'missing' (the provider no longer serves this model id) or 'unknown' (any other answer, left for the run to deal with), from a one-token
-    # request. Raises ProviderBlocked when the account has no balance, exactly like provider_check.
-    status, r = http("POST", f"{base_url}/chat/completions", key,
-                     {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}, timeout=30)
-    if status == 402 or (status == 400 and provider_blocked_text(f"BadRequestError {r}")):
-        raise ProviderBlocked(BLOCKED_MESSAGE)
-    if status == 200:
-        return "ok"
-    if status == 404 or (status in (400, 422) and MODEL_MISSING_RE.search(str(r))):
-        return "missing"
-    return "unknown"
 
 
-def provider_check(base_url, key, model):
-    # A one-token request before a Build Run does any work: raises ProviderBlocked if the account has no balance, so a run
-    # cannot spend a clone, a checkout and a planner call to find out. Any other answer (including an outage) is not this
-    # condition and is left for the run to deal with.
-    status, r = http("POST", f"{base_url}/chat/completions", key,
-                     {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}, timeout=30)
-    if status == 402 or (status == 400 and provider_blocked_text(f"BadRequestError {r}")):
-        raise ProviderBlocked(BLOCKED_MESSAGE)
 
 
 def ending_for(kind, message, spent, cap):
@@ -2479,7 +2115,7 @@ def rollback_deploy(d, app, app_repo, pat, minutes):
             done = [r for r in new if r.get("status") == "completed"]
             if done and all(r.get("conclusion") == "success" for r in done):
                 for _ in range(12):
-                    status, _ = http("GET", f"https://{app}.fly.dev/api/health", timeout=20)
+                    status, _ = http_client.request("GET", f"https://{app}.fly.dev/api/health", timeout=20)
                     if status == 200:
                         return {"status": "rolled_back", "restored": base, "deploy": "healthy"}
                     time.sleep(5)
@@ -2549,7 +2185,7 @@ def finalize():
     app = os.environ["APP_NAME"]
     owner = os.environ["GITHUB_REPOSITORY"].split("/")[0]
     run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '0')}"
-    d = load_json(work / "state.json")
+    d = agent_output.load_json(work / "state.json")
     if d is None:
         d = {"app": app, "issue_number": os.environ["ISSUE_NUMBER"], "run_url": run_url, "outcome": "crash",
              "message": "no state file was written; the Build Run failed before its first stage", "cap_usd": 0,

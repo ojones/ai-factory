@@ -44,6 +44,7 @@ Decided by tickets:
 - [Documentation describes the new workflow](tickets/03-docs-describe-the-new-workflow.md): ARCHITECTURE, GLOSSARY, flag standards, invariants and the orchestrator map describe the target, marking Target versus Built today; the issue forms wait for the tickets that make them true.
 - [Decide the domain layout](tickets/04-decide-the-domain-layout.md): ten domain folders plus `shared/`, the import rules, `python -m` entry points, pilot-first move order and the `build_run/` file split (see Notes).
 - [Create shared/ and the folder mechanics](tickets/05-shared-kernel-and-renames.md): `shared/` exists with `outcomes`, `config` and `github`; `boundary_test` enforces the import rules; the Agent runner (05b) and the renames (05c) were split out of it.
+- [Extract shared/agent_runner.py](tickets/05b-extract-the-agent-runner.md): the Agent runtime is out of `build_run.py` into `shared/` (`AgentRunner`, `json_output`, `Budget`, the provider and process helpers), tested alone.
 - [Apply the intake renames](tickets/05c-apply-the-renames.md): `new-app-intake` and `update-app-intake` in code, forms, workflows and docs, ready in the working tree; the two GitHub labels must be renamed (not before the owner agrees) just before the push.
 
 ## Not yet specified

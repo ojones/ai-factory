@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 import yaml
+from shared import http_client
 
 ROOT = Path(__file__).resolve().parent.parent
 SUITE = ROOT / "agents" / "benchmark" / "suite.json"
@@ -301,11 +302,11 @@ def archive_bench_flags(app, keep=("bench-seed",)):
     import os
     sys.path.insert(0, str(Path(__file__).parent))
     import build_run as b
-    status, r = b.http("GET", f"{b.GROWTHBOOK_API}/features?limit=500", os.environ["GROWTHBOOK_ADMIN_PAT"])
+    status, r = http_client.request("GET", f"{b.GROWTHBOOK_API}/features?limit=500", os.environ["GROWTHBOOK_ADMIN_PAT"])
     for f in (r.get("features") or []) if isinstance(r, dict) else []:
         fid = f.get("id", "")
         if fid.startswith(f"{app}.feature.") and fid.split(".feature.")[-1] not in keep and not f.get("archived"):
-            b.http("POST", f"{b.GROWTHBOOK_API}/features/{fid}", os.environ["GROWTHBOOK_ADMIN_PAT"], {"archived": True})
+            http_client.request("POST", f"{b.GROWTHBOOK_API}/features/{fid}", os.environ["GROWTHBOOK_ADMIN_PAT"], {"archived": True})
 
 
 def run_pass(label, overrides, task_names, execute):

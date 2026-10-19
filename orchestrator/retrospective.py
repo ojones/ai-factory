@@ -48,7 +48,7 @@ from pathlib import Path
 
 import build_run as b
 import fixrequest
-from shared import config, outcomes
+from shared import agent_output, agent_process, config, outcomes, spend_budget
 
 LABEL = "factory-learning"
 CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
@@ -88,7 +88,7 @@ def collect_facts(work, d):
     # Deterministic facts about a run. `work` holds findings-N.json written per round.
     rounds, seen, final_minor = [], {}, []
     for path in sorted(Path(work).glob("findings-*.json"), key=lambda p: p.name):
-        doc = b.load_json(path) or {}
+        doc = agent_output.load_json(path) or {}
         if not doc.get("blocking") and not doc.get("round") and not doc.get("minor"):
             continue
         final_minor = doc.get("minor") or []
@@ -505,7 +505,7 @@ def mint_agent(cfg, parent_key):
     # holds the parent key and one analysis cannot spend more than the cap. (None, None) if one cannot be minted.
     try:
         limits = cfg["limits"]
-        budget = b.Budget(parent_key, float(limits.get("retrospective_cost_cap_usd", 0.5)), int(limits["jwt_ttl_seconds"]))
+        budget = spend_budget.Budget(parent_key, float(limits.get("retrospective_cost_cap_usd", 0.5)), int(limits["jwt_ttl_seconds"]))
         return budget.mint(cfg["roles"]["retrospective"]["model"]), budget
     except Exception as e:  # noqa: BLE001 - never fail the run
         b.log(f"could not mint a scoped credential for the retrospective Agent: {type(e).__name__}")
@@ -611,7 +611,7 @@ def run_tests(factory, root, user):
         (root / name).mkdir(exist_ok=True)
     share_with(root, user)
     out = root / "tests.out"
-    rc = b.run_watched([sys.executable, "-m", "unittest", "discover", "-p", "*_test.py", "orchestrator"], verify, env, out, 900, 0, user=user,
+    rc = agent_process.run_watched([sys.executable, "-m", "unittest", "discover", "-p", "*_test.py", "orchestrator"], verify, env, out, 900, 0, user=user,
                        pidfile=root / "pgid-tests.txt")
     return rc == 0
 
@@ -623,7 +623,7 @@ def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
     # isolation is on but cannot be proven, in which case no Agent runs.
     user = agent_user()
     if user:
-        problems = b.run_isolation_probes(user)
+        problems = agent_process.run_isolation_probes(user)
         if problems:
             b.log("retrospective Agent not run, isolation is not effective: " + "; ".join(problems))
             return False
@@ -642,7 +642,7 @@ def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
         env = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR", "CI") if k in os.environ}
         env.update({"HOME": str(home), "LLM_MODEL": "openai/" + cfg["roles"]["retrospective"]["model"],
                     "LLM_BASE_URL": cfg["provider"]["base_url"], "LLM_API_KEY": key, "RUNTIME": "process"})
-        rc = b.run_watched(["openhands", "--headless", "--override-with-envs", "-t", prompt], work, env, root / "openhands.out",
+        rc = agent_process.run_watched(["openhands", "--headless", "--override-with-envs", "-t", prompt], work, env, root / "openhands.out",
                            timeout_min * 60, 0, user=user, pidfile=root / "pgid-agent.txt")
         if rc == "timeout":
             b.log("retrospective agent timed out")
@@ -742,7 +742,7 @@ def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path,
     record_agent_spend(budget, key, repo, token, run_id)
     if not ran:
         return None
-    result = b.load_json(result_path) or {}
+    result = agent_output.load_json(result_path) or {}
     if result.get("category") not in CATEGORIES:
         for n in targets:
             gh(["issue", "comment", str(n), "--repo", repo, "--body", "The retrospective Agent produced no usable analysis."], token)
@@ -777,7 +777,7 @@ def lesson_main(number):
 
 def main():
     work = Path(os.environ["BUILD_RUN_DIR"])
-    d = b.load_json(work / "state.json")
+    d = agent_output.load_json(work / "state.json")
     if not d:
         return 0
     stuck = d.get("outcome") not in outcomes.OK

@@ -8,7 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_run as b  # noqa: E402
 import update_intake as u  # noqa: E402
-from shared import github  # noqa: E402
+from shared import github, run_stops  # noqa: E402
 
 FORM = "### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n{cap}\n"
 
@@ -33,7 +33,7 @@ class Form(unittest.TestCase):
         body = FORM.format(app="a", task="Add search\nby title", cap="$3")
         self.assertEqual(b.parse_intake(body, 2.0, 10.0), ("Add search\nby title", 3.0))
         self.assertEqual(b.parse_intake("### What should be built?\n\nA thing\n", 2.0, 10.0), ("A thing", 2.0))
-        with self.assertRaises(b.NeedsHuman):
+        with self.assertRaises(run_stops.NeedsHuman):
             b.parse_intake(FORM.format(app="a", task="_No response_", cap=""), 2.0, 10.0)
 
 
@@ -203,7 +203,7 @@ class Identity(unittest.TestCase):
 
     def test_a_new_app_intake_is_titled_with_the_app(self):
         self.assertEqual(b.identify_intake(self.issue(labels=["new-app-intake"]), "notes", 5), (False, {}))
-        with self.assertRaises(b.NeedsHuman):
+        with self.assertRaises(run_stops.NeedsHuman):
             b.identify_intake(self.issue(title="other"), "notes", 5)
 
     def test_an_update_intake_needs_the_form_the_label_and_the_matching_app(self):
@@ -214,7 +214,7 @@ class Identity(unittest.TestCase):
                     self.issue(labels=["update-app-intake", "app:todo"], body=body),
                     self.issue(labels=["update-app-intake", "app:todo"], body=FORM.format(app="todo", task="x", cap="")),
                     self.issue(labels=["update-app-intake", "app:notes"], body="no form")):
-            with self.assertRaises(b.NeedsHuman):
+            with self.assertRaises(run_stops.NeedsHuman):
                 b.identify_intake(bad, "notes", 5)
 
     def test_a_child_issue_reports_its_plan_metadata(self):
@@ -275,7 +275,7 @@ class Planning(unittest.TestCase):
 
     def test_a_blocking_question_stops_the_run_for_a_person(self):
         run = self.make(self.plan(1, questions=["Should photos be public?"]))
-        with self.assertRaises(b.NeedsHuman) as cm:
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.plan_change()
         self.assertIn("Should photos be public?", str(cm.exception))
         self.assertIn("proceed-with-change", str(cm.exception))
@@ -295,7 +295,7 @@ class Planning(unittest.TestCase):
     def test_a_person_filed_request_still_stops_for_a_blocking_question(self):
         run = self.make(self.plan(1, questions=["Should photos be public?"]))
         run.fix_meta = {}
-        with self.assertRaises(b.NeedsHuman):
+        with self.assertRaises(run_stops.NeedsHuman):
             run.plan_change()
 
     def test_a_plan_that_fails_the_check_is_rejected_with_the_reasons(self):
@@ -303,8 +303,8 @@ class Planning(unittest.TestCase):
         bad["change_sets"][1]["depends_on"] = ["CS-9"]
         run = self.make(bad)
         run.agent_json = mock.Mock(side_effect=lambda role, label, values, path, check=None, **kw: (_ for _ in ()).throw(
-            b.NeedsHuman("other", "no valid output twice")) if check and not _passes(check, bad) else (bad, 0.1, None))
-        with self.assertRaises(b.NeedsHuman) as cm:
+            run_stops.NeedsHuman("other", "no valid output twice")) if check and not _passes(check, bad) else (bad, 0.1, None))
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.plan_change()
         self.assertIn("rejected", str(cm.exception))
         self.assertIn("CS-9", str(cm.exception))

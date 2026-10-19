@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_run as b  # noqa: E402
+from shared import http_client  # noqa: E402
 
 
 def run_state(**over):
@@ -50,7 +51,7 @@ class Sh:
 
 class Deploy(unittest.TestCase):
     def go(self, sh, http=(200, {}), minutes=5):
-        with mock.patch.object(b, "sh", sh), mock.patch.object(b, "http", return_value=http), mock.patch.object(b.time, "sleep"):
+        with mock.patch.object(b, "sh", sh), mock.patch.object(http_client, "request", return_value=http), mock.patch.object(b.time, "sleep"):
             return b.rollback_deploy(run_state(), "demo", "o/demo", "pat", minutes)
 
     def test_it_dispatches_the_apps_own_workflow_for_the_starting_commit_and_waits_for_health(self):
@@ -81,7 +82,7 @@ class Deploy(unittest.TestCase):
         self.assertEqual((result["status"], result["deploy"]), ("failed", "unhealthy"))
 
     def test_a_timeout_and_a_crash_are_reported_and_not_raised(self):
-        with mock.patch.object(b, "sh", Sh([[]])), mock.patch.object(b, "http"), mock.patch.object(b.time, "sleep"), \
+        with mock.patch.object(b, "sh", Sh([[]])), mock.patch.object(http_client, "request"), mock.patch.object(b.time, "sleep"), \
                 mock.patch.object(b.time, "time", side_effect=[0, 1, 10 ** 6]):
             self.assertEqual(b.rollback_deploy(run_state(), "demo", "o/demo", "pat", 5)["deploy"], "timeout")
         with mock.patch.object(b, "sh", side_effect=OSError("gh is gone")):

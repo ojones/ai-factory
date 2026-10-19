@@ -16,7 +16,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
 import retrospective as pm  # noqa: E402
-from shared import github, outcomes  # noqa: E402
+from shared import agent_process, agent_runner, github, http_client, outcomes, provider, run_stops, spend_budget  # noqa: E402
 
 ROOT = b.FACTORY_DIR
 PROFILES = yaml.safe_load((ROOT / "agents/profiles.yml").read_text())
@@ -28,10 +28,9 @@ class Invariants(unittest.TestCase):
     def test_inv01_an_agent_gets_a_whitelisted_environment(self):
         secrets = {"FACTORY_PAT": "pat-secret", "FLY_API_TOKEN": "fly-secret", "GROWTHBOOK_ADMIN_PAT": "gb-secret",
                    "DEEPINFRA_API_KEY": "parent-secret", "PREVIEW_MASTER_SECRET": "master-secret", "FACTORY_GH_TOKEN": "gh-secret"}
-        run = object.__new__(b.BuildRun)
-        run.cfg = {"roles": {"coder": {"model": "m/x"}}, "provider": {"base_url": "https://llm"}}
+        runner = agent_runner.AgentRunner({"roles": {"coder": {"model": "m/x"}}, "provider": {"base_url": "https://llm"}}, None, "art", "work", "cwd")
         with mock.patch.dict(os.environ, secrets):
-            env = run.agent_env("coder", "scoped-jwt")
+            env = runner.agent_env("coder", "scoped-jwt")
         self.assertEqual(env["LLM_API_KEY"], "scoped-jwt")
         self.assertFalse(set(secrets.values()) & set(env.values()))
         self.assertFalse(set(secrets) & set(env))
@@ -100,7 +99,7 @@ class Invariants(unittest.TestCase):
         run.state.d["release"] = {"released": ["demo.feature.new"], "kept": ["demo.feature.old"]}
         run.app_error_count = lambda: 0
         run.disable_flags = mock.Mock(return_value=[])
-        with mock.patch.object(b, "http", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
+        with mock.patch.object(http_client, "request", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
             run.watch_release()
         run.disable_flags.assert_called_once_with(["demo.feature.new"])
 
@@ -110,8 +109,8 @@ class Invariants(unittest.TestCase):
         self.assertEqual(shell.stdout.strip(), b.preview_token("x", "demo-app"))
 
     def test_inv09_each_credential_is_single_model_and_limited_to_what_is_left(self):
-        with mock.patch.object(b, "http", return_value=(200, {"token": "jwt"})) as http:
-            bud = b.Budget("admin", 2.0, 100)
+        with mock.patch.object(http_client, "request", return_value=(200, {"token": "jwt"})) as http:
+            bud = spend_budget.Budget("admin", 2.0, 100)
             bud.tokens["earlier"] = 0.5
             bud.mint("m/x")
         body = http.call_args[0][3]
@@ -121,7 +120,7 @@ class Invariants(unittest.TestCase):
     def test_inv10_a_cap_override_above_the_ceiling_or_not_above_zero_is_refused(self):
         form = "### What should be built?\n\nA thing\n\n### Cost cap override (USD)\n\n{}\n"
         for bad in ("10.01", "0", "-1"):
-            with self.assertRaises(b.NeedsHuman):
+            with self.assertRaises(run_stops.NeedsHuman):
                 b.parse_intake(form.format(bad), PROFILES["limits"]["cost_cap_usd_default"], PROFILES["limits"]["cost_cap_usd_ceiling"])
         self.assertEqual(b.parse_intake(form.format("10"), 2.0, PROFILES["limits"]["cost_cap_usd_ceiling"])[1], 10.0)
 
@@ -188,9 +187,9 @@ class Invariants(unittest.TestCase):
 
     def test_inv20_the_retrospective_agent_never_gets_the_parent_key(self):
         cfg = {"limits": {"retrospective_cost_cap_usd": 0.5, "jwt_ttl_seconds": 60}, "roles": {"retrospective": {"model": "m/x"}}}
-        with mock.patch.object(pm.b, "http", return_value=(200, {"token": "scoped"})):
+        with mock.patch.object(http_client, "request", return_value=(200, {"token": "scoped"})):
             self.assertEqual(pm.mint_agent_key(cfg, "parent-key"), "scoped")
-        with mock.patch.object(pm.b, "http", return_value=(500, {})):
+        with mock.patch.object(http_client, "request", return_value=(500, {})):
             self.assertIsNone(pm.mint_agent_key(cfg, "parent-key"))
         source = (ROOT / "orchestrator/retrospective.py").read_text()
         self.assertNotIn('"LLM_API_KEY": os.environ', source)
@@ -316,13 +315,13 @@ class Invariants(unittest.TestCase):
     def test_inv29_a_provider_with_no_balance_stops_the_run_and_retries_nothing(self):
         import retrospective as pm
         event = '{"code": "LLMBadRequestError", "detail": "OpenAIException - You need positive balance to do inference", "kind": "ConversationErrorEvent"}'
-        self.assertTrue(b.provider_blocked_text(event))
-        self.assertFalse(b.provider_blocked_text("the spec mentions a positive balance"))
-        with mock.patch.object(b, "http", return_value=(402, {})):
-            with self.assertRaises(b.ProviderBlocked):
-                b.provider_check("https://x/v1", "k", "m")
-            with self.assertRaises(b.ProviderBlocked):
-                b.Budget("admin", 1.0, 60).mint("m")
+        self.assertTrue(provider.provider_blocked_text(event))
+        self.assertFalse(provider.provider_blocked_text("the spec mentions a positive balance"))
+        with mock.patch.object(http_client, "request", return_value=(402, {})):
+            with self.assertRaises(run_stops.ProviderBlocked):
+                provider.provider_check("https://x/v1", "k", "m")
+            with self.assertRaises(run_stops.ProviderBlocked):
+                spend_budget.Budget("admin", 1.0, 60).mint("m")
         self.assertFalse(pm.wants_fix_request({"outcome": "provider_blocked"}, {}))  # no self-starting retry
         self.assertFalse(pm.records_stuck_issue("provider_blocked"))
         self.assertNotIn("provider_blocked", outcomes.OK)
@@ -353,7 +352,7 @@ class Invariants(unittest.TestCase):
     def test_inv32_a_silent_agent_is_killed_long_before_the_overall_timeout(self):
         import tempfile
         out = Path(tempfile.mkdtemp()) / "o.jsonl"
-        rc = b.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
+        rc = agent_process.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
         self.assertEqual(rc, "stall")
         self.assertGreater(PROFILES["limits"]["agent_stall_minutes"], 0)
         self.assertLess(PROFILES["limits"]["agent_stall_minutes"], PROFILES["limits"]["agent_timeout_minutes"])
@@ -374,11 +373,11 @@ class Invariants(unittest.TestCase):
         self.assertIn("schedule", triggers)
 
     def test_inv34_agents_run_as_a_separate_account_and_the_run_proves_it(self):
-        cmd = b.agent_command(["openhands"], {"PATH": "/p", "LLM_API_KEY": "secret-jwt"}, "agent")
+        cmd = agent_process.agent_command(["openhands"], {"PATH": "/p", "LLM_API_KEY": "secret-jwt"}, "agent")
         self.assertEqual(cmd[:4], ["sudo", "-n", "-u", "agent"])
         self.assertNotIn("secret-jwt", " ".join(cmd))
         self.assertIn("GIT_CONFIG_VALUE_0", b.git_auth_env("h"))
-        self.assertTrue(b.isolation_problems({"whoami": "runner", "environ": "SELF-CHECK-SECRET", "workspace": "x", "env_names": "FACTORY_PAT", "sudo": "yes"}))
+        self.assertTrue(agent_process.isolation_problems({"whoami": "runner", "environ": "SELF-CHECK-SECRET", "workspace": "x", "env_names": "FACTORY_PAT", "sudo": "yes"}))
         self.assertEqual(PROFILES["limits"]["agent_isolation"], "user")
 
     def test_inv35_updates_reach_apps_only_as_gated_intakes(self):
@@ -473,7 +472,7 @@ class Invariants(unittest.TestCase):
         run.cfg = {"provider": {"base_url": "u"}, "roles": {"coder": {"model": "gone", "fallback_model": "ok"}}}
         run.state = b.State(Path("/tmp/inv41-state.json"), "a", "1", "u")
         run.state.save = lambda: None
-        with mock.patch.object(b, "http", lambda m, u, t=None, body=None, timeout=60: (404, {}) if body["model"] == "gone" else (200, {})), \
+        with mock.patch.object(http_client, "request", lambda m, u, t=None, body=None, timeout=60: (404, {}) if body["model"] == "gone" else (200, {})), \
                 mock.patch.dict(os.environ, {"DEEPINFRA_API_KEY": "k"}):
             run.check_models()
         self.assertEqual(run.cfg["roles"]["coder"]["model"], "ok")

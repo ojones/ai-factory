@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import retrospective as pm  # noqa: E402
+from shared import agent_process, http_client  # noqa: E402
 
 
 def write_findings(work, n, summaries):
@@ -488,8 +489,8 @@ class Isolation(unittest.TestCase):
         cfg = {"roles": {"retrospective": {"model": "m/x", "prompt": "prompts/retrospective.md"}}, "provider": {"base_url": "https://llm"}}
         with mock.patch.dict(os.environ, {"AGENT_USER": user or "", "BUILD_RUN_DIR": str(self.tree({})), "FACTORY_PAT": "PAT-SECRET",
                                           "DEEPINFRA_API_KEY": "PARENT-KEY", "PATH": os.environ["PATH"]}), \
-                mock.patch.object(pm.b, "run_isolation_probes", return_value=list(problems)) as probes, \
-                mock.patch.object(pm.b, "run_watched", fake_watched), mock.patch.object(pm, "share_with"):
+                mock.patch.object(agent_process, "run_isolation_probes", return_value=list(problems)) as probes, \
+                mock.patch.object(agent_process, "run_watched", fake_watched), mock.patch.object(pm, "share_with"):
             ran = pm.run_agent(factory, cfg, "scoped-key", facts, result, 5)
         return ran, factory, result, seen, probes
 
@@ -528,7 +529,7 @@ class Isolation(unittest.TestCase):
             seen.update(cmd=cmd, cwd=Path(cwd), env=env, user=user)
             return 0
         with mock.patch.dict(os.environ, {"FACTORY_PAT": "PAT-SECRET", "DEEPINFRA_API_KEY": "PARENT-KEY", "FACTORY_GH_TOKEN": "tok", "PATH": os.environ["PATH"]}), \
-                mock.patch.object(pm.b, "run_watched", fake_watched), mock.patch.object(pm, "share_with"):
+                mock.patch.object(agent_process, "run_watched", fake_watched), mock.patch.object(pm, "share_with"):
             self.assertTrue(pm.run_tests(factory, root, "agent"))
         self.assertEqual(seen["user"], "agent")
         self.assertNotEqual(seen["cwd"], factory)
@@ -553,7 +554,7 @@ class AgentCredential(unittest.TestCase):
         from unittest import mock
         cfg = {"limits": {"retrospective_cost_cap_usd": 0.25, "jwt_ttl_seconds": 100},
                "roles": {"retrospective": {"model": "m/x"}}}
-        with mock.patch.object(pm.b, "http", return_value=(200, {"token": "jwt-1"})) as http:
+        with mock.patch.object(http_client, "request", return_value=(200, {"token": "jwt-1"})) as http:
             self.assertEqual(pm.mint_agent_key(cfg, "parent-key"), "jwt-1")
         _, url, key, body = http.call_args[0]
         self.assertEqual(key, "parent-key")
@@ -562,7 +563,7 @@ class AgentCredential(unittest.TestCase):
     def test_no_credential_means_no_agent_run(self):
         from unittest import mock
         cfg = {"limits": {"jwt_ttl_seconds": 100}, "roles": {"retrospective": {"model": "m/x"}}}
-        with mock.patch.object(pm.b, "http", return_value=(500, {})):
+        with mock.patch.object(http_client, "request", return_value=(500, {})):
             self.assertIsNone(pm.mint_agent_key(cfg, "parent-key"))
 
 

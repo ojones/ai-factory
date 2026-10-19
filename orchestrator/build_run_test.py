@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
+from shared import agent_output, agent_process, agent_usage, http_client, provider, run_stops, spend_budget  # noqa: E402
 
 FORM = ("### What should be built?\r\n\r\nA notes app\r\nwith tags\r\n\r\n"
         "### Cost cap override (USD)\r\n\r\n{cap}\r\n")
@@ -25,11 +26,11 @@ class Intake(unittest.TestCase):
 
     def test_rejects_over_ceiling_zero_and_garbage(self):
         for bad in ("10.01", "0", "abc"):
-            with self.assertRaises(b.NeedsHuman):
+            with self.assertRaises(run_stops.NeedsHuman):
                 b.parse_intake(FORM.format(cap=bad), 2.0, 10.0)
 
     def test_rejects_empty_task(self):
-        with self.assertRaises(b.NeedsHuman):
+        with self.assertRaises(run_stops.NeedsHuman):
             b.parse_intake("### What should be built?\n\n_No response_\n", 2.0, 10.0)
 
 
@@ -200,23 +201,23 @@ class SingleCallReview(unittest.TestCase):
     def test_call_retries_overload_then_returns_the_document(self):
         replies = [(429, "busy"), (200, {"choices": [{"message": {"content": '{"analysis": "a", "findings": [], "verdict": "clean"}'}}],
                                          "usage": {"prompt_tokens": 5}})]
-        orig, orig_sleep = b.http, b.time.sleep
-        b.http, b.time.sleep = (lambda *a, **k: replies.pop(0)), (lambda s: None)
+        orig, orig_sleep = http_client.request, b.time.sleep
+        http_client.request, b.time.sleep = (lambda *a, **k: replies.pop(0)), (lambda s: None)
         try:
             doc, usage = b.single_call_review("u", "k", "m", "sys", "user")
         finally:
-            b.http, b.time.sleep = orig, orig_sleep
+            http_client.request, b.time.sleep = orig, orig_sleep
         self.assertEqual(doc["verdict"], "clean")
         self.assertEqual(usage["prompt_tokens"], 5)
 
     def test_unusable_replies_end_in_a_failure_the_caller_can_fall_back_on(self):
-        orig, orig_sleep = b.http, b.time.sleep
-        b.http, b.time.sleep = (lambda *a, **k: (200, {"choices": [{"message": {"content": "not json"}}]})), (lambda s: None)
+        orig, orig_sleep = http_client.request, b.time.sleep
+        http_client.request, b.time.sleep = (lambda *a, **k: (200, {"choices": [{"message": {"content": "not json"}}]})), (lambda s: None)
         try:
             with self.assertRaises(b.FastReviewFailed):
                 b.single_call_review("u", "k", "m", "sys", "user", attempts=2)
         finally:
-            b.http, b.time.sleep = orig, orig_sleep
+            http_client.request, b.time.sleep = orig, orig_sleep
 
 
 class PreviewToken(unittest.TestCase):
@@ -235,19 +236,19 @@ class TokenUsage(unittest.TestCase):
         "condenser": {"token_usages": [{"prompt_tokens": 70000}]}}}}
 
     def test_peak_is_the_largest_single_call_context(self):
-        u = b.summarize_token_usage(self.STATE)
+        u = agent_usage.summarize_token_usage(self.STATE)
         self.assertEqual((u["calls"], u["condenser_calls"], u["peak_context"], u["last_context"]), (3, 1, 60000, 41000))
         self.assertEqual(u["prompt_tokens"], 114490)
 
     def test_missing_stats_is_zeroes_not_an_error(self):
-        self.assertEqual(b.summarize_token_usage({})["peak_context"], 0)
+        self.assertEqual(agent_usage.summarize_token_usage({})["peak_context"], 0)
 
     def test_merge_keeps_the_larger_peak_and_sums_the_rest(self):
-        a = b.summarize_token_usage(self.STATE)
-        m = b.merge_usage(a, b.summarize_token_usage({"stats": {"usage_to_metrics": {"agent": {"token_usages": [
+        a = agent_usage.summarize_token_usage(self.STATE)
+        m = agent_usage.merge_usage(a, agent_usage.summarize_token_usage({"stats": {"usage_to_metrics": {"agent": {"token_usages": [
             {"prompt_tokens": 90000, "completion_tokens": 1}]}}}}))
         self.assertEqual((m["calls"], m["peak_context"], m["last_context"]), (4, 90000, 90000))
-        self.assertIsNone(b.merge_usage(None, None))
+        self.assertIsNone(agent_usage.merge_usage(None, None))
 
 
 class SummaryRendering(unittest.TestCase):
@@ -326,21 +327,6 @@ class InstallDependencies(unittest.TestCase):
             self.assertNotIn("FLY_API_TOKEN", env)
             self.assertEqual(sh.call_args.args[0][:2], ["npm", "ci"])
 
-
-class CoderModelPerRound(unittest.TestCase):
-    def run_for(self, profile):
-        run = object.__new__(b.BuildRun)
-        run.cfg = {"roles": {"coder": profile, "tester": {"model": "t"}}}
-        return run
-
-    def test_every_attempt_uses_model_unless_fix_model_is_set(self):
-        run = self.run_for({"model": "fast"})
-        self.assertEqual([run.model_for("coder", l) for l in ("1", "2", "fix1")], ["fast"] * 3)
-
-    def test_fix_model_takes_over_after_round_one_for_the_coder_only(self):
-        run = self.run_for({"model": "fast", "fix_model": "big"})
-        self.assertEqual([run.model_for("coder", l) for l in ("1", "2", "fix1")], ["fast", "big", "big"])
-        self.assertEqual(run.model_for("tester", "t2"), "t")
 
 
 class ReviewBeforePushThenTest(unittest.TestCase):
@@ -441,10 +427,10 @@ class ReviewBeforePushThenTest(unittest.TestCase):
 
     def test_a_failing_tester_with_nothing_seen_to_fail_raises_for_a_person(self):
         def agent(role, *a, **k):
-            raise b.NeedsHuman("other", "the tester produced no valid output file twice")
+            raise run_stops.NeedsHuman("other", "the tester produced no valid output file twice")
 
         run = self.make(self.FLAGS, agent)
-        with self.assertRaises(b.NeedsHuman):
+        with self.assertRaises(run_stops.NeedsHuman):
             run.test_deployed("base1", "head1", 1, ["f"])
 
     def test_improvements_are_kept_deduplicated_and_only_the_known_kinds(self):
@@ -686,7 +672,7 @@ class RoundLoop(unittest.TestCase):
 class BudgetAccounting(unittest.TestCase):
     def setUp(self):
         self.calls, self.spend = [], {}
-        self._orig = b.http
+        self._orig = http_client.request
 
         def fake(method, url, token=None, body=None, timeout=60):
             self.calls.append((method, body))
@@ -695,13 +681,13 @@ class BudgetAccounting(unittest.TestCase):
                 self.spend[jwt] = 0.0
                 return 200, {"token": jwt}
             return 200, {"spending_current": self.spend[url.split("jwtoken=")[1]]}
-        b.http = fake
+        http_client.request = fake
 
     def tearDown(self):
-        b.http = self._orig
+        http_client.request = self._orig
 
     def test_each_jwt_is_single_model_and_limited_to_what_is_left(self):
-        bud = b.Budget("admin", 2.0, 100)
+        bud = spend_budget.Budget("admin", 2.0, 100)
         j1 = bud.mint("m1")
         self.spend[j1] = 0.75
         self.assertAlmostEqual(bud.refresh(j1), 0.75)
@@ -711,14 +697,14 @@ class BudgetAccounting(unittest.TestCase):
         self.assertEqual([p["spending_limit"] for p in post], [2.0, 1.25])
 
     def test_spend_sums_across_jwts_and_exhaustion_stops_minting(self):
-        bud = b.Budget("admin", 1.0, 100)
+        bud = spend_budget.Budget("admin", 1.0, 100)
         j1 = bud.mint("m1")
         self.spend[j1] = 0.6
         bud.refresh(j1)
         j2 = bud.mint("m2")
         self.spend[j2] = 0.45  # the crossing call completes, so overshoot is allowed
         self.assertAlmostEqual(bud.refresh(j2), 1.05)
-        with self.assertRaises(b.BudgetExhausted):
+        with self.assertRaises(run_stops.BudgetExhausted):
             bud.mint("m1")
 
 
@@ -846,7 +832,7 @@ class Watchdog(unittest.TestCase):
         from unittest import mock
         run = self.make(0.05, ["x.feature.new"])
         run.disable_flags = mock.Mock(return_value=[])
-        with mock.patch.object(b, "http", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
+        with mock.patch.object(http_client, "request", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
             run.watch_release()
         run.disable_flags.assert_called_once_with(["x.feature.new"])
         self.assertEqual(run.state.d["outcome"], "watchdog_disabled")
@@ -856,7 +842,7 @@ class Watchdog(unittest.TestCase):
         from unittest import mock
         run = self.make(0.05, ["x.feature.new"])
         run.disable_flags = mock.Mock(return_value=["x.feature.new"])
-        with mock.patch.object(b, "http", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
+        with mock.patch.object(http_client, "request", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
             run.watch_release()
         self.assertIn("turn them off in GrowthBook now", run.state.d["message"])
 
@@ -864,7 +850,7 @@ class Watchdog(unittest.TestCase):
         from unittest import mock
         run = self.make(0.0005, ["x.feature.new"])
         run.disable_flags = mock.Mock()
-        with mock.patch.object(b, "http", return_value=(200, {})), mock.patch.object(b.time, "sleep"):
+        with mock.patch.object(http_client, "request", return_value=(200, {})), mock.patch.object(b.time, "sleep"):
             run.watch_release()
         run.disable_flags.assert_not_called()
         self.assertNotEqual(run.state.d["outcome"], "watchdog_disabled")
@@ -876,7 +862,7 @@ class Watchdog(unittest.TestCase):
         run.state.save = lambda: saves.append(run.state.d["outcome"])
         run.state.d["outcome"] = "released"
         run.disable_flags = mock.Mock()
-        with mock.patch.object(b, "http", side_effect=KeyboardInterrupt), mock.patch.object(b.time, "sleep"):
+        with mock.patch.object(http_client, "request", side_effect=KeyboardInterrupt), mock.patch.object(b.time, "sleep"):
             with self.assertRaises(KeyboardInterrupt):
                 run.watch_release()
         self.assertEqual(saves[:1], ["released"])
@@ -886,7 +872,7 @@ class Watchdog(unittest.TestCase):
         for minutes, released in ((0, ["x.feature.new"]), (5, [])):
             run = self.make(minutes, released)
             run.disable_flags = mock.Mock()
-            with mock.patch.object(b, "http") as http:
+            with mock.patch.object(http_client, "request") as http:
                 run.watch_release()
             http.assert_not_called()
 
@@ -917,7 +903,7 @@ class SpendLedger(unittest.TestCase):
 
     def test_the_cap_stops_a_new_run_and_records_what_was_spent(self):
         run = self.make(5.0, [self.today_line(3.0, "1"), self.today_line(2.5, "2")])
-        with self.assertRaises(b.NeedsHuman) as cm:
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.check_daily_cap()
         self.assertIn("$5.50", str(cm.exception))
         self.assertEqual(run.state.d["daily_spent_usd"], 5.5)
@@ -962,20 +948,20 @@ class JsonOutput(unittest.TestCase):
         return f
 
     def test_the_problem_is_described_for_the_agent(self):
-        self.assertIn("was not written", b.json_problem(self.write(None)))
-        self.assertIn("is empty", b.json_problem(self.write("  \n")))
+        self.assertIn("was not written", agent_output.json_problem(self.write(None)))
+        self.assertIn("is empty", agent_output.json_problem(self.write("  \n")))
         # What the tester wrote in the first real watchdog test: unescaped quotes inside a string.
-        bad = b.json_problem(self.write('{"evidence": "Response: {"intervalSeconds":2}"}'))
+        bad = agent_output.json_problem(self.write('{"evidence": "Response: {"intervalSeconds":2}"}'))
         self.assertIn("not valid JSON", bad)
         self.assertIn("line 1 column", bad)
         self.assertIn("not escaped", bad)
 
     def test_a_usable_file_has_no_problem_and_a_rejected_one_says_why(self):
-        self.assertIsNone(b.json_problem(self.write('{"a": 1}')))
+        self.assertIsNone(agent_output.json_problem(self.write('{"a": 1}')))
         def check(doc):
             raise ValueError("no results list")
-        self.assertIn("no results list", b.json_problem(self.write('{"a": 1}'), check))
-        self.assertIn("not accepted", b.json_problem(self.write('{"a": 1}'), lambda d: False))
+        self.assertIn("no results list", agent_output.json_problem(self.write('{"a": 1}'), check))
+        self.assertIn("not accepted", agent_output.json_problem(self.write('{"a": 1}'), lambda d: False))
 
     def test_the_second_attempt_is_told_what_was_wrong_with_the_first(self):
         run = object.__new__(b.BuildRun)
@@ -1007,7 +993,7 @@ class JsonOutput(unittest.TestCase):
         run.invoke, run.restore_tree = invoke, lambda cwd=None: None
         run.art = Path(__import__("tempfile").mkdtemp())
         run.state = b.State(run.art / "state.json", "demo", "1", "url")
-        with self.assertRaises(b.NeedsHuman) as cm:
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.agent_json("tester", "t1", {}, path)
         self.assertIn("no valid output file twice", str(cm.exception))
         self.assertIn("last problem: it is not valid JSON", str(cm.exception))
@@ -1031,7 +1017,7 @@ class JsonOutput(unittest.TestCase):
             return 0, 0.55, None
 
         run.invoke, run.restore_tree = invoke, lambda cwd=None: None
-        with self.assertRaises(b.NeedsHuman) as cm:
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.agent_json("tester", "t1", {}, path)
         self.assertEqual(labels, ["t1"])  # no "t1b"
         self.assertIn("spent its whole credential", str(cm.exception))
@@ -1042,40 +1028,40 @@ class JsonOutput(unittest.TestCase):
 
     def test_the_spending_limit_message_is_found_at_the_end_of_a_stream_and_a_missing_file_is_not_a_hit(self):
         p = self.write('x' * 400000 + 'token spending limit exceeded')
-        self.assertTrue(b.spending_limit_hit(p))
-        self.assertFalse(b.spending_limit_hit(self.write("all fine")))
-        self.assertFalse(b.spending_limit_hit(Path("/nonexistent/stream.jsonl")))
+        self.assertTrue(provider.spending_limit_hit(p))
+        self.assertFalse(provider.spending_limit_hit(self.write("all fine")))
+        self.assertFalse(provider.spending_limit_hit(Path("/nonexistent/stream.jsonl")))
 
 
 class RunWatched(unittest.TestCase):
     def test_stalled_only_after_the_limit_and_never_when_off(self):
-        self.assertFalse(b.silent_too_long(100, 150, 60))
-        self.assertTrue(b.silent_too_long(100, 160, 60))
-        self.assertFalse(b.silent_too_long(0, 10**6, 0))
+        self.assertFalse(agent_process.silent_too_long(100, 150, 60))
+        self.assertTrue(agent_process.silent_too_long(100, 160, 60))
+        self.assertFalse(agent_process.silent_too_long(0, 10**6, 0))
 
     def test_a_silent_process_is_killed_as_a_stall_and_a_chatty_one_finishes(self):
         import sys
         import tempfile
         out = Path(tempfile.mkdtemp()) / "o.jsonl"
         started = time.time()
-        rc = b.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
+        rc = agent_process.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
         self.assertEqual(rc, "stall")
         self.assertLess(time.time() - started, 10)
-        rc = b.run_watched([sys.executable, "-c", "import time\nfor i in range(6):\n print(i, flush=True); time.sleep(0.4)"],
+        rc = agent_process.run_watched([sys.executable, "-c", "import time\nfor i in range(6):\n print(i, flush=True); time.sleep(0.4)"],
                            None, os.environ.copy(), out, 30, 1.5, poll=0.2)
         self.assertEqual(rc, 0)
-        rc = b.run_watched([sys.executable, "-c", "import time\nwhile True:\n print('x', flush=True); time.sleep(0.2)"],
+        rc = agent_process.run_watched([sys.executable, "-c", "import time\nwhile True:\n print('x', flush=True); time.sleep(0.2)"],
                            None, os.environ.copy(), out, 1, 5, poll=0.2)
         self.assertEqual(rc, "timeout")
 
 
 class AgentIsolation(unittest.TestCase):
     def test_without_a_user_the_command_is_unchanged(self):
-        self.assertEqual(b.agent_command(["openhands", "-t", "x"], {"PATH": "/bin"}, None), ["openhands", "-t", "x"])
+        self.assertEqual(agent_process.agent_command(["openhands", "-t", "x"], {"PATH": "/bin"}, None), ["openhands", "-t", "x"])
 
     def test_with_a_user_variables_go_by_name_and_never_by_value(self):
         env = {"PATH": "/opt/bin", "LLM_API_KEY": "jwt-secret-value", "HOME": "/srv/agent/run/home-a"}
-        cmd = b.agent_command(["openhands", "-t", "x"], env, "agent", "/srv/agent/run/pgid.txt")
+        cmd = agent_process.agent_command(["openhands", "-t", "x"], env, "agent", "/srv/agent/run/pgid.txt")
         self.assertEqual(cmd[:5], ["sudo", "-n", "-u", "agent", "--preserve-env=LLM_API_KEY,HOME"])
         self.assertNotIn("jwt-secret-value", " ".join(cmd))
         self.assertIn("PATH=/opt/bin", cmd)
@@ -1089,10 +1075,10 @@ class AgentIsolation(unittest.TestCase):
 
     def test_the_self_check_finds_each_way_isolation_can_fail(self):
         good = {"whoami": "agent\n", "environ": "", "workspace": "", "env_names": "", "sudo": "no\n"}
-        self.assertEqual(b.isolation_problems(good), [])
+        self.assertEqual(agent_process.isolation_problems(good), [])
         for bad, text in (({"whoami": "runner\n"}, "different account"), ({"environ": "ISOLATION_MARK=SELF-CHECK-SECRET"}, "environment"),
                           ({"workspace": "app\nrun"}, "workspace"), ({"env_names": "FACTORY_PAT\n"}, "credential"), ({"sudo": "yes\n"}, "sudo")):
-            problems = b.isolation_problems({**good, **bad})
+            problems = agent_process.isolation_problems({**good, **bad})
             self.assertEqual(len(problems), 1)
             self.assertIn(text, problems[0])
 
@@ -1228,14 +1214,14 @@ class MisplacedFile(unittest.TestCase):
         cwd.mkdir()
         run.mkdir()
         (cwd / "report.json").write_text('{"a": 1}')
-        self.assertTrue(b.adopt_misplaced_file(run / "report.json", cwd))
+        self.assertTrue(agent_output.adopt_misplaced_file(run / "report.json", cwd))
         self.assertEqual((run / "report.json").read_text(), '{"a": 1}')
         (cwd / "report.json").write_text('{"a": 2}')
-        self.assertFalse(b.adopt_misplaced_file(run / "report.json", cwd))  # the real file is never replaced
+        self.assertFalse(agent_output.adopt_misplaced_file(run / "report.json", cwd))  # the real file is never replaced
         self.assertEqual((run / "report.json").read_text(), '{"a": 1}')
-        self.assertFalse(b.adopt_misplaced_file(run / "other.json", cwd))
-        self.assertFalse(b.adopt_misplaced_file(run / "x.json", None))
-        self.assertIn("exactly that absolute path", b.json_problem(run / "missing.json"))
+        self.assertFalse(agent_output.adopt_misplaced_file(run / "other.json", cwd))
+        self.assertFalse(agent_output.adopt_misplaced_file(run / "x.json", None))
+        self.assertIn("exactly that absolute path", agent_output.json_problem(run / "missing.json"))
 
 
 class ModelFallback(unittest.TestCase):
@@ -1256,7 +1242,7 @@ class ModelFallback(unittest.TestCase):
 
     def test_a_missing_model_is_replaced_by_its_fallback_for_this_run_and_the_swap_is_recorded(self):
         run, asked, fake = self.run_for({"a/coder": (404, {"error": {"message": "Model not found"}})})
-        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
             run.check_models()
         self.assertEqual(run.cfg["roles"]["coder"]["model"], "z/fallback")
         self.assertEqual(run.state.d["fallbacks"]["coder"], {"from": "a/coder", "to": "z/fallback"})
@@ -1264,44 +1250,44 @@ class ModelFallback(unittest.TestCase):
 
     def test_a_missing_model_with_no_fallback_stops_the_run_with_the_reason(self):
         run, _, fake = self.run_for({"r/rev": (400, {"error": {"message": "The model `r/rev` does not exist"}})})
-        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
-            with self.assertRaises(b.NeedsHuman) as ctx:
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            with self.assertRaises(run_stops.NeedsHuman) as ctx:
                 run.check_models()
         self.assertIn("r/rev", str(ctx.exception))
         self.assertIn("no `fallback_model`", str(ctx.exception))
 
     def test_a_missing_fallback_is_also_a_stop_and_each_model_is_asked_once(self):
         run, asked, fake = self.run_for({"a/coder": (404, {}), "z/fallback": (404, {})})
-        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
-            with self.assertRaises(b.NeedsHuman):
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            with self.assertRaises(run_stops.NeedsHuman):
                 run.check_models()
         self.assertEqual(len(asked), len(set(asked)))
 
     def test_all_models_answering_changes_nothing_and_a_zero_balance_is_still_provider_blocked(self):
         run, _, fake = self.run_for({})
-        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
             run.check_models()
         self.assertNotIn("fallbacks", run.state.d)
         run, _, fake = self.run_for({"a/coder": (402, {})})
-        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
-            with self.assertRaises(b.ProviderBlocked):
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            with self.assertRaises(run_stops.ProviderBlocked):
                 run.check_models()
 
     def test_a_first_build_does_not_check_the_planner(self):
         run, asked, fake = self.run_for({}, update=False)
-        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
             run.check_models()
         self.assertNotIn("p/plan", asked)
         run, asked, fake = self.run_for({})  # an update does ask for the planner's model
-        with mock.patch.object(b, "http", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
             run.check_models()
         self.assertIn("p/plan", asked)
 
     def test_the_status_of_a_model_is_read_from_the_answer(self):
         for answer, expected in (((200, {}), "ok"), ((404, "x"), "missing"), ((400, {"error": "model foo not found"}), "missing"),
                                  ((500, "boom"), "unknown"), ((429, "slow"), "unknown")):
-            with mock.patch.object(b, "http", lambda *a, answer=answer, **k: answer):
-                self.assertEqual(b.model_status("https://llm", "k", "m"), expected, answer)
+            with mock.patch.object(http_client, "request", lambda *a, answer=answer, **k: answer):
+                self.assertEqual(provider.model_status("https://llm", "k", "m"), expected, answer)
 
 
 class PipelineNotStarted(unittest.TestCase):
@@ -1310,7 +1296,7 @@ class PipelineNotStarted(unittest.TestCase):
         run.lim = {"pipeline_retries": 2}
         run.wait_run = lambda wf, sha: {"conclusion": "action_required", "url": "https://x/runs/9", "databaseId": 9}
         run.agent_json = lambda *a, **k: self.fail("the Pipeline Agent must not be paid to read a log that does not exist")
-        with self.assertRaises(b.NeedsHuman) as cm:
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.pipeline("a" * 40)
         self.assertIn("did not start", str(cm.exception))
         self.assertIn("https://x/runs/9", str(cm.exception))

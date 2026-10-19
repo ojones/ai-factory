@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
-from shared import config, github  # noqa: E402
+from shared import config, github, provider, run_stops  # noqa: E402
 
 LABEL = "model-drift"
 
@@ -48,8 +48,8 @@ def main():
     def status_of(model):
         if model not in cache:
             try:
-                cache[model] = b.model_status(base, key, model)
-            except b.ProviderBlocked:
+                cache[model] = provider.model_status(base, key, model)
+            except run_stops.ProviderBlocked:
                 cache[model] = "unknown"  # an empty balance is its own alert (provider-blocked); it says nothing about this model
         return cache[model]
 

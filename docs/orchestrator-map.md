@@ -26,10 +26,16 @@ What two or more domains use, each a small interface with its own tests. It impo
 | File | Is | Ticket |
 |---|---|---|
 | `github.py` | `run` and `ensure_label`: the one place that runs `gh`, taking the token per call (the PAT versus Actions-token choice). Built; `update_intake` and `fixrequest` use it, the other copies move with their domains | 05 |
-| `agent_runner.py` | an `AgentRunner`: scoped credential, isolation, stall kill, spend metering (today `Budget`, `invoke`, `agent_json`, `run_watched` in `build_run.py`) | 05b |
 | `outcomes.py` | the one list of Build Run endings and which are good, answered or failed. Built | 05 |
 | `config.py` | the `profiles.yml` and limits loader. Built | 05 |
-| `child_tickets.py` | a `ChildTickets` object for one parent: the `factory-plan` marker, file a child, add a blocker, readiness, parent lookup | 09 |
+| `run_stops.py` | `BudgetExhausted`, `ProviderBlocked`, `NeedsHuman`: the ways a run stops that are neither a good ending nor a crash. Built | 05b |
+| `http_client.py` | `request`: one JSON-over-HTTP call that never raises on a network error. Built | 05b |
+| `provider.py` | the model provider: its address, how an empty-account refusal looks, `provider_check`, `model_status`. Built | 05b |
+| `spend_budget.py` | `Budget`: the run's one cap, metered by scoped credentials. Built | 05b |
+| `agent_runner.py` | `AgentRunner.run` (one Agent invocation: credential, environment, stall watch, spend and usage read back) and `json_output` (the file an Agent writes, with one retry). Built; the planner and the Build Run use it, the retrospective Agent moves onto it in its own ticket | 05b |
+| `agent_process.py` | running an Agent as a process: as the Agent account, the isolation self-check, the stall watch, the kill by process group. Built | 05b |
+| `agent_usage.py`, `agent_output.py`, `console.py` | the Agent's context numbers; the JSON file it writes (find it, explain what is wrong); the workflow log line. Built | 05b |
+| `child_tickets.py` | a `ChildTickets` object for one parent: the `factory-plan` marker, file a child, add a blocker, readiness, parent lookup. Planned | 09 |
 
 ## Rules
 

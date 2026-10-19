@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
 import update_intake  # noqa: E402
-from shared import config, github  # noqa: E402
+from shared import config, github, http_client  # noqa: E402
 
 LABEL = "fly-orphans"
 ALWAYS_OWNED = ("ai-factory-growthbook",)
@@ -43,7 +43,7 @@ def render(found, org):
 
 
 def list_fly_apps(org, token):
-    status, r = b.http("GET", f"https://api.machines.dev/v1/apps?org_slug={org}", token, timeout=30)
+    status, r = http_client.request("GET", f"https://api.machines.dev/v1/apps?org_slug={org}", token, timeout=30)
     if status != 200 or not isinstance(r, dict) or "apps" not in r:
         raise RuntimeError(f"could not list Fly apps for {org!r}: HTTP {status}")
     return [{"name": a["name"], "machines": a.get("machine_count")} for a in r["apps"] if a.get("name")]
