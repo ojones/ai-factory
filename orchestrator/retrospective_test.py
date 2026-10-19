@@ -263,7 +263,7 @@ class Improvements(unittest.TestCase):
                 "https://github.com/o/f/issues/41" if args[:2] == ["issue", "create"] else ""), returncode=0)
         env = {"BUILD_RUN_DIR": str(work), "GITHUB_REPOSITORY": "o/f", "GITHUB_RUN_ID": "9", "FACTORY_PAT": "pat", "FACTORY_GH_TOKEN": "tok"}
         with mock.patch.dict(__import__("os").environ, env), mock.patch.object(pm, "gh", fake_gh), \
-                mock.patch.object(pm.b, "load_config", return_value={"roles": {}, "limits": {}}):
+                mock.patch.object(pm.config, "load", return_value={"roles": {}, "limits": {}}):
             self.assertEqual(pm.main(), 0)
         return calls
 
@@ -387,7 +387,7 @@ class Bugs(unittest.TestCase):
         calls = []
         env = {"BUILD_RUN_DIR": str(work), "GITHUB_REPOSITORY": "o/f", "GITHUB_RUN_ID": "9", "FACTORY_PAT": "pat", "FACTORY_GH_TOKEN": "tok"}
         with mock.patch.dict(__import__("os").environ, env), mock.patch.object(pm, "gh", self.fake_gh(calls)), \
-                mock.patch.object(pm.b, "load_config", return_value={"roles": {}, "limits": {}}), \
+                mock.patch.object(pm.config, "load", return_value={"roles": {}, "limits": {}}), \
                 mock.patch.object(pm.fixrequest, "file_fix_request", return_value={"target": target, "started": target == "app", "url": "u", "attempt": 1}):
             pm.main()
         return calls

@@ -248,9 +248,10 @@ def file_task_issue(repo, app, pass_id, task):
 
     import fixrequest
     import update_intake
+    from shared import github
     token = os.environ["FACTORY_PAT"]
     for label in (update_intake.FORM_LABEL, f"app:{app}", "benchmark"):
-        update_intake.ensure_label(repo, label, token, "ededed", "Benchmark pass")
+        github.ensure_label(repo, label, token, "ededed", "Benchmark pass")
     body = fixrequest.intake_form(app, fill_request(task["request"], pass_id), f"{task.get('cost_cap', 1.0):.2f}")
     out = gh(["issue", "create", "--repo", repo, "--title", f"bench {pass_id}: {task['id']}", "--label", f"{update_intake.FORM_LABEL},app:{app},benchmark", "--body", body])
     return re.search(r"/issues/(\d+)", out).group(1)

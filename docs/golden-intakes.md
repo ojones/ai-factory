@@ -1,10 +1,10 @@
 # Golden Intakes
 
-Examples of requests the Factory handles well, and of requests it refuses. They show the shape: **say what a person should see, not how to build
+Examples of requests the Factory handles well, and of requests it refuses. A New App Intake and an Update App Intake are both planned before anything is built ([flow spec](flow-spec.md), group 2), so both can be refused or stopped for a question; today only an Update App Intake is planned. They show the shape: **say what a person should see, not how to build
 it, name the exact words and numbers, and say what must not change.** Intake issues and the app repositories are public: never paste a key,
 token or password (the Factory refuses a request that contains one, and the value is already visible).
 
-## A first build (good)
+## A New App Intake (good)
 
 > A small recipe box. A page lists recipes (title and a one-line description). A form with the labels "Title" and "Description" and a button
 > "Add recipe" adds one; blank titles show the message "Enter a title". Each recipe has a button "Delete <title>". Data is kept in memory.
@@ -44,7 +44,7 @@ Refused: it needs a Twilio account, and the value pasted into the request is pub
 
 > Show today's forecast for a city the user types, from the OpenWeather API. Do not put the key in this issue.
 
-The planner lists the secret it needs (`OPENWEATHER_API_KEY`, with its purpose) and the run stops before building anything, ending `awaiting_secret`.
+Planning lists the secret it needs (`OPENWEATHER_API_KEY`, with its purpose) and the run stops before building anything, ending `awaiting_secret`.
 The Intake comment gives the exact command, `gh secret set OPENWEATHER_API_KEY -R <owner>/<app>`, which prompts for the value so it never appears in
 an issue or a log. Set it (a restricted key with a spending limit is best), then add `proceed-with-change` again: the build starts once the name
 exists, the coder reads it from `process.env`, and the deploy copies it to the running app. The feature ships dark behind its flag as usual.

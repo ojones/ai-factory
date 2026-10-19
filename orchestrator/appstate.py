@@ -12,11 +12,12 @@
 import json
 import re
 
+from shared import outcomes
+
 STATE_LABEL = "factory-state"
 REGISTRY_LABEL = "factory-registry"
 MAX_RUNS = 12
 DATA_RE = re.compile(r"<!-- factory-data:(.*?) -->", re.S)
-OK = ("released", "nothing_to_release", "planned")
 
 
 def cell(x):
@@ -65,7 +66,7 @@ def render_state(prev_body, d):
                       "state": "switched off by the watchdog" if off else "released"}
     # A flagged change that was pushed and never released is a dark feature: it is listed (so a person can see it), and never taken for a
     # released flag. Once it is released at last, the release above replaces the entry.
-    if d.get("flags") and d.get("commits") and d.get("outcome") not in OK + ("refused", "provider_blocked") and not off:
+    if d.get("flags") and d.get("commits") and d.get("outcome") not in outcomes.OK + ("refused", outcomes.PROVIDER_BLOCKED) and not off:
         for slug in d["flags"]:
             key = f"{d.get('app')}.feature.{slug}"
             if key not in flags or str(flags[key].get("state", "")).startswith("dark"):
@@ -95,7 +96,7 @@ def render_registry(prev_body, d, state_url):
     apps = data.get("apps", {})
     row = apps.get(d.get("app"), {"runs": 0, "ok": 0})
     row.update(outcome=d.get("outcome"), date=day(d), run_url=d.get("run_url") or "", state_url=state_url or row.get("state_url", ""),
-               runs=row["runs"] + 1, ok=row["ok"] + (1 if d.get("outcome") in OK else 0))
+               runs=row["runs"] + 1, ok=row["ok"] + (1 if d.get("outcome") in outcomes.OK else 0))
     apps[d.get("app")] = row
     data = {"apps": dict(sorted(apps.items()))}
     lines = ["# Managed Apps", "", "One row per app, kept up to date by the Orchestrator after every Build Run.", "",

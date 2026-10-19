@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# Production feedback: errors a deployed Managed App logs, and defects its owner reports, become Update Intakes by themselves.
+# Production feedback: errors a deployed Managed App logs, and defects its owner reports, become Update App Intakes by themselves.
 #
 # The watchdog (build_run.py) only looks for ten minutes after a release. A bug that shows up later reaches the Factory only if
 # someone files it. This scheduled scan closes that:
 #
 #   logs    Each Managed App's Fly log is read, error-level JSON lines are grouped by a fingerprint (the message with ids and
 #           numbers removed, plus the first stack frame), and a fingerprint seen `min_occurrences` times in one scan becomes an
-#           Update Intake for the app, started at once (the PAT adds `proceed-with-change`). Nobody reviews it first: the planner,
+#           Update App Intake for the app, started at once (the PAT adds `proceed-with-change`). Nobody reviews it first: the planner,
 #           coder, tester and reviewer run, the change ships behind a flag, and a bad ending is fixed forward and files a fix request.
-#   label   An open issue labelled `escaped-defect` in the app's repo, written by the repo's owner, becomes the same Update Intake.
+#   label   An open issue labelled `escaped-defect` in the app's repo, written by the repo's owner, becomes the same Update App Intake.
 #           Issues by anyone else are ignored: only owner-written text may reach an Agent.
 #
 # Flood control: one open production-feedback Intake per fingerprint (a repeat adds a comment with the count), at most one open per
@@ -29,6 +29,7 @@ import appstate  # noqa: E402
 import build_run as b  # noqa: E402
 import fixrequest  # noqa: E402
 import update_intake  # noqa: E402
+from shared import config, github  # noqa: E402
 
 LABEL = "production-feedback"
 DEFECT_LABEL = "escaped-defect"
@@ -160,11 +161,11 @@ def intakes(repo, token, app, state="open"):
 
 def file_intake(repo, token, pat, app, title, request, label=LABEL, label_desc="Filed and started by the Orchestrator from production feedback",
                 started_note="Started automatically from production feedback. The planner runs first."):
-    # Create an Update Intake for the app and start it. The PAT adds the start label, because an event made by the Actions token
+    # Create an Update App Intake for the app and start it. The PAT adds the start label, because an event made by the Actions token
     # does not start workflows. Returns the issue number, or None.
     for name, color, desc in ((update_intake.FORM_LABEL, "1d76db", "A change request for an existing Managed App"), (f"app:{app}", "1d76db", ""),
                               (label, "fbca04", label_desc), (update_intake.GO, "0e8a16", "Start this change now")):
-        update_intake.ensure_label(repo, name, token, color, desc)
+        github.ensure_label(repo, name, token, color, desc)
     out = gh(["issue", "create", "--repo", repo, "--title", title, "--label", f"{update_intake.FORM_LABEL},app:{app},{label}",
               "--body", fixrequest.intake_form(app, request)], token).stdout
     m = re.search(r"/issues/(\d+)", out or "")
@@ -218,7 +219,7 @@ def scan_defect_labels(repo, token, pat, app, cfg):
 def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     token, pat = os.environ["FACTORY_GH_TOKEN"], os.environ["FACTORY_PAT"]
-    cfg = {**DEFAULTS, **((b.load_config().get("limits") or {}).get("production_feedback") or {})}
+    cfg = {**DEFAULTS, **((config.load().get("limits") or {}).get("production_feedback") or {})}
     if not cfg["enabled"]:
         b.log("production feedback is off")
         return 0

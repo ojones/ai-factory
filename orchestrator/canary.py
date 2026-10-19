@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
-import update_intake  # noqa: E402
+from shared import config, github  # noqa: E402
 
 LABEL = "model-drift"
 
@@ -41,7 +41,7 @@ def render(found, checked):
 
 
 def main():
-    cfg = b.load_config()
+    cfg = config.load()
     base, key = cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"]
     cache = {}
 
@@ -57,7 +57,7 @@ def main():
     body = render(found, len(cache))
     print(body)
     repo, token = os.environ["GITHUB_REPOSITORY"], os.environ["FACTORY_GH_TOKEN"]
-    update_intake.ensure_label(repo, LABEL, token, "b60205", "A configured model is no longer served")
+    github.ensure_label(repo, LABEL, token, "b60205", "A configured model is no longer served")
     env = {**os.environ, "GH_TOKEN": token}
     open_issues = json.loads(b.sh(["gh", "issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--json", "number,body"], env=env).stdout or "[]")
     if not found:

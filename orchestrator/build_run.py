@@ -33,7 +33,8 @@ import fixrequest
 import planner
 import triage
 import update_intake
-from update_intake import form_section  # noqa: F401 - the Issue Form parser lives with Update Intake
+from shared import config, github, outcomes
+from update_intake import form_section  # noqa: F401 - the Issue Form parser lives with Update App Intake
 
 FACTORY_DIR = Path(__file__).resolve().parent.parent
 DEEPINFRA = "https://api.deepinfra.com"
@@ -55,8 +56,6 @@ TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR = TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR + 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the tester calls (see api_check.py)
 UI_CHECK = str(FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser counterpart (see ui_check.py)
-# How a Build Run can end well. `planned`: an update Intake was split into child issues, each its own Build Run.
-OK_OUTCOMES = ("released", "nothing_to_release", "planned")
 
 
 class BudgetExhausted(Exception):
@@ -98,9 +97,9 @@ def parse_intake(body, default_cap, ceiling):
 
 
 def identify_intake(issue, app, number):
-    # (is an Update Intake, its plan metadata) for the issue a Build Run was dispatched with, or NeedsHuman if the issue
-    # does not belong to `app`. A new app's Intake is titled with the app's name. An Update Intake has a free title,
-    # names the app in its form, and carries the `app:<slug>` label that Update Intake adds after checking the repo.
+    # (is an Update App Intake, its plan metadata) for the issue a Build Run was dispatched with, or NeedsHuman if the issue
+    # does not belong to `app`. A new app's Intake is titled with the app's name. An Update App Intake has a free title,
+    # names the app in its form, and carries the `app:<slug>` label that Update App Intake adds after checking the repo.
     labels = {l["name"] for l in issue.get("labels", [])}
     body = issue.get("body") or ""
     if update_intake.FORM_LABEL not in labels:
@@ -110,9 +109,9 @@ def identify_intake(issue, app, number):
     try:
         named = update_intake.app_name(body)
     except ValueError as e:
-        raise NeedsHuman("other", f"Update Intake #{number}: {e}.")
+        raise NeedsHuman("other", f"Update App Intake #{number}: {e}.")
     if named != app or f"app:{app}" not in labels:
-        raise NeedsHuman("other", f"Update Intake #{number} names {named!r} and is labelled "
+        raise NeedsHuman("other", f"Update App Intake #{number} names {named!r} and is labelled "
                                   f"{sorted(l for l in labels if l.startswith('app:'))}, not {app!r}.")
     return True, update_intake.plan_meta(body)
 
@@ -380,10 +379,6 @@ class AwaitingSecret(Exception):
     pass
 
 
-# Endings that are an answer to the request, not a failure of the Factory: no retry, no fix request, no failure issue in the app.
-ANSWERED_ENDINGS = ("refused", "awaiting_secret")
-
-
 class Regression(Exception):
     # The tester saw behaviour that was live before this change stop working (`test_impact`). finalize rolls the deploy back through CI.
     pass
@@ -493,7 +488,7 @@ def unverified_message(failures):
 
 
 def bugs_from(failures):
-    # The tester's failed checks as notes for the retrospective, which adds them to the story's own issue (the Update Intake that started
+    # The tester's failed checks as notes for the retrospective, which adds them to the story's own issue (the Update App Intake that started
     # the run, so the retry sees them) and never opens a new issue for them:
     # [{kind, flag, check, evidence, repro}]. `regression` is a failed check of behaviour that was live before the change; `dark` is a failed
     # check of the new change, which stays dark. Only `failed` is a bug: a check that was blocked or not run was not seen to fail. The tester
@@ -1041,11 +1036,6 @@ def load_json(path):
         return None
 
 
-def load_config():
-    import yaml
-    return yaml.safe_load((FACTORY_DIR / "agents" / "profiles.yml").read_text())
-
-
 class Budget:
     # The run's one cap, enforced and metered by DeepInfra scoped JWTs.
     #
@@ -1132,7 +1122,7 @@ class BuildRun:
         self.app_dir = Path(e["APP_DIR"])
         self.art = self.work / "artifacts"
         self.art.mkdir(parents=True, exist_ok=True)
-        self.cfg = load_config()
+        self.cfg = config.load()
         self.lim = self.cfg["limits"]
         self.state = State(self.work / "state.json", self.app, self.issue, self.run_url)
         self.start = time.time()
@@ -1889,7 +1879,7 @@ class BuildRun:
 
     def link_flags_to_issue(self, slugs):
         # The story names its flag: a `flag:<slug>` label, the flag in the title, and a comment with the full key (the flag, in turn, links
-        # back through its GrowthBook description and tag). Update Intakes only: a first build's title must stay the bare app name.
+        # back through its GrowthBook description and tag). Update App Intakes only: a first build's title must stay the bare app name.
         # Best effort, never a reason to stop the run.
         if not self.update_intake or not slugs:
             return
@@ -1897,7 +1887,7 @@ class BuildRun:
             for slug in slugs:
                 label = flag_label(slug)
                 if label:
-                    update_intake.ensure_label(self.factory_repo, label, self.factory_token, "5319e7", "The feature flag of this story")
+                    github.ensure_label(self.factory_repo, label, self.factory_token, "5319e7", "The feature flag of this story")
                     self.gh(["issue", "edit", self.issue, "--repo", self.factory_repo, "--add-label", label], token=self.factory_token, check=False)
             new_title = title_with_flags(getattr(self, "issue_title", ""), slugs)
             if new_title and new_title != getattr(self, "issue_title", ""):
@@ -1913,7 +1903,7 @@ class BuildRun:
     def archive_retired_flags(self, base, head):
         # Flags this run removed from flags.json are archived in GrowthBook (best effort), so a retired flag leaves nothing behind.
         # Only when the run ended well: an outcome that is not OK did not finish, and its flags are still in use.
-        if self.state.d.get("outcome") not in OK_OUTCOMES:
+        if self.state.d.get("outcome") not in outcomes.OK:
             return
         try:
             gone = removed_flag_slugs(self.git("show", f"{base}:flags.json", check=False).stdout, self.git("show", f"{head}:flags.json", check=False).stdout)
@@ -2028,7 +2018,7 @@ class BuildRun:
         self.state.stage("Watchdog", "-", "-", 0, f"clean for {minutes:g} min")
 
     def plan_change(self):
-        # Plan an Update Intake with the planner Agent, then check the plan deterministically. Returns True when
+        # Plan an Update App Intake with the planner Agent, then check the plan deterministically. Returns True when
         # the request was split into several change sets and filed as child issues (this run is then finished), False
         # when there is one change set, which becomes this run's task. A plan that fails the check, or that has a
         # blocking question, stops the run for a person.
@@ -2067,7 +2057,7 @@ class BuildRun:
         self.post_plan(doc, questions)
         if questions:
             raise NeedsHuman("other", "the plan needs a person to answer first: " + " | ".join(questions)
-                             + ". Put the answers in the Update Intake issue, then add `proceed-with-change` again.")
+                             + ". Put the answers in the Update App Intake issue, then add `proceed-with-change` again.")
         needed = [x for x in doc.get("secrets") or [] if isinstance(x, dict)]
         if needed:
             if {x["name"] for x in needed} - {x["name"] for x in self.declared_secrets}:  # a secret not yet checked at the start
@@ -2082,7 +2072,7 @@ class BuildRun:
             return False
         made = update_intake.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
                                            planner.topological_order(sets), self.task, cap=self.cap_override, secrets=needed)
-        self.state.d.update(outcome="planned", message="Planned as %d change sets, each now its own Update Intake and Build Run, in order: %s."
+        self.state.d.update(outcome="planned", message="Planned as %d change sets, each now its own Update App Intake and Build Run, in order: %s."
                             % (len(made), ", ".join(f"{cs} (#{n})" for cs, n in made)))
         return True
 
@@ -2246,7 +2236,7 @@ OUTCOME_TITLES = {
 
 
 def render_summary(d):
-    icon = ":white_check_mark:" if d["outcome"] in OK_OUTCOMES else ":x:"
+    icon = ":white_check_mark:" if d["outcome"] in outcomes.OK else ":x:"
     lines = [f"## Build Run Summary: {d['app']}", "",
              f"**Status**: {icon} `{d['outcome']}`  ", f"**Message**: {d['message'] or '-'}  ",
              f"**Cost**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f} cap  ",
@@ -2292,7 +2282,7 @@ def render_summary(d):
                   f"{e['counts']['not_run']}, {len(e['blocking'])} open" for e in board]
     rel = d.get("release")
     lines += ["", "**Release**: " + (f"released {', '.join(rel['released']) or 'nothing new'}" if rel else "not released")]
-    if d["blocking"] and d["outcome"] not in OK_OUTCOMES:
+    if d["blocking"] and d["outcome"] not in outcomes.OK:
         lines += ["", "**Open blocking findings at the end**:"] + [f"- [{b['source']}] {b['summary']}" for b in d["blocking"]]
     return "\n".join(lines) + "\n"
 
@@ -2519,7 +2509,7 @@ def is_dark_broken(d):
     # having switched the release off, or the tester having found a regression and the deploy been rolled back). The code stays in `main`,
     # behind a flag that is off, and is fixed forward. The flag is the identity of a dark feature, and its
     # story issue (`flag:<slug>`) carries this label; `flags.json` does not, because every edit to it deploys.
-    return bool(d.get("flags") and d.get("commits")) and d.get("outcome") not in OK_OUTCOMES + ANSWERED_ENDINGS + ("provider_blocked",)
+    return bool(d.get("flags") and d.get("commits")) and d.get("outcome") not in outcomes.OK + outcomes.ANSWERED + (outcomes.PROVIDER_BLOCKED,)
 
 
 def label_dark_feature(d, repo, token):
@@ -2529,10 +2519,10 @@ def label_dark_feature(d, repo, token):
     try:
         env = {**os.environ, "GH_TOKEN": token}
         if is_dark_broken(d):
-            update_intake.ensure_label(repo, DARK_BROKEN, token, "b60205", "A dark feature that failed its checks; fixed forward behind its flag")
+            github.ensure_label(repo, DARK_BROKEN, token, "b60205", "A dark feature that failed its checks; fixed forward behind its flag")
             labels = [DARK_BROKEN] + [l for l in (flag_label(slug) for slug in d["flags"]) if l]  # the story names its flag, released or not
             for name in labels[1:]:
-                update_intake.ensure_label(repo, name, token, "0e8a16", "The feature flag this story's change is behind")
+                github.ensure_label(repo, name, token, "0e8a16", "The feature flag this story's change is behind")
             sh(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", ",".join(labels)], env=env, check=False)
         elif d.get("outcome") == "released":
             sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", f"{DARK_BROKEN},bug"], env=env, check=False)
@@ -2541,7 +2531,7 @@ def label_dark_feature(d, repo, token):
 
 
 def finish_update_intake(ok, repo, number, pat):
-    # An Update Intake that finished is closed and starts the change sets waiting on it; one that stopped loses
+    # An Update App Intake that finished is closed and starts the change sets waiting on it; one that stopped loses
     # `proceed-with-change`, so adding the label again retries it (a label that is still there cannot fire again).
     try:
         env = {**os.environ, "GH_TOKEN": pat}
@@ -2551,7 +2541,7 @@ def finish_update_intake(ok, repo, number, pat):
         else:
             sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", update_intake.GO], env=env, check=False)
     except Exception as e:  # noqa: BLE001
-        print(f"could not finish the Update Intake: {type(e).__name__}", flush=True)
+        print(f"could not finish the Update App Intake: {type(e).__name__}", flush=True)
 
 
 def finalize():
@@ -2569,7 +2559,7 @@ def finalize():
         d["message"] = d["message"] or "the Build Run process ended without recording an outcome (cancelled or killed)"
     d["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
-        rollback_failed_run(d, os.environ["FACTORY_PAT"], load_config()["limits"])
+        rollback_failed_run(d, os.environ["FACTORY_PAT"], config.load()["limits"])
     except Exception as e:  # noqa: BLE001
         d["rollback"] = {"status": "failed", "reason": f"{type(e).__name__}: {str(e)[:300]}"}
     d["audit"] = audit.audit_report(d)
@@ -2580,18 +2570,18 @@ def finalize():
     (work / "artifacts" / "build-run-report.json").write_text(json.dumps(d, indent=2))
     with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
         f.write(summary)
-    ok = d["outcome"] in OK_OUTCOMES
+    ok = d["outcome"] in outcomes.OK
     record_spend_in_ledger(d, os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_RUN_ID", "0"), os.environ["FACTORY_GH_TOKEN"])
     pat, ftoken = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     update_state_issues(d, os.environ["GITHUB_REPOSITORY"], pat, ftoken)
-    if not ok and d["outcome"] not in ANSWERED_ENDINGS:  # a refusal is answered on the Intake issue; there is nothing in the app repo to report
+    if not ok and d["outcome"] not in outcomes.ANSWERED:  # a refusal is answered on the Intake issue; there is nothing in the app repo to report
         body = f"{d['message']}\n\n**Build Run**: {run_url}\n**Spent**: ${d['spent_usd']:.4f} of ${d['cap_usd'] or 0:.2f}\n\n" + summary
         (work / "issue-body.md").write_text(body)
         sh(["gh", "issue", "create", "--repo", f"{owner}/{app}", "--title", OUTCOME_TITLES.get(d["outcome"], "Build Run: crash"),
             "--body-file", str(work / "issue-body.md")], env={**os.environ, "GH_TOKEN": pat}, check=False)
     retry = ("" if ok or d.get("intake_kind") != "update" else
              f"\n\nOnce the provider balance is topped up, add `{update_intake.GO}` again to retry." if d["outcome"] == "provider_blocked"
-             else "" if d["outcome"] in ANSWERED_ENDINGS  # the message already says how to try again
+             else "" if d["outcome"] in outcomes.ANSWERED  # the message already says how to try again
              else f"\n\nEdit this issue if the request needs to change, then add `{update_intake.GO}` again to retry.")
     sh(["gh", "issue", "comment", d["issue_number"], "--repo", os.environ["GITHUB_REPOSITORY"], "--body",
         f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],

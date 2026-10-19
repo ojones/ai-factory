@@ -4,7 +4,7 @@
 # Each app carries `.github/dependabot.yml` (from the Starter Template), so Dependabot watches its npm packages, its Docker base image
 # and its GitHub Actions every day, and opens a pull request for each update or security fix. Dependabot only detects here: nothing
 # merges those pull requests. This daily pass reads each app's open Dependabot pull requests and, when there are updates an Agent can
-# apply (npm packages and the Docker image), files one Update Intake that lists them and starts it. The planner, coder, tester and
+# apply (npm packages and the Docker image), files one Update App Intake that lists them and starts it. The planner, coder, tester and
 # reviewer apply them, and the change ships like any other; a dependency bump needs no flag (users see no difference).
 # Dependabot closes its own pull requests once the dependency is updated. Updates to GitHub Actions live in `.github/`, which Agents
 # may not edit, so they are only reported.
@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
 import production_feedback as pf  # noqa: E402
+from shared import config  # noqa: E402
 
 LABEL = "maintenance"
 ECOSYSTEMS = (("npm_and_yarn", "npm"), ("docker", "docker"), ("github_actions", "actions"))
@@ -99,7 +100,7 @@ def enable_security_updates(owner, app, pat):
 def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     owner, token, pat = repo.split("/")[0], os.environ["FACTORY_GH_TOKEN"], os.environ["FACTORY_PAT"]
-    if not ((b.load_config().get("limits") or {}).get("maintenance") or {}).get("enabled", True):
+    if not ((config.load().get("limits") or {}).get("maintenance") or {}).get("enabled", True):
         b.log("maintenance is off")
         return 0
     for app in pf.managed_apps(repo, token):

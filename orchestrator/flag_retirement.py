@@ -4,7 +4,7 @@
 # A flag exists for one job: to stage a change dark and release it when it is safe (STANDARDS-FEATURE-FLAGS.md). Nobody uses it for
 # anything else, so once a *later* Build Run has also released something, the earlier release has been replaced by a newer one and its
 # flag has done its job. A retirement is never a run of its own (that would spend a planner, reviewer, tester, CI and a deploy on a change
-# that only deletes a check): the next Update Intake for the same app carries it. At the start of that Build Run the Orchestrator picks
+# that only deletes a check): the next Update App Intake for the same app carries it. At the start of that Build Run the Orchestrator picks
 # the oldest eligible flag (`piggyback_slugs`) and adds a "retire these flags in the same change" block to the coder's task; the tester is
 # told to check that the behaviour is still on for everyone, and the run archives the flag in GrowthBook when it ends well. Users see no
 # change. The owner's standing approval is the standard; nobody reviews a retirement.
@@ -18,7 +18,7 @@
 #
 # A *dark* feature is the other case: a flagged change that never got through its checks. It stays dark, behind its flag, and is fixed forward
 # by the story's automatic retries (`fix_request_max_attempts`). Only after those are used up (the story is labelled `needs-human` and
-# `dark-broken`) and a person adds the label `approve-retire` to the story is it removed: `approve` files an Update Intake that deletes the
+# `dark-broken`) and a person adds the label `approve-retire` to the story is it removed: `approve` files an Update App Intake that deletes the
 # flag's check, the code it guarded, its tests and its line in `flags.json`, and starts it. Nothing removes a dark feature on its own.
 #
 # Limits: `limits.flag_retirement` in agents/profiles.yml (`piggyback_max` flags per run, default 5, so a backlog clears; `min_age_days`).
@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import appstate  # noqa: E402
 import build_run as b  # noqa: E402
+from shared import github  # noqa: E402
 
 RUN_ID_RE = re.compile(r"/runs/(\d+)")
 
@@ -113,8 +114,8 @@ APPROVE = "approve-retire"
 def dark_removal_target(labels):
     # (app, slug, None) when a person's approval can retire this story's dark feature, else (None, None, why not).
     labels = set(labels)
-    if "update-intake" not in labels:
-        return None, None, "this is not an Update Intake story"
+    if "update-app-intake" not in labels:
+        return None, None, "this is not an Update App Intake story"
     if b.DARK_BROKEN not in labels:
         return None, None, f"the story has no broken dark feature (it is not labelled `{b.DARK_BROKEN}`)"
     if "needs-human" not in labels:
@@ -136,7 +137,7 @@ def dark_removal_task(slug, story):
 
 
 def approve(repo, pat, number):
-    # The story #number got the label `approve-retire`: file the removal as an Update Intake and start it. Returns 0 either way (a refusal
+    # The story #number got the label `approve-retire`: file the removal as an Update App Intake and start it. Returns 0 either way (a refusal
     # is a comment on the story, not a failed workflow).
     import update_intake as ui
     env = {**os.environ, "GH_TOKEN": pat}
@@ -149,7 +150,7 @@ def approve(repo, pat, number):
         return 0
     for name, color, desc in ((ui.FORM_LABEL, "1d76db", "A change request for an existing Managed App"), (ui.GO, "0e8a16", "Start this change now"),
                               (f"app:{app}", "1d76db", f"Issues about the Managed App {app}")):
-        ui.ensure_label(repo, name, pat, color, desc)
+        github.ensure_label(repo, name, pat, color, desc)
     body = (f"### App name\n\n{app}\n\n### What should change?\n\n{dark_removal_task(slug, number)}\n\n### Cost cap override (USD)\n\n_No response_\n")
     out = b.sh(["gh", "issue", "create", "--repo", repo, "--title", f"{app}: Remove dark feature {slug}", "--body", body,
                 "--label", f"{ui.FORM_LABEL},app:{app}"], env=env).stdout

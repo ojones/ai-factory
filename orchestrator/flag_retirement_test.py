@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
 import flag_retirement as fr  # noqa: E402
+from shared import github  # noqa: E402
 
 
 def entry(slug, run, date="2026-10-10", state="released"):
@@ -106,12 +107,12 @@ class Choosing(unittest.TestCase):
 
 
 class DarkFeatureRetirement(unittest.TestCase):
-    LABELS = ["update-intake", "app:notes", "flag:pin-notes", "dark-broken", "needs-human"]
+    LABELS = ["update-app-intake", "app:notes", "flag:pin-notes", "dark-broken", "needs-human"]
 
     def test_a_person_can_approve_only_a_story_whose_retries_are_used_up(self):
         self.assertEqual(fr.dark_removal_target(self.LABELS), ("notes", "pin-notes", None))
         for missing, why in (("dark-broken", "no broken dark feature"), ("needs-human", "retries are not used up"),
-                             ("flag:pin-notes", "exactly one flag"), ("app:notes", "exactly one flag"), ("update-intake", "not an Update Intake")):
+                             ("flag:pin-notes", "exactly one flag"), ("app:notes", "exactly one flag"), ("update-app-intake", "not an Update App Intake")):
             app, slug, reason = fr.dark_removal_target([l for l in self.LABELS if l != missing])
             self.assertIsNone(app)
             self.assertIn(why, reason, missing)
@@ -137,7 +138,7 @@ class DarkFeatureRetirement(unittest.TestCase):
             if cmd[:3] == ["gh", "issue", "create"]:
                 return mock.Mock(stdout="https://github.com/o/f/issues/90")
             return mock.Mock(stdout="")
-        with mock.patch.object(fr.b, "sh", fake_sh), mock.patch("update_intake.ensure_label"):
+        with mock.patch.object(fr.b, "sh", fake_sh), mock.patch.object(github, "ensure_label"):
             self.assertEqual(fr.approve("o/f", "pat", 12), 0)
         create = next(c for c in calls if c[:3] == ["gh", "issue", "create"])
         self.assertIn("### App name\n\nnotes", create[create.index("--body") + 1])
@@ -150,7 +151,7 @@ class DarkFeatureRetirement(unittest.TestCase):
         def fake_sh(cmd, cwd=None, env=None, check=True, timeout=None):
             calls.append(cmd)
             if cmd[:3] == ["gh", "issue", "view"]:
-                return mock.Mock(stdout=json.dumps({"title": "t", "labels": [{"name": "update-intake"}, {"name": "approve-retire"}]}))
+                return mock.Mock(stdout=json.dumps({"title": "t", "labels": [{"name": "update-app-intake"}, {"name": "approve-retire"}]}))
             return mock.Mock(stdout="")
         with mock.patch.object(fr.b, "sh", fake_sh):
             fr.approve("o/f", "pat", 12)

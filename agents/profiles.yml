@@ -45,7 +45,7 @@ roles:
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/pipeline.md
   # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planner.py checks the
-  # plan). Runs first in a Build Run for an Update Intake. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
+  # plan). Runs first in a Build Run for an Update App Intake. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
   # because the 480B hung for minutes at a time on real runs (one planner attempt took 1277 s) and a planner needs no code-tuned model;
   # gpt-oss-120b is about 8x cheaper and a different lab from the coder and reviewer (DeepSeek) and the tester (Nvidia). Watch the planner
   # time, cost and plan_gap lessons on the next runs; ticket 30 would measure it properly.
@@ -115,13 +115,13 @@ limits:
   # Fly apps that are Factory infrastructure rather than Managed Apps (besides ai-factory-growthbook); the daily Fly audit
   # (orchestrator/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
   fly_infra_apps: []
-  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become Update Intakes that start themselves
+  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become Update App Intakes that start themselves
   # (orchestrator/production_feedback.py, scheduled by production-feedback.yml). min_occurrences: times one error must appear in a scan.
-  # Daily: Dependabot's open pull requests for each app (npm packages, Docker base image) become one self-starting Update Intake
+  # Daily: Dependabot's open pull requests for each app (npm packages, Docker base image) become one self-starting Update App Intake
   # (orchestrator/maintenance.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
   maintenance:
     enabled: true
-  # A proven flag is retired inside the next Update Intake's Build Run for the same app, never in a run of its own: once a later Build Run
+  # A proven flag is retired inside the next Update App Intake's Build Run for the same app, never in a run of its own: once a later Build Run
   # has also released something and the flag is at least min_age_days old, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_retirement.py).
   flag_retirement:
     min_age_days: 1
@@ -135,8 +135,8 @@ limits:
   # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to
   # stay under, so Agents work in the model's reliable range. Over-goal stages are flagged.
   context_goal_tokens: 100000
-  # An Update Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
-  # for one Intake. Set planner_enabled false to run an Update Intake's request straight through as one change.
+  # An Update App Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
+  # for one Intake. Set planner_enabled false to run an Update App Intake's request straight through as one change.
   planner_enabled: true
   planner_max_change_sets: 8
   # Nothing is ever reverted in git: code is fixed forward and `main` keeps every commit. The one exception is a regression (the tester
@@ -146,9 +146,9 @@ limits:
   rollback_regressions: true
   rollback_timeout_minutes: 15
   # File a fix request issue for every run that ends badly: what happened, what was done, and numbered requirements, routed
-  # to the Factory (a prompt, planner, template or orchestrator cause) or to the app (an Update Intake for you to start).
+  # to the Factory (a prompt, planner, template or orchestrator cause) or to the app (an Update App Intake for you to start).
   fix_requests: true
-  # A fix request routed to the app (the request was ambiguous or too big) is an Update Intake that starts itself: no person
+  # A fix request routed to the app (the request was ambiguous or too big) is an Update App Intake that starts itself: no person
   # reviews it. A chain stops after this many automatic retries of one Intake and waits for a person.
   fix_request_autostart: true
   fix_request_max_attempts: 2

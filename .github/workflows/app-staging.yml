@@ -1,6 +1,6 @@
 name: App Staging
 
-# Adding `ready-for-staging` to an `intake` issue stages a new Managed App
+# Adding `ready-for-staging` to a `new-app-intake` issue stages a new Managed App
 # (ARCHITECTURE.md → Intake, Deployment provisioning). The work is in
 # infra/app-staging/stage.sh.
 on:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   stage:
     # Job-level (not workflow-level) so that label events this job skips, like
-    # `intake` itself being added, never enter the group and cancel a real run
+    # `new-app-intake` itself being added, never enter the group and cancel a real run
     # waiting behind another. One Managed App through Intake → App Staging →
     # Build Run at a time.
     concurrency:
@@ -23,7 +23,7 @@ jobs:
       cancel-in-progress: false
     if: >-
       github.event.label.name == 'ready-for-staging' &&
-      contains(github.event.issue.labels.*.name, 'intake')
+      contains(github.event.issue.labels.*.name, 'new-app-intake')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

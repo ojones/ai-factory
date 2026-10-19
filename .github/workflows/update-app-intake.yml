@@ -1,6 +1,6 @@
-name: Update Intake
+name: Update App Intake
 
-# Adding the `proceed-with-change` label to an `update-intake` issue starts it at once: this workflow checks the
+# Adding the `proceed-with-change` label to an `update-app-intake` issue starts it at once: this workflow checks the
 # issue and dispatches a Build Run, which plans the change, then codes, tests and reviews it
 # (orchestrator/update_intake.py; ARCHITECTURE.md: Intake). A change set that waits on an earlier one of the same
 # plan is given the label by the Orchestrator when its dependencies finish; that is done with the PAT, because a
@@ -18,7 +18,7 @@ jobs:
     # Job-level so label events this job skips never queue behind a real one.
     if: >-
       github.event.label.name == 'proceed-with-change' &&
-      contains(github.event.issue.labels.*.name, 'update-intake')
+      contains(github.event.issue.labels.*.name, 'update-app-intake')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -17,11 +17,10 @@
 # Factory and information routes: one open fix request per Intake and route; a run that fails again adds a comment instead of a second issue.
 import hashlib
 import json
-import os
 import re
-import subprocess
 
 import update_intake
+from shared import github
 
 LABEL = "fix-request"
 FACTORY_LABEL = "factory-fix-request"
@@ -233,7 +232,7 @@ def render(facts, result, rollback, target, intake_url="", auto=None, flags=()):
 
 
 def app_request(facts, result, rollback, original, category=None, history=(), cap_note="", flags=()):
-    # The text of the Update Intake for the app route: what went wrong, what must be true this time, how to approach it,
+    # The text of the Update App Intake for the app route: what went wrong, what must be true this time, how to approach it,
     # and the original request last (extracted, so a retry of a retry does not nest).
     reqs = requirements(facts, result, rollback, app_side=True)
     parts = [("A previous attempt at the request below did not complete, so it is being asked again with what was learned." if original is not None
@@ -269,13 +268,9 @@ def intake_form(app, request, cap=None):
 # --- GitHub (not unit-tested) -------------------------------------------------
 
 
-def gh(args, token):
-    return subprocess.run(["gh", *args], capture_output=True, text=True, env={**os.environ, "GH_TOKEN": token})
-
-
 def failing_issue(repo, number, token):
     # The body of the Intake whose run failed ('' if it cannot be read).
-    p = gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], token)
+    p = github.run(["issue", "view", str(number), "--repo", repo, "--json", "body"], token)
     try:
         return json.loads(p.stdout or "{}").get("body") or ""
     except ValueError:
@@ -288,7 +283,7 @@ def provider_alert_body(facts):
             f"- Run: {facts.get('run_url')}\n- Request: #{facts.get('issue_number')}\n\n"
             "## What was done automatically\n\n" + rollback_line(facts.get("rollback")) + "\n\n"
             "## What to do\n\n1. Add balance in the provider's dashboard (or turn on auto top-up).\n"
-            "2. For an Update Intake that stopped, add `proceed-with-change` again (the Orchestrator removed it, so the label fires again). "
+            "2. For an Update App Intake that stopped, add `proceed-with-change` again (the Orchestrator removed it, so the label fires again). "
             "For a new app's Intake, add `ready-for-staging` again.\n\n"
             "Every Build Run fails until this is done. Nothing was retried automatically, and no fix request or retrospective was started, "
             "because they would fail the same way.\n")
@@ -298,13 +293,13 @@ def file_provider_alert(repo, token, facts):
     # One open alert for the whole Factory: later blocked runs add a comment. Returns its URL.
     for name, color, desc in (("provider-blocked", "b60205", "The model provider refuses requests (no balance)"),
                               ("needs-human", "b60205", "The Orchestrator stopped and needs a person")):
-        update_intake.ensure_label(repo, name, token, color, desc)
-    found = json.loads(gh(["issue", "list", "--repo", repo, "--label", "provider-blocked", "--state", "open", "--json", "number,url"], token).stdout or "[]")
+        github.ensure_label(repo, name, token, color, desc)
+    found = json.loads(github.run(["issue", "list", "--repo", repo, "--label", "provider-blocked", "--state", "open", "--json", "number,url"], token).stdout or "[]")
     if found:
-        gh(["issue", "comment", str(found[0]["number"]), "--repo", repo, "--body",
+        github.run(["issue", "comment", str(found[0]["number"]), "--repo", repo, "--body",
             f"**Blocked again**: `{facts.get('app')}`, request #{facts.get('issue_number')}, {facts.get('run_url')}"], token)
         return found[0]["url"]
-    out = gh(["issue", "create", "--repo", repo, "--title", "Model provider has no balance: Build Runs are failing", "--label",
+    out = github.run(["issue", "create", "--repo", repo, "--title", "Model provider has no balance: Build Runs are failing", "--label",
               "provider-blocked,needs-human", "--body", provider_alert_body(facts)], token)
     m = re.search(r"https://\S+/issues/\d+", out.stdout or "")
     return m.group(0) if m else ""
@@ -312,7 +307,7 @@ def file_provider_alert(repo, token, facts):
 
 def failing_story(repo, number, token):
     # The Intake whose run failed, as {"body", "comments": [bodies], "url"} (empty values if it cannot be read).
-    p = gh(["issue", "view", str(number), "--repo", repo, "--json", "body,comments,url"], token)
+    p = github.run(["issue", "view", str(number), "--repo", repo, "--json", "body,comments,url"], token)
     try:
         doc = json.loads(p.stdout or "{}")
     except ValueError:
@@ -343,14 +338,14 @@ def file_app_retry(repo, token, pat, facts, result, rollback, lim, category):
                  "guidance": app_request(facts, result, rollback, None, category, history, cap_note, flags)[:6000]}
     for name, color, desc in ((RETRYING, "fbca04", "This story failed and is being retried on the same issue and flag"),
                               ("needs-human", "b60205", "The Orchestrator stopped and needs a person"), (update_intake.GO, "0e8a16", "Start this change now")):
-        update_intake.ensure_label(repo, name, token, color, desc)
-    gh(["issue", "comment", str(number), "--repo", repo, "--body", f"## Attempt {attempt - 1 or 'zero'} did not complete\n\n"
+        github.ensure_label(repo, name, token, color, desc)
+    github.run(["issue", "comment", str(number), "--repo", repo, "--body", f"## Attempt {attempt - 1 or 'zero'} did not complete\n\n"
         + render(facts, result, rollback, "app", story["url"], auto, flags) + "\n" + with_retry_state(new_state)], token)
     if autostart:
-        gh(["issue", "edit", str(number), "--repo", repo, "--add-label", RETRYING, "--remove-label", "needs-human"], token)
-        gh(["issue", "edit", str(number), "--repo", repo, "--add-label", update_intake.GO], pat)  # the PAT: the Actions token would not start the workflow
+        github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", RETRYING, "--remove-label", "needs-human"], token)
+        github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", update_intake.GO], pat)  # the PAT: the Actions token would not start the workflow
     else:
-        gh(["issue", "edit", str(number), "--repo", repo, "--add-label", "needs-human", "--remove-label", RETRYING], token)
+        github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", "needs-human", "--remove-label", RETRYING], token)
     return {"target": "app", "url": story["url"], "started": autostart, "attempt": attempt}
 
 
@@ -370,17 +365,17 @@ def file_fix_request(repo, token, pat, facts, result, rollback, lim=None):
     fp = fingerprint(app, origin, target, attempt)
     for name, color, desc in ((LABEL, "d93f0b", "What has to be fixed after a Build Run ended badly"),
                               (FACTORY_LABEL, "5319e7", "A fix request for the Factory itself")):
-        update_intake.ensure_label(repo, name, token, color, desc)
-    found = json.loads(gh(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--search", f"{fp} in:title",
+        github.ensure_label(repo, name, token, color, desc)
+    found = json.loads(github.run(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--search", f"{fp} in:title",
                            "--json", "number,title,url"], token).stdout or "[]")
     again = next((i for i in found if fp in i["title"]), None)
     if again:
-        gh(["issue", "comment", str(again["number"]), "--repo", repo, "--body",
+        github.run(["issue", "comment", str(again["number"]), "--repo", repo, "--body",
             f"**Failed again** ({facts.get('outcome')}): {clip(facts.get('message'), 300)}\n{facts.get('run_url')}\n\n{rollback_line(rollback)}"], token)
         return {"target": target, "url": again["url"], "started": False, "attempt": attempt}
     intake_url = f"https://github.com/{repo}/issues/{number}"
     labels = f"{LABEL},{FACTORY_LABEL}" if target == "factory" else LABEL
-    out = gh(["issue", "create", "--repo", repo, "--title", f"Fix request [{fp}]: {category or 'unknown cause'} in {app}'s run for #{number}",
+    out = github.run(["issue", "create", "--repo", repo, "--title", f"Fix request [{fp}]: {category or 'unknown cause'} in {app}'s run for #{number}",
               "--label", labels, "--body", render(facts, result, rollback, target, intake_url)], token)
     m = re.search(r"https://\S+/issues/(\d+)", out.stdout or "")
     return {"target": target, "url": m.group(0) if m else "", "started": False, "attempt": attempt}

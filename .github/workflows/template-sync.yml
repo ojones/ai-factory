@@ -1,6 +1,6 @@
 name: Template sync
 
-# Once a night (07:47 UTC), and by hand, file an Update Intake for each Managed App that was seeded before the latest Starter Template
+# Once a night (07:47 UTC), and by hand, file an Update App Intake for each Managed App that was seeded before the latest Starter Template
 # change, and start it. A merge to main does not start it: a Starter change waits for the night pass, so no Build Run starts because of
 # a push. orchestrator/template_sync.py does the work; nothing here changes an app directly.
 on:

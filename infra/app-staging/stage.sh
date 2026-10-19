@@ -94,14 +94,14 @@ fi
 MAX_APPS="$(sed -n 's/^ *max_simultaneous_build_runs: *//p' agents/profiles.yml | head -1)"
 [[ "$MAX_APPS" =~ ^[0-9]+$ ]] && [ "$MAX_APPS" -ge 1 ] || MAX_APPS=1
 
-same="$(gh issue list --repo "$FACTORY_REPO" --state open --label intake --label ready-for-staging --search "\"$SLUG\" in:title" \
+same="$(gh issue list --repo "$FACTORY_REPO" --state open --label new-app-intake --label ready-for-staging --search "\"$SLUG\" in:title" \
   --json number,title --jq "[.[] | select(.number != $ISSUE_NUMBER and .title == \"$SLUG\") | \"#\\(.number)\"] | join(\", \")")"
 [ -z "$same" ] || refuse "Intake issue(s) $same for the same app are already past \`ready-for-staging\`."
 
-others_n="$(gh issue list --repo "$FACTORY_REPO" --state open --label intake --label ready-for-staging \
+others_n="$(gh issue list --repo "$FACTORY_REPO" --state open --label new-app-intake --label ready-for-staging \
   --json number --jq "[.[] | select(.number != $ISSUE_NUMBER)] | length")"
 if [ "$others_n" -ge "$MAX_APPS" ]; then
-  others="$(gh issue list --repo "$FACTORY_REPO" --state open --label intake --label ready-for-staging \
+  others="$(gh issue list --repo "$FACTORY_REPO" --state open --label new-app-intake --label ready-for-staging \
     --json number --jq "[.[].number | select(. != $ISSUE_NUMBER)] | map(\"#\\(.)\") | join(\", \")")"
   refuse "Intake issue(s) $others are already past \`ready-for-staging\`; the limit is $MAX_APPS Managed App(s) through Intake → App Staging → Build Run at a time (\`max_simultaneous_build_runs\` in agents/profiles.yml)."
 fi

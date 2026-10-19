@@ -8,6 +8,7 @@ import build_run as b  # noqa: E402
 import planner  # noqa: E402
 import retrospective as pm  # noqa: E402
 import triage as t  # noqa: E402
+from shared import outcomes  # noqa: E402
 
 
 class Secrets(unittest.TestCase):
@@ -61,7 +62,7 @@ class Ending(unittest.TestCase):
     def test_a_refusal_is_not_a_failure_to_retry_or_learn_from(self):
         self.assertFalse(pm.wants_fix_request({"outcome": "refused"}, {}))
         self.assertFalse(pm.records_stuck_issue("refused"))
-        self.assertNotIn("refused", b.OK_OUTCOMES)
+        self.assertNotIn("refused", outcomes.OK)
         self.assertIn("refused", b.OUTCOME_TITLES)
         self.assertTrue(issubclass(b.Refused, Exception))
 

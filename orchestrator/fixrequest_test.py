@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_run as b  # noqa: E402
 import fixrequest as fr  # noqa: E402
 import update_intake as u  # noqa: E402
+from shared import github  # noqa: E402
 
 FACTS = {"app": "demo", "outcome": "round_limit", "message": "4 review rounds used without a clean pass", "run_url": "https://x/run/9",
          "issue_number": "66", "review_passes": 4, "spent_usd": 0.61, "cap_usd": 0.75, "commits": ["a", "b"],
@@ -192,7 +193,7 @@ class Filing(unittest.TestCase):
                 return mock.Mock(stdout="https://github.com/o/f/issues/80\n")
             return mock.Mock(stdout="")
 
-        with mock.patch.object(fr, "gh", fake), mock.patch.object(u, "gh", fake):
+        with mock.patch.object(github, "run", fake):
             out = fr.file_fix_request("o/f", "actions-token", "the-pat", facts, result, REVERT, lim if lim is not None else {})
         return out, calls
 
@@ -205,7 +206,7 @@ class Filing(unittest.TestCase):
         create = self.create(calls)
         labels = create[create.index("--label") + 1]
         self.assertIn("factory-fix-request", labels)
-        self.assertNotIn("update-intake", labels)
+        self.assertNotIn("update-app-intake", labels)
         self.assertFalse([c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c])
 
     def state_of(self, calls):

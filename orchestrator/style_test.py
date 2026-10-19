@@ -17,7 +17,7 @@ class FactoryPythonStyle(unittest.TestCase):
         # Discovery only matches *_test.py, so a test_<name>.py would never run.
         bad = [str(p.relative_to(ROOT)) for p in python_files() if p.name.startswith("test_")]
         self.assertEqual(bad, [], "name test files <name>_test.py")
-        for p in (ROOT / "orchestrator").glob("*.py"):
+        for p in (ROOT / "orchestrator").rglob("*.py"):
             if "test" in p.stem.split("_"):
                 self.assertTrue(p.name.endswith("_test.py"), f"{p.name} would not be discovered")
 

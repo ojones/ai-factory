@@ -9,9 +9,10 @@
 import json
 import sys
 
+from shared import outcomes
+
 # One review-and-test pass is a Review stage and a Test stage with the same round number.
 COST_OVERSHOOT_USD = 0.50  # the call that crosses the cap completes (ARCHITECTURE.md: Cost guardrails)
-OK_OUTCOMES = ("released", "nothing_to_release", "planned")
 
 
 def _stages(d, name):
@@ -55,11 +56,11 @@ def audit_report(d, overshoot=COST_OVERSHOOT_USD):
     if outcome == "watchdog_disabled" and not released:
         bad("INV-07 the watchdog acts on this run's release", "watchdog_disabled with nothing released")
 
-    if outcome in OK_OUTCOMES and d.get("blocking"):
+    if outcome in outcomes.OK and d.get("blocking"):
         bad("A-04 a finished run has no open blocking findings", f"{len(d['blocking'])} still open at the end")
 
     commits = d.get("commits") or []
-    if outcome in OK_OUTCOMES and outcome != "planned" and d.get("build_kind") == "update" and not commits:
+    if outcome in outcomes.OK and outcome != "planned" and d.get("build_kind") == "update" and not commits:
         bad("A-05 an update changes something", "an update finished OK with no coder commit")
 
     if outcome == "regression" and d.get("commits"):

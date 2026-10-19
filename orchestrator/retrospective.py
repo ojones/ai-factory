@@ -48,6 +48,7 @@ from pathlib import Path
 
 import build_run as b
 import fixrequest
+from shared import config, outcomes
 
 LABEL = "factory-learning"
 CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
@@ -123,7 +124,7 @@ def lesson_fingerprint(kind, basis):
 def lessons_from(facts):
     # Things a run taught the Factory beyond being stuck. Each is {kind, title, severe, detail}; at most
     # MAX_LESSONS, the severe ones first. A stuck run is recorded separately by record_issue.
-    outcome, ok = facts["outcome"], facts["outcome"] in b.OK_OUTCOMES
+    outcome, ok = facts["outcome"], facts["outcome"] in outcomes.OK
     found = []
 
     def add(kind, basis, detail, severe=False):
@@ -183,13 +184,13 @@ def bad_fixture_reason(fixture_diffs):
 
 def wants_fix_request(d, limits):
     # A fix request is filed for every Build Run that did not end well (`planned` and the good endings do not).
-    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in b.OK_OUTCOMES and d.get("outcome") not in ("provider_blocked", "refused", "awaiting_secret")
+    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in outcomes.OK and d.get("outcome") not in outcomes.ANSWERED + (outcomes.PROVIDER_BLOCKED,)
 
 
 def records_stuck_issue(outcome):
     # Whether a run's ending gets the generic `Stuck run` lesson. A release the watchdog switched off is already a
     # specific, severe lesson (`watchdog_disabled`); recording it twice made two issues and two analyses for one event.
-    return outcome not in b.OK_OUTCOMES and outcome not in ("watchdog_disabled", "provider_blocked", "refused", "awaiting_secret")
+    return outcome not in outcomes.OK and outcome not in outcomes.ANSWERED + (outcomes.WATCHDOG_DISABLED, outcomes.PROVIDER_BLOCKED)
 
 
 def lesson_has_fixture(paths):
@@ -406,7 +407,7 @@ def bug_notes(facts):
 
 
 def note_bugs_on_story(repo, token, number, facts, carried):
-    # The bugs belong to the Managed App's own story, so they go on the Update Intake that started the run, not into a new issue: the
+    # The bugs belong to the Managed App's own story, so they go on the Update App Intake that started the run, not into a new issue: the
     # story gets the `bug` label and, unless the retry comment already carries them (`carried`), a comment listing them. The retry (the
     # start label added again) is the fix request's job and is bounded by `fix_request_max_attempts`. Once per run.
     if not facts.get("bugs"):
@@ -767,7 +768,7 @@ def lesson_main(number):
     facts_path, result_path = work / "lesson.json", work / "result.json"
     facts_path.write_text(json.dumps({"lesson_issue": number, "title": issue["title"], "body": issue["body"],
                                       "comments": [c["body"] for c in issue.get("comments", [])][-10:]}, indent=2))
-    cfg, key = b.load_config(), os.environ.get("DEEPINFRA_API_KEY")
+    cfg, key = config.load(), os.environ.get("DEEPINFRA_API_KEY")
     if not key or "retrospective" not in cfg.get("roles", {}):
         return 0
     propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, [number], os.environ.get("GITHUB_RUN_ID", "0"))
@@ -779,10 +780,10 @@ def main():
     d = b.load_json(work / "state.json")
     if not d:
         return 0
-    stuck = d.get("outcome") not in b.OK_OUTCOMES
+    stuck = d.get("outcome") not in outcomes.OK
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
-    if d.get("outcome") in b.ANSWERED_ENDINGS:
+    if d.get("outcome") in outcomes.ANSWERED:
         return 0  # a refusal, or a wait for the owner's secrets, is an answer, not a failure, not a failure to learn from or retry
     facts = collect_facts(work, d)
     if d.get("outcome") == "provider_blocked":
@@ -792,7 +793,7 @@ def main():
         except Exception as e:  # noqa: BLE001 - the retrospective never fails the run
             b.log(f"could not file the provider alert: {type(e).__name__}: {e}")
         return 0
-    cfg_limits = b.load_config().get("limits", {})
+    cfg_limits = config.load().get("limits", {})
     lessons = lessons_from(facts)
     facts["signals"] = [{"kind": x["kind"], "detail": x["detail"]} for x in lessons]
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -821,7 +822,7 @@ def main():
     new_lessons = [n for (n, status), severe in recorded
                    if n and (status == "reopened" or (earned(n, severe) and (status == "new" or not already_proposed(repo, token, n))))]
     targets = list(dict.fromkeys(([stuck_issue] if stuck_issue else []) + new_minors + new_improvements + new_lessons))
-    cfg, key = b.load_config(), os.environ.get("DEEPINFRA_API_KEY")
+    cfg, key = config.load(), os.environ.get("DEEPINFRA_API_KEY")
     result = None
     if targets and key and "retrospective" in cfg.get("roles", {}):
         result = propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, targets, os.environ.get("GITHUB_RUN_ID", "0"))

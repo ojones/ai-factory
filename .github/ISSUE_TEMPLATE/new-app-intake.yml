@@ -1,7 +1,7 @@
-name: Intake — new Managed App
+name: New App Intake — new Managed App
 description: Propose a new Managed App for the Factory to build.
 title: "my-app-name"
-labels: ["intake"]
+labels: ["new-app-intake"]
 body:
   - type: markdown
     attributes:

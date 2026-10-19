@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_run as b  # noqa: E402
 import fixrequest as fr  # noqa: E402
 import retrospective as pm  # noqa: E402
+from shared import github, outcomes  # noqa: E402
 
 # The event OpenHands printed, taken from the real log.
 REAL_EVENT = ('{"id": "af67", "timestamp": "2026-10-12T14:10:40", "source": "environment", "code": "LLMBadRequestError", '
@@ -90,7 +91,7 @@ class Run(unittest.TestCase):
         self.assertIn("no balance", run.state.d["message"])
 
     def test_it_is_not_a_good_ending_and_is_not_rolled_back_either(self):
-        self.assertNotIn("provider_blocked", b.OK_OUTCOMES)
+        self.assertNotIn("provider_blocked", outcomes.OK)
         d = {"outcome": "provider_blocked", "commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
         self.assertFalse(b.rollback_decision(d)[0])  # code is fixed forward; only a regression rolls the deploy back
 
@@ -119,7 +120,7 @@ class AfterwardsOnlyOneAlert(unittest.TestCase):
 
     def test_the_first_blocked_run_files_one_alert_that_says_what_to_do(self):
         run, calls = self.fake([])
-        with mock.patch.object(fr, "gh", run), mock.patch.object(fr.update_intake, "gh", lambda a, t, check=False: run(a, t)):
+        with mock.patch.object(github, "run", lambda a, t, check=False: run(a, t)):
             url = fr.file_provider_alert("o/f", "tok", self.FACTS)
         self.assertEqual(url, "https://github.com/o/f/issues/90")
         create = next(c for c in calls if c[:2] == ["issue", "create"])
@@ -130,7 +131,7 @@ class AfterwardsOnlyOneAlert(unittest.TestCase):
 
     def test_later_blocked_runs_comment_on_the_open_alert_instead_of_filing_more(self):
         run, calls = self.fake([{"number": 90, "url": "https://github.com/o/f/issues/90"}])
-        with mock.patch.object(fr, "gh", run), mock.patch.object(fr.update_intake, "gh", lambda a, t, check=False: run(a, t)):
+        with mock.patch.object(github, "run", lambda a, t, check=False: run(a, t)):
             url = fr.file_provider_alert("o/f", "tok", dict(self.FACTS, app="other"))
         self.assertEqual(url, "https://github.com/o/f/issues/90")
         self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]])

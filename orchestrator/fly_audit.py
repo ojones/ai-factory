@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
 import update_intake  # noqa: E402
+from shared import config, github  # noqa: E402
 
 LABEL = "fly-orphans"
 ALWAYS_OWNED = ("ai-factory-growthbook",)
@@ -70,7 +71,7 @@ def idle_report(rows):
 def main():
     repo, org = os.environ["GITHUB_REPOSITORY"], os.environ.get("FLY_ORG") or "personal"
     owner, pat, token = repo.split("/")[0], os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
-    infra = (b.load_config().get("limits") or {}).get("fly_infra_apps") or []
+    infra = (config.load().get("limits") or {}).get("fly_infra_apps") or []
 
     def owned_repo(name):
         out = b.sh(["gh", "api", f"repos/{owner}/{name}", "--jq", ".description"], env={**os.environ, "GH_TOKEN": pat}, check=False)
@@ -90,7 +91,7 @@ def main():
         print(f"idle report failed: {type(e).__name__}: {e}")
     found = orphans(list_fly_apps(org, os.environ["FLY_API_TOKEN"]), infra, owned_repo)
     env = {**os.environ, "GH_TOKEN": token}
-    update_intake.ensure_label(repo, LABEL, token, "b60205", "Fly apps nobody owns")
+    github.ensure_label(repo, LABEL, token, "b60205", "Fly apps nobody owns")
     open_issues = json.loads(b.sh(["gh", "issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--json", "number,body"],
                                   env=env).stdout or "[]")
     body = render(found, org)

@@ -3,14 +3,14 @@
 The whole-run benchmark needs one disposable Managed App, `factory-bench`, frozen at a known commit. Create it through the normal Factory path so it
 has a real repo, Fly app, GrowthBook connection and deploy pipeline. It costs about $0.20 once.
 
-1. **File a new-app Intake** (the usual Intake form) titled `factory-bench` with this spec, and add `ready-for-staging`:
+1. **File a New App Intake** (the New App Intake form) titled `factory-bench` with this spec, and add `ready-for-staging`:
 
    > A small todo list API. POST /api/todos with {"text": string} creates a todo and answers 201 with {id, text, done: false}; text is trimmed, blank
    > text answers 400 {"error": "text is required"}. GET /api/todos lists todos in creation order. GET /api/todos/:id answers one or 404
    > {"error": "not found"}. PUT /api/todos/:id with {"done": boolean} updates it. DELETE /api/todos/:id removes it and answers 204. Data is kept in
    > memory. Ids are positive integers; an id that is not a positive integer answers 400 {"error": "invalid id"}.
 
-2. **File an update Intake** for `factory-bench` (the Update Intake form), add `proceed-with-change`, and let it release:
+2. **File an update Intake** for `factory-bench` (the Update App Intake form), add `proceed-with-change`, and let it release:
 
    > Add GET /api/bench-seed that answers 200 with {"seed": true}. It is a user-visible change, so ship it behind a feature flag named `bench-seed`: with the
    > flag off it answers 404 like any unknown route.

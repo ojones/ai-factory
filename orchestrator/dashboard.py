@@ -21,7 +21,8 @@ import tempfile
 import time
 from pathlib import Path
 
-OK = ("released", "nothing_to_release", "planned")
+from shared import outcomes
+
 ACCEPTED = ("released", "nothing_to_release")  # a change that shipped, or a build that needed no release
 RECENT_RUNS = 10  # the trailing window the payoff numbers are also shown over, to judge a change to the pipeline against what came before
 WORKFLOW = "build-run.yml"
@@ -76,13 +77,13 @@ def payoff(rows):
             "rounds_per_accepted": round(sum(r["rounds"] for r in rows) / accepted, 2) if accepted else None,
             "findings_by_category": dict(findings.most_common()),
             "findings_per_run": round(sum(findings.values()) / len(rows), 2) if rows else None,
-            "interventions": sum(1 for r in rows if r["outcome"] not in OK)}
+            "interventions": sum(1 for r in rows if r["outcome"] not in outcomes.OK)}
 
 
 def metrics(history, lessons=None):
     # Fleet numbers, overall and per app. `lessons` is {"open": n, "fix_ineffective": n} or None.
     def block(rows):
-        ok = [r for r in rows if r["outcome"] in OK]
+        ok = [r for r in rows if r["outcome"] in outcomes.OK]
         return {"runs": len(rows), "ok": len(ok),
                 "ok_rate": round(len(ok) / len(rows), 2) if rows else None,
                 "first_pass_rate": round(sum(1 for r in ok if r["rounds"] <= 1) / len(ok), 2) if ok else None,
@@ -93,7 +94,7 @@ def metrics(history, lessons=None):
                 "over_target": sum(1 for r in rows if r["cost_usd"] > COST_TARGET_USD),
                 "stuck": sum(1 for r in rows if r["outcome"] in ("stuck", "round_limit")),
                 "watchdog_disabled": sum(1 for r in rows if r["outcome"] == "watchdog_disabled"),
-                "needs_human": sum(1 for r in rows if r["outcome"] not in OK),
+                "needs_human": sum(1 for r in rows if r["outcome"] not in outcomes.OK),
                 "audit_violations": sum(len(r["audit"]) for r in rows),
                 **payoff(rows)}
 
@@ -116,7 +117,7 @@ def render_digest(history, m, since):
     recent = [r for r in history if (r.get("started_at") or "") >= since]
     allm = m["all"]
     lines = ["## Factory digest", "",
-             f"**Last day**: {len(recent)} Build Run(s), {sum(1 for r in recent if r['outcome'] in OK)} ended OK, "
+             f"**Last day**: {len(recent)} Build Run(s), {sum(1 for r in recent if r['outcome'] in outcomes.OK)} ended OK, "
              f"${sum(r['cost_usd'] for r in recent):.2f} spent.",
              f"**All time**: {allm['runs']} runs, {pct(allm['ok_rate'])} OK, {pct(allm['first_pass_rate'])} first pass, "
              f"avg {num(allm['avg_rounds'])} rounds, avg {num(allm['avg_cost_usd'], '$')}, total {num(allm['total_cost_usd'], '$')}.",
@@ -125,7 +126,7 @@ def render_digest(history, m, since):
     lines.append(f"**Payoff** (per accepted change; last {RECENT_RUNS} runs vs all): {num(rec.get('cost_per_accepted_usd'), '$')} vs "
                  f"{num(allm['cost_per_accepted_usd'], '$')} spent, {num(rec.get('rounds_per_accepted'))} vs {num(allm['rounds_per_accepted'])} rounds, "
                  f"{num(rec.get('findings_per_run'))} vs {num(allm['findings_per_run'])} blocking findings a run.")
-    attention = [r for r in recent if r["outcome"] not in OK]
+    attention = [r for r in recent if r["outcome"] not in outcomes.OK]
     if attention:
         lines += ["", "**Needs a person**:"] + [f"- `{r['app']}`: {r['outcome']} ([run]({r['run_url']}))" for r in attention]
     broken = [r for r in recent if r["audit"]]
@@ -177,7 +178,7 @@ def render_html(history, m, generated):
                    f"<td>{num(a['avg_cost_usd'], '$')}<td>{num(a['total_cost_usd'], '$')}<td>{a['needs_human']}</tr>")
     out += ["</table></div>", "<h2>Recent runs</h2><div class=scroll><table><tr><th>Started<th>App<th>Kind<th>Outcome<th>Rounds<th>Cost<th>Min<th>Released<th>Audit</tr>"]
     for r in reversed(history[-100:]):
-        cls = "ok" if r["outcome"] in OK else "bad"
+        cls = "ok" if r["outcome"] in outcomes.OK else "bad"
         link = f"<a href='{e(r['run_url'], quote=True)}'>{e(r['outcome'])}</a>" if r["run_url"].startswith("https://") else e(r["outcome"])
         out.append(f"<tr><td>{e(r['started_at'][:16].replace('T', ' '))}<td>{e(r['app'])}<td>{e(r['kind'])}<td class={cls}>{link}"
                    f"<td>{r['rounds']}<td>${r['cost_usd']:.2f}<td>{num(r['minutes'])}<td>{len(r['released'])}<td>{e(', '.join(r['audit']) or '-')}</tr>")

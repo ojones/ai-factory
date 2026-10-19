@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# Update Intake: a change request for a Managed App that already exists.
+# Update App Intake: a change request for a Managed App that already exists.
 #
-# An update Intake is a GitHub issue made from the "Update Intake" form (label `update-intake`). Adding the label
-# `proceed-with-change` starts it at once: `.github/workflows/update-intake.yml` runs `start`, which checks the issue
+# An update Intake is a GitHub issue made from the "Update App Intake" form (label `update-app-intake`). Adding the label
+# `proceed-with-change` starts it at once: `.github/workflows/update-app-intake.yml` runs `start`, which checks the issue
 # and dispatches a Build Run. There is no App Staging; the app, its repo and its flags already exist.
 #
 # The Build Run then plans (agents/prompts/planner.md), and if the plan is one change set it codes, tests, reviews and
 # releases that change. If the plan has several change sets, the Build Run files one child issue per change set
-# (labels `update-intake`, `app:<slug>`, `plan:<parent>`) and ends. The first child with nothing to wait for gets
+# (labels `update-app-intake`, `app:<slug>`, `plan:<parent>`) and ends. The first child with nothing to wait for gets
 # `proceed-with-change` straight away; the others get `waiting-on-plan`. When a child's Build Run succeeds, `advance`
 # gives `proceed-with-change` to the next sibling whose dependencies are now all closed (one at a time). So the children run one after
 # another, never two pending runs of one app at once (GitHub keeps only one pending run per concurrency group).
@@ -20,11 +20,12 @@
 import json
 import os
 import re
-import subprocess
 import sys
 
+from shared import github
+
 GO = "proceed-with-change"
-FORM_LABEL = "update-intake"
+FORM_LABEL = "update-app-intake"
 WAIT = "waiting-on-plan"
 APP_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 META_RE = re.compile(r"<!-- factory-plan:(.*?) -->", re.S)
@@ -142,7 +143,7 @@ def render_change_set_task(cs, request=None, parent=None):
 
 
 def render_plan_comment(plan, questions=()):
-    # The plan as a comment on the Update Intake: change sets with their flags, the assumptions the planner made on the
+    # The plan as a comment on the Update App Intake: change sets with their flags, the assumptions the planner made on the
     # owner's behalf, and any question it needs answered. Anything the owner disagrees with can be corrected in the issue.
     sets = plan.get("change_sets") or []
     lines = [f"**Plan: {len(sets)} change set{'s' if len(sets) != 1 else ''}.**", ""]
@@ -158,7 +159,7 @@ def render_plan_comment(plan, questions=()):
 
 
 def child_body(app, task, parent, cs_id, depends_on, cap=None, secrets=None):
-    # A child issue's body: the Update Intake form fields plus hidden plan metadata.
+    # A child issue's body: the Update App Intake form fields plus hidden plan metadata.
     meta = {"parent": parent, "cs": cs_id, "depends_on": depends_on}
     if secrets:
         meta["secrets"] = [{"name": x["name"], "purpose": x.get("purpose", "")} for x in secrets]
@@ -184,17 +185,6 @@ def ready_to_start(children):
 # --- GitHub (not unit-tested) -------------------------------------------------
 
 
-def gh(args, token, check=False):
-    p = subprocess.run(["gh", *args], capture_output=True, text=True, env={**os.environ, "GH_TOKEN": token})
-    if check and p.returncode != 0:
-        raise RuntimeError(f"gh {' '.join(args[:3])} failed: {p.stderr.strip()[:200]}")
-    return p
-
-
-def ensure_label(repo, name, token, color="0e8a16", description=""):
-    gh(["label", "create", name, "--repo", repo, "--color", color, "--description", description], token)
-
-
 def file_children(repo, pat, app, parent, change_sets, order, request, cap=None, secrets=None):
     # Create one issue per change set, dependencies first, and start those with nothing to wait for.
     # Returns [(change set id, issue number)].
@@ -202,14 +192,14 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None,
                               (WAIT, "fbca04", "Waiting for an earlier change set of the same plan"),
                               (GO, "0e8a16", "Start this change now"), (f"app:{app}", "1d76db", f"Issues about the Managed App {app}"),
                               (f"plan:{parent}", "ededed", f"Change sets planned in #{parent}")):
-        ensure_label(repo, name, pat, color, desc)
+        github.ensure_label(repo, name, pat, color, desc)
     by_id = {cs["id"]: cs for cs in change_sets}
     numbers, made = {}, []
     for cs_id in order:
         cs = by_id[cs_id]
         deps = [numbers[d] for d in cs.get("depends_on") or []]
         task = render_change_set_task(cs, parent=parent)
-        out = gh(["issue", "create", "--repo", repo, "--title", f"{app}: {one_line(cs['title'])}", "--body", child_body(app, task, parent, cs_id, deps, cap, secrets),
+        out = github.run(["issue", "create", "--repo", repo, "--title", f"{app}: {one_line(cs['title'])}", "--body", child_body(app, task, parent, cs_id, deps, cap, secrets),
                   "--label", f"{FORM_LABEL},app:{app},plan:{parent},{WAIT}"], pat, check=True).stdout
         m = re.search(r"/issues/(\d+)", out)
         numbers[cs_id] = int(m.group(1))
@@ -218,12 +208,12 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None,
     # rest are started one at a time by `advance` as each finishes.
     first = next((cs_id for cs_id in order if not by_id[cs_id].get("depends_on")), None)
     if first:
-        gh(["issue", "edit", str(numbers[first]), "--repo", repo, "--remove-label", WAIT, "--add-label", GO], pat)
+        github.run(["issue", "edit", str(numbers[first]), "--repo", repo, "--remove-label", WAIT, "--add-label", GO], pat)
     return made
 
 
 def siblings(repo, pat, parent):
-    out = gh(["issue", "list", "--repo", repo, "--label", f"plan:{parent}", "--state", "all", "--limit", "100",
+    out = github.run(["issue", "list", "--repo", repo, "--label", f"plan:{parent}", "--state", "all", "--limit", "100",
               "--json", "number,state,labels,body"], pat).stdout
     return [{"number": i["number"], "state": i["state"], "labels": {l["name"] for l in i["labels"]},
              "depends_on": plan_meta(i["body"]).get("depends_on", [])} for i in json.loads(out or "[]")]
@@ -231,13 +221,13 @@ def siblings(repo, pat, parent):
 
 def advance(repo, pat, number):
     # After child #number's Build Run succeeded and its issue is closed: start the siblings it was holding up.
-    body = json.loads(gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], pat).stdout or "{}").get("body", "")
+    body = json.loads(github.run(["issue", "view", str(number), "--repo", repo, "--json", "body"], pat).stdout or "{}").get("body", "")
     parent = plan_meta(body).get("parent")
     if not parent:
         return []
     started = ready_to_start(siblings(repo, pat, parent))
     for n in started:
-        gh(["issue", "edit", str(n), "--repo", repo, "--remove-label", WAIT, "--add-label", GO], pat)
+        github.run(["issue", "edit", str(n), "--repo", repo, "--remove-label", WAIT, "--add-label", GO], pat)
     return started
 
 
@@ -247,9 +237,9 @@ def start():
     owner = repo.split("/")[0]
 
     def refuse(why):
-        gh(["issue", "comment", number, "--repo", repo, "--body",
-            f"**Update Intake stopped:** {why}\n\nFix this, then add the `{GO}` label again to start. ([run]({run_url}))"], token)
-        gh(["issue", "edit", number, "--repo", repo, "--remove-label", GO], token)
+        github.run(["issue", "comment", number, "--repo", repo, "--body",
+            f"**Update App Intake stopped:** {why}\n\nFix this, then add the `{GO}` label again to start. ([run]({run_url}))"], token)
+        github.run(["issue", "edit", number, "--repo", repo, "--remove-label", GO], token)
         print(f"::error::{why}")
         return 1
 
@@ -259,16 +249,16 @@ def start():
         return refuse(str(e))
     if not form_section(body, "What should change?") or form_section(body, "What should change?") == "_No response_":
         return refuse('the "What should change?" field is empty.')
-    info = gh(["api", f"repos/{owner}/{app}"], pat)
+    info = github.run(["api", f"repos/{owner}/{app}"], pat)
     if info.returncode != 0:
         return refuse(f"`{owner}/{app}` does not exist. An update Intake changes an app the Factory already built; a new app starts with an Intake.")
     if not is_factory_repo(json.loads(info.stdout).get("description"), repo):
         return refuse(f"`{owner}/{app}` was not created by this Factory (its description is not an `Intake: {repo}#<n>` marker), so the Factory will not change it.")
-    ensure_label(repo, f"app:{app}", pat, "1d76db", f"Issues about the Managed App {app}")
-    gh(["issue", "edit", number, "--repo", repo, "--add-label", f"app:{app}"], pat, check=True)
-    gh(["workflow", "run", "build-run.yml", "--repo", repo, "-f", f"issue_number={number}", "-f", f"app_name={app}"], pat, check=True)
-    gh(["issue", "comment", number, "--repo", repo, "--body",
-        f"**Update Intake accepted.** A Build Run for `{app}` has been dispatched: it plans the change, then codes, tests and reviews it, "
+    github.ensure_label(repo, f"app:{app}", pat, "1d76db", f"Issues about the Managed App {app}")
+    github.run(["issue", "edit", number, "--repo", repo, "--add-label", f"app:{app}"], pat, check=True)
+    github.run(["workflow", "run", "build-run.yml", "--repo", repo, "-f", f"issue_number={number}", "-f", f"app_name={app}"], pat, check=True)
+    github.run(["issue", "comment", number, "--repo", repo, "--body",
+        f"**Update App Intake accepted.** A Build Run for `{app}` has been dispatched: it plans the change, then codes, tests and reviews it, "
         f"and releases it behind its flag only when everything passes. ([run]({run_url}))"], token)
     return 0
 

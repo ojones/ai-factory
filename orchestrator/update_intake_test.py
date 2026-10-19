@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_run as b  # noqa: E402
 import update_intake as u  # noqa: E402
+from shared import github  # noqa: E402
 
 FORM = "### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n{cap}\n"
 
@@ -121,7 +122,7 @@ class GitHub(unittest.TestCase):
         sets = [{"id": "CS-1", "title": "Save", "criteria": ["a"], "verification": ["b"], "flag": "save", "depends_on": []},
                 {"id": "CS-2", "title": "Filter", "criteria": ["a"], "verification": ["b"], "flag": "filter", "depends_on": ["CS-1"]},
                 {"id": "CS-3", "title": "Export", "criteria": ["a"], "verification": ["b"], "flag": "export", "depends_on": []}]
-        with mock.patch.object(u, "gh", fake):
+        with mock.patch.object(github, "run", fake):
             made = u.file_children("o/f", "pat", "notes", 7, sets, ["CS-1", "CS-2", "CS-3"], "the request")
         self.assertEqual(made, [("CS-1", 101), ("CS-2", 102), ("CS-3", 103)])
         creates = [c for c in calls if c[:2] == ["issue", "create"]]
@@ -151,14 +152,14 @@ class GitHub(unittest.TestCase):
             edits.append(args)
             return proc()
 
-        with mock.patch.object(u, "gh", fake):
+        with mock.patch.object(github, "run", fake):
             self.assertEqual(u.advance("o/f", "pat", 101), [102])
         self.assertEqual([e[2] for e in edits], ["102"])
         self.assertIn(u.GO, edits[0])
         self.assertIn(u.WAIT, edits[0])
 
     def test_advance_on_an_issue_that_is_not_part_of_a_plan_does_nothing(self):
-        with mock.patch.object(u, "gh", lambda args, token, check=False: proc(json.dumps({"body": "just a request"}))):
+        with mock.patch.object(github, "run", lambda args, token, check=False: proc(json.dumps({"body": "just a request"}))):
             self.assertEqual(u.advance("o/f", "pat", 5), [])
 
     def run_start(self, body, repo_json=None, repo_rc=0):
@@ -171,7 +172,7 @@ class GitHub(unittest.TestCase):
             return proc()
 
         env = {"FACTORY_REPO": "o/f", "FACTORY_PAT": "pat", "GH_TOKEN": "t", "ISSUE_NUMBER": "9", "ISSUE_BODY": body, "RUN_URL": "u"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(u, "gh", fake):
+        with mock.patch.dict(os.environ, env), mock.patch.object(github, "run", fake):
             return u.start(), calls
 
     def test_a_good_update_intake_is_labelled_dispatched_and_acknowledged(self):
@@ -201,24 +202,24 @@ class Identity(unittest.TestCase):
         return {"title": title, "body": body, "labels": [{"name": n} for n in labels]}
 
     def test_a_new_app_intake_is_titled_with_the_app(self):
-        self.assertEqual(b.identify_intake(self.issue(labels=["intake"]), "notes", 5), (False, {}))
+        self.assertEqual(b.identify_intake(self.issue(labels=["new-app-intake"]), "notes", 5), (False, {}))
         with self.assertRaises(b.NeedsHuman):
             b.identify_intake(self.issue(title="other"), "notes", 5)
 
     def test_an_update_intake_needs_the_form_the_label_and_the_matching_app(self):
         body = FORM.format(app="notes", task="x", cap="")
-        ok = self.issue(title="notes: add tags", labels=["update-intake", "app:notes"], body=body)
+        ok = self.issue(title="notes: add tags", labels=["update-app-intake", "app:notes"], body=body)
         self.assertEqual(b.identify_intake(ok, "notes", 5), (True, {}))
-        for bad in (self.issue(labels=["update-intake"], body=body),  # no app: label
-                    self.issue(labels=["update-intake", "app:todo"], body=body),
-                    self.issue(labels=["update-intake", "app:todo"], body=FORM.format(app="todo", task="x", cap="")),
-                    self.issue(labels=["update-intake", "app:notes"], body="no form")):
+        for bad in (self.issue(labels=["update-app-intake"], body=body),  # no app: label
+                    self.issue(labels=["update-app-intake", "app:todo"], body=body),
+                    self.issue(labels=["update-app-intake", "app:todo"], body=FORM.format(app="todo", task="x", cap="")),
+                    self.issue(labels=["update-app-intake", "app:notes"], body="no form")):
             with self.assertRaises(b.NeedsHuman):
                 b.identify_intake(bad, "notes", 5)
 
     def test_a_child_issue_reports_its_plan_metadata(self):
         body = u.child_body("notes", "t", 7, "CS-2", [101])
-        _, meta = b.identify_intake(self.issue(labels=["update-intake", "app:notes"], body=body), "notes", 5)
+        _, meta = b.identify_intake(self.issue(labels=["update-app-intake", "app:notes"], body=body), "notes", 5)
         self.assertEqual(meta["parent"], 7)
 
 
@@ -345,14 +346,6 @@ class Spec(unittest.TestCase):
         self.assertIn("# Change request (the spec for this change)\nAdd tags to notes", text)
         self.assertNotIn("# INTAKE.md", text)
         self.assertIn("# INTAKE.md", b.build_review_context(git, "base", "head", 10**6))
-
-    def test_every_module_agrees_on_what_a_good_ending_is(self):
-        import appstate
-        import audit
-        import dashboard
-        self.assertEqual(set(b.OK_OUTCOMES), set(audit.OK_OUTCOMES))
-        self.assertEqual(set(b.OK_OUTCOMES), set(appstate.OK))
-        self.assertEqual(set(b.OK_OUTCOMES), set(dashboard.OK))
 
 
 if __name__ == "__main__":

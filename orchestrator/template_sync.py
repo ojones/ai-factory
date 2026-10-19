@@ -4,7 +4,7 @@
 # An app is seeded once from `templates/starter/`. Without this, a better linter, test script or default never reaches an app that
 # already exists, and the learning loop's fixes only help new apps. Each app carries `.factory-template`, the ai-factory commit its
 # template files correspond to (App Staging writes it; an older app has none, so the commit current when its repo was created is
-# used). When the template has changed since then, this files one Update Intake per app that gives the coder the template's own diff
+# used). When the template has changed since then, this files one Update App Intake per app that gives the coder the template's own diff
 # and starts it. The coder applies it to the app's corresponding files, keeps the app's own code, and writes the new commit into
 # `.factory-template`.
 #

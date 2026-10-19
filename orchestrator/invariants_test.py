@@ -16,6 +16,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
 import retrospective as pm  # noqa: E402
+from shared import github, outcomes  # noqa: E402
 
 ROOT = b.FACTORY_DIR
 PROFILES = yaml.safe_load((ROOT / "agents/profiles.yml").read_text())
@@ -219,7 +220,7 @@ class Invariants(unittest.TestCase):
 
         env = {"FACTORY_REPO": "o/ai-factory", "FACTORY_PAT": "p", "GH_TOKEN": "t", "ISSUE_NUMBER": "9", "RUN_URL": "u",
                "ISSUE_BODY": "### App name\n\nnotes\n\n### What should change?\n\nx\n"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(u, "gh", fake):
+        with mock.patch.dict(os.environ, env), mock.patch.object(github, "run", fake):
             self.assertEqual(u.start(), 1)
         self.assertFalse([c for c in calls if c[:2] == ["workflow", "run"]])
 
@@ -237,13 +238,14 @@ class Invariants(unittest.TestCase):
         import appstate
         import audit
         import dashboard
-        wf = yaml.safe_load((ROOT / ".github/workflows/update-intake.yml").read_text())
+        wf = yaml.safe_load((ROOT / ".github/workflows/update-app-intake.yml").read_text())
         self.assertEqual(wf[True]["issues"]["types"], ["labeled"])  # YAML reads the key `on` as True
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
         self.assertIn("github.event.label.name == 'proceed-with-change'", cond)
-        self.assertIn("contains(github.event.issue.labels.*.name, 'update-intake')", cond)
-        self.assertEqual(set(b.OK_OUTCOMES), set(audit.OK_OUTCOMES) & set(appstate.OK) & set(dashboard.OK))
-        self.assertIn("planned", b.OK_OUTCOMES)
+        self.assertIn("contains(github.event.issue.labels.*.name, 'update-app-intake')", cond)
+        for module in (b, audit, appstate, dashboard, pm):
+            self.assertIs(module.outcomes, outcomes)  # one list of good endings, defined in shared/outcomes.py, not mirrored
+        self.assertIn("planned", outcomes.OK)
 
     def test_inv25_nothing_is_reverted_in_git_and_only_a_regression_rolls_the_deploy_back_through_ci(self):
         import inspect
@@ -298,7 +300,7 @@ class Invariants(unittest.TestCase):
             return mock.Mock(stdout="[]")
 
         facts = {"app": "demo", "outcome": "round_limit", "message": "m", "run_url": "u", "issue_number": "7", "flags": ["demo-flag"]}
-        with mock.patch.object(fr, "gh", fake), mock.patch.object(u, "gh", fake):
+        with mock.patch.object(github, "run", fake):
             out = fr.file_fix_request("o/f", "actions", "the-pat", facts, {"category": "spec_ambiguity"}, None, lim)
         self.assertTrue(out["started"])
         self.assertFalse([a for a, _ in calls if a[:2] == ["issue", "create"]])  # the same issue, never a new one
@@ -323,7 +325,7 @@ class Invariants(unittest.TestCase):
                 b.Budget("admin", 1.0, 60).mint("m")
         self.assertFalse(pm.wants_fix_request({"outcome": "provider_blocked"}, {}))  # no self-starting retry
         self.assertFalse(pm.records_stuck_issue("provider_blocked"))
-        self.assertNotIn("provider_blocked", b.OK_OUTCOMES)
+        self.assertNotIn("provider_blocked", outcomes.OK)
 
     def test_inv30_the_api_check_helpers_observation_outranks_the_testers_judgement(self):
         import api_check as ac
@@ -451,7 +453,7 @@ class Invariants(unittest.TestCase):
         self.assertTrue(tr.feasibility({"feasibility": {"status": "blocked", "category": "payments", "reasons": ["card"]}})[0])
         self.assertFalse(tr.feasibility({"feasibility": {"status": "ok"}})[0])
         self.assertFalse(pm2.wants_fix_request({"outcome": "refused"}, {}))
-        self.assertNotIn("refused", b.OK_OUTCOMES)
+        self.assertNotIn("refused", outcomes.OK)
         self.assertTrue(issubclass(b.Refused, Exception))
 
     def test_inv41_a_model_swap_is_decided_by_a_measured_pass_and_survivable_at_run_time(self):
@@ -493,7 +495,7 @@ class Invariants(unittest.TestCase):
 
     def test_inv43_a_dark_feature_is_removed_only_after_the_retries_and_a_persons_approval(self):
         import flag_retirement as fr
-        ready = ["update-intake", "app:notes", "flag:pin", "dark-broken", "needs-human"]
+        ready = ["update-app-intake", "app:notes", "flag:pin", "dark-broken", "needs-human"]
         self.assertEqual(fr.dark_removal_target(ready), ("notes", "pin", None))
         for missing in ("dark-broken", "needs-human"):  # while retries remain, or when nothing is dark-broken, the label does nothing
             self.assertIsNotNone(fr.dark_removal_target([l for l in ready if l != missing])[2])
@@ -602,8 +604,8 @@ class Invariants(unittest.TestCase):
         with self.assertRaises(b.AwaitingSecret):
             run.require_secrets(need, record=False)
         self.assertEqual(sum(1 for a in sent if a[:2] == ["issue", "comment"]), 2)  # the early check posts nothing more
-        self.assertIn("awaiting_secret", b.ANSWERED_ENDINGS)
-        self.assertNotIn("awaiting_secret", b.OK_OUTCOMES)  # INV-24: an OK ending closes the Intake
+        self.assertIn("awaiting_secret", outcomes.ANSWERED)
+        self.assertNotIn("awaiting_secret", outcomes.OK)  # INV-24: an OK ending closes the Intake
         self.assertFalse(pm.wants_fix_request({"outcome": "awaiting_secret"}, {}))
         self.assertFalse(pm.records_stuck_issue("awaiting_secret"))
         self.assertNotIn("-----", triage.secrets_request(need, "o/app"))

@@ -15,8 +15,8 @@
 #                     "criteria": ["AC-1: ..."], "verification": ["..."], "flag": "slug-or-null",
 #                     "internal_only": false, "out_of_scope": ["..."]}]}
 #
-# Used by the Build Run for an Update Intake (`BuildRun.plan_change`): one change set becomes that run's task; several
-# are filed as child Update Intake issues by `update_intake.file_children`, each its own Build Run, in this order.
+# Used by the Build Run for an Update App Intake (`BuildRun.plan_change`): one change set becomes that run's task; several
+# are filed as child Update App Intake issues by `update_intake.file_children`, each its own Build Run, in this order.
 #
 # Usage: planner.py validate <plan.json> [first|update]     (exit 0 valid, 1 invalid, 2 needs a person)
 import json

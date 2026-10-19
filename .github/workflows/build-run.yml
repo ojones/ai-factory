@@ -21,7 +21,7 @@ permissions:
 
 # Same Managed App: serialized, and every queued run is kept. Without `queue: max` a group holds
 # one running and one pending run and a newer pending run cancels the older one (shown by a probe
-# on 2026-10-12: of three dispatches, the middle one was cancelled). Update Intake can queue several.
+# on 2026-10-12: of three dispatches, the middle one was cancelled). Update App Intake can queue several.
 concurrency:
   group: build-run-${{ inputs.app_name }}
   cancel-in-progress: false

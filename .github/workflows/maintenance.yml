@@ -1,7 +1,7 @@
 name: Maintenance
 
 # Once a day (and on demand): turn each Managed App's open Dependabot pull requests (npm packages, Docker base image) into one
-# Update Intake that starts itself. Dependabot only detects; the change goes through the normal Build Run and gate.
+# Update App Intake that starts itself. Dependabot only detects; the change goes through the normal Build Run and gate.
 # orchestrator/maintenance.py does the work; `limits.maintenance.enabled` in agents/profiles.yml is the switch.
 on:
   schedule:

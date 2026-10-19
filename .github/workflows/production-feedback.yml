@@ -1,7 +1,7 @@
 name: Production feedback
 
 # Every six hours (and on demand): read each Managed App's recent production logs and the owner's `escaped-defect` issues, and
-# turn what repeats into an Update Intake that starts itself. Fly keeps only a short log buffer, so a daily scan would miss most
+# turn what repeats into an Update App Intake that starts itself. Fly keeps only a short log buffer, so a daily scan would miss most
 # of it. orchestrator/production_feedback.py does the work; `limits.production_feedback` in agents/profiles.yml is the switch.
 on:
   schedule:

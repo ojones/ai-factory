@@ -1,12 +1,12 @@
-name: Update Intake — change an existing Managed App
+name: Update App Intake — change an existing Managed App
 description: Ask the Factory to change a Managed App it already built.
 title: "my-app-name: what to change"
-labels: ["update-intake"]
+labels: ["update-app-intake"]
 body:
   - type: markdown
     attributes:
       value: |
-        This changes an app the Factory already built. For a new app, use the Intake form instead.
+        This changes an app the Factory already built. For a new app, use the New App Intake form instead.
 
         Edit this issue freely until it is ready. When it is, add the **`proceed-with-change`** label. A Build Run starts immediately: it plans the change, then codes, tests and reviews it, and releases it behind a feature flag only when everything passes. If the plan has several parts, each becomes its own issue and runs in order. If something needs your answer or fails, the run comments here and removes the label; fix the issue and add the label again.
   - type: input
@@ -20,7 +20,7 @@ body:
     id: description
     attributes:
       label: What should change?
-      description: What the app should do differently. Say what you want to see, not how to build it. Mention anything that must not change. This issue is public: never paste a key, token or password. See docs/golden-intakes.md for examples.
+      description: "What the app should do differently. Say what you want to see, not how to build it. Mention anything that must not change. This issue is public: never paste a key, token or password. See docs/golden-intakes.md for examples."
     validations:
       required: true
   - type: input

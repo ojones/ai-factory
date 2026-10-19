@@ -528,8 +528,8 @@ class SuppressionsAndLintConfig(unittest.TestCase):
         run, git, _, factory = self.run_with_template({"eslint.config.mjs": "// new\n"})
         from unittest import mock
         with mock.patch.object(b, "FACTORY_DIR", factory):
-            run.apply_template_files({"update-intake"})
-            run.stage_template_config({"update-intake"})
+            run.apply_template_files({"update-app-intake"})
+            run.stage_template_config({"update-app-intake"})
         self.assertEqual((run.app_dir / "eslint.config.mjs").read_text(), "// old\n")
 
 
