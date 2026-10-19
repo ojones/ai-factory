@@ -44,7 +44,7 @@ roles:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/pipeline.md
-  # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planner.py checks the
+  # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planning/validate_plan.py checks the
   # plan). Runs first in a Build Run for an Update App Intake. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
   # because the 480B hung for minutes at a time on real runs (one planner attempt took 1277 s) and a planner needs no code-tuned model;
   # gpt-oss-120b is about 8x cheaper and a different lab from the coder and reviewer (DeepSeek) and the tester (Nvidia). Watch the planner
@@ -113,12 +113,12 @@ limits:
   # read from the spend-ledger issue in ai-factory. 0 disables it. Runs in flight count when they finish.
   daily_cost_cap_usd: 10.00
   # Fly apps that are Factory infrastructure rather than Managed Apps (besides ai-factory-growthbook); the daily Fly audit
-  # (orchestrator/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
+  # (orchestrator/monitoring/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
   fly_infra_apps: []
   # Errors a deployed app logs, and `escaped-defect` issues its owner files, become Update App Intakes that start themselves
   # (orchestrator/production_feedback.py, scheduled by production-feedback.yml). min_occurrences: times one error must appear in a scan.
   # Daily: Dependabot's open pull requests for each app (npm packages, Docker base image) become one self-starting Update App Intake
-  # (orchestrator/maintenance.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
+  # (orchestrator/maintenance/dependency_updates.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
   maintenance:
     enabled: true
   # A proven flag is retired inside the next Update App Intake's Build Run for the same app, never in a run of its own: once a later Build Run
@@ -139,6 +139,8 @@ limits:
   # for one Intake. Set planner_enabled false to run an Update App Intake's request straight through as one change.
   planner_enabled: true
   planner_max_change_sets: 8
+  # More acceptance criteria than this in one change set means it is not one slice to release and revert together; the plan is rejected.
+  planner_max_criteria: 6
   # Nothing is ever reverted in git: code is fixed forward and `main` keeps every commit. The one exception is a regression (the tester
   # finds behaviour that was live before the run stops working): the app's own CI then redeploys the previous version (the starting
   # commit's image) with `rollback-fly.yml`. A change that only breaks itself stays dark, because its flag is never released, and is

@@ -12,6 +12,8 @@ import audit  # noqa: E402
 import build_run as b  # noqa: E402
 import fixrequest  # noqa: E402
 import retrospective as pm  # noqa: E402
+from flag_lifecycle import dark_feature  # noqa: E402
+from shared import shell  # noqa: E402
 
 
 def stages():
@@ -41,7 +43,7 @@ class Finalize(unittest.TestCase):
         env = {"BUILD_RUN_DIR": str(work), "APP_NAME": "demo", "ISSUE_NUMBER": "66", "GITHUB_REPOSITORY": "o/f", "GITHUB_RUN_ID": "9",
                "FACTORY_PAT": "pat", "FACTORY_GH_TOKEN": "tok", "GITHUB_STEP_SUMMARY": str(work / "summary.md")}
         done = rollback or {"status": "rolled_back", "restored": "b" * 40, "deploy": "healthy"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(b, "sh", fake_sh), \
+        with mock.patch.dict(os.environ, env), mock.patch.object(b, "sh", fake_sh), mock.patch.object(shell, "sh", fake_sh), \
                 mock.patch.object(b, "rollback_deploy", return_value=done) as deploy, \
                 mock.patch.object(b, "record_spend_in_ledger"), mock.patch.object(b, "update_state_issues"):
             code = b.finalize()
@@ -81,7 +83,7 @@ class Finalize(unittest.TestCase):
     def test_a_dark_feature_that_failed_its_checks_is_marked_on_its_story(self):
         _, _, _, _, calls = self.run_finalize(Run, extra={"flags": ["thing"]})
         edits = [c for c in calls if c[:3] == ["gh", "issue", "edit"] and "--add-label" in c]
-        self.assertTrue(any(c[c.index("--add-label") + 1] == f"{b.DARK_BROKEN},flag:thing" and c[3] == "66" for c in edits))
+        self.assertTrue(any(c[c.index("--add-label") + 1] == f"{dark_feature.DARK_BROKEN},flag:thing" and c[3] == "66" for c in edits))
 
     def test_a_provider_block_says_to_top_up_and_does_not_roll_back(self):
         code, report, saved, summary, calls = self.run_finalize(Run, "provider_blocked")
@@ -90,7 +92,7 @@ class Finalize(unittest.TestCase):
         comment = next(c for c in calls if c[:3] == ["gh", "issue", "comment"])
         self.assertIn("topped up", comment[comment.index("--body") + 1])
         self.assertEqual(b.OUTCOME_TITLES["provider_blocked"], "Build Run: model provider blocked (account has no balance)")
-        self.assertFalse(any(b.DARK_BROKEN in c for c in calls))
+        self.assertFalse(any(dark_feature.DARK_BROKEN in c for c in calls))
 
     def test_a_good_ending_and_a_contained_one_are_not_rolled_back(self):
         for outcome, extra in (("released", {"release": {"released": ["demo.feature.x"]}}), ("watchdog_disabled", {})):

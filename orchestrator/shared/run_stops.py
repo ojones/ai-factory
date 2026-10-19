@@ -1,4 +1,4 @@
-# The three ways a run stops that are neither a good ending nor a crash. Raised by the Agent runtime and by the Build Run.
+# The ways a run stops that are neither a good ending nor a crash. Raised by the Agent runtime and by the Build Run.
 
 class BudgetExhausted(Exception):
     pass
@@ -16,3 +16,9 @@ class NeedsHuman(Exception):
     def __init__(self, kind, message):
         super().__init__(message)
         self.kind = kind
+
+
+class FlagMissing(Exception):
+    # A flag the change is gated by does not exist in GrowthBook at release, so nothing can switch the feature on. Nothing is rolled back
+    # (the feature is hidden): the story is fixed forward with a flag that exists.
+    pass

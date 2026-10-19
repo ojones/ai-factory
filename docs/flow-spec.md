@@ -172,19 +172,19 @@ flowchart TD
 |---|---|---|---|---|---|
 | 1.1 | New App Intake submitted | owner | `ISSUE_TEMPLATE/new-app-intake.yml` |  |  |
 | 1.2 | Update App Intake submitted | owner | `ISSUE_TEMPLATE/update-app-intake.yml` |  |  |
-| 1.3 | Automated change request | production_feedback, maintenance, template_sync, flag_retirement | each module's `file_*` |  |  |
-| 2.1 | Plan | Planner Agent | new `plan_run.py` (from `plan_change`), `planner.py` |  |  |
-| 2.2 | Refuse | Orchestrator | `triage.feasibility`, `Refused` |  |  |
+| 1.3 | Automated change request | production_feedback, maintenance, template_sync, flag_lifecycle | each module's `file_*` |  |  |
+| 2.1 | Plan | Planner Agent | new `plan_run.py` (from `plan_change`), `planning/validate_plan.py` |  |  |
+| 2.2 | Refuse | Orchestrator | `planning/triage.feasibility`, `Refused` |  |  |
 | 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` |  |  |
-| 2.4 | File child tickets | Orchestrator | `update_app_intake.file_children` (sub-issues) |  |  |
+| 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` |  |  |
 | 2.5 | Start the first child | Orchestrator | `update_app_intake.ready_to_start` |  |  |
 | 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` |  |  |
 | 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh` |  |  |
 | 3.2 | Verify infrastructure | Orchestrator, Tester | Starter smoke test, tester |  |  |
 | 4.1 | Prepare the run | Orchestrator | `BuildRun.setup`, new `ensure_feature` |  |  |
-| 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_retirement.piggyback_slugs` |  |  |
+| 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_lifecycle.retirement_selection.piggyback_slugs` |  |  |
 | 4.3 | Code | Coder Agent | `agents/prompts/coder.md` |  |  |
-| 4.4 | Pre-review check | Orchestrator | `limits.precheck` |  |  |
+| 4.4 | Pre-review check | Orchestrator | `limits.precheck`, Starter `scripts/check-flags.mjs` |  |  |
 | 4.5 | Review | Reviewer Agent | `reviewer.md`, `banded_findings` |  |  |
 | 4.6 | Push | Orchestrator | `BuildRun.push` |  |  |
 | 4.7 | CI and dark deploy | app CI | Starter workflows |  |  |
@@ -195,7 +195,7 @@ flowchart TD
 | 4.12 | Release gate | Orchestrator | `BuildRun.release` conditions |  |  |
 | 4.13 | Release | Orchestrator | `BuildRun.release`, watchdog |  |  |
 | 4.14 | Child fails | Orchestrator | `finish_update_app_intake` |  |  |
-| 5.1-5.7 | Flag lifecycle | Orchestrator | `flag_retirement.py`, `flag_set.py`, `appstate.py` |  |  |
+| 5.1-5.7 | Flag lifecycle | Orchestrator | `flag_lifecycle/`, `appstate.py` |  |  |
 | 6.1 | Child closed | Orchestrator | `finish_update_app_intake` |  |  |
 | 6.2 | Retrospective | Retrospective Agent | `retrospective.py`, `finalize` |  |  |
 | 6.3 | Advance to the next child | Orchestrator | `update_app_intake.advance` |  |  |

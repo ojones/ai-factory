@@ -105,7 +105,7 @@ The hard gate in a Managed App's deployment pipeline: install, type-check and un
 _Avoid_: CI (when this specific gate is meant)
 
 **Flag slug**:
-The `<slug>` part of a flag's GrowthBook key `<app>.feature.<slug>`. Target: always `issue-<n>`, `<n>` the number of the child ticket (the story) it belongs to; a fix child uses the failed story's number. Today the planner chooses it.
+The `<slug>` part of a flag's GrowthBook key `<app>.feature.<slug>`. `issue-<n>`, `<n>` the number of the story it belongs to (a retried story keeps its flag; a fix child will use the failed story's number). The Orchestrator names it; older flags keep the slug their planner chose.
 _Avoid_: flag name, flag id
 
 **Flag manifest**:

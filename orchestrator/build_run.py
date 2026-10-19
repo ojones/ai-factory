@@ -13,8 +13,6 @@
 # key; the coder only commits, and this process pushes.
 import base64
 import collections
-import hashlib
-import hmac
 import json
 import os
 import re
@@ -28,32 +26,46 @@ from pathlib import Path
 import appstate
 import audit
 import fixrequest
-import planner
-import triage
 import update_intake
-from shared import agent_output, agent_process, agent_runner, agent_usage, config, github, http_client, outcomes, provider, run_stops, spend_budget
+from flag_lifecycle import (
+    dark_feature,
+    flag_manifest,
+    flag_slug,
+    flag_usage,
+    missing_flag,
+    release_features,
+    retirement_archive,
+    retirement_check,
+    retirement_selection,
+    story_link,
+    watchdog,
+)
+from planning import file_children, plan_comment, render_child, secrets_marker, triage, validate_plan
+from request import intake_labels, read_form
+from shared import (
+    agent_output,
+    agent_process,
+    agent_runner,
+    agent_usage,
+    app_state_record,
+    child_tickets,
+    config,
+    github,
+    http_client,
+    outcomes,
+    preview_token,
+    provider,
+    run_stops,
+    spend_budget,
+    starter_template,
+)
 from shared.console import log
-from update_intake import form_section  # noqa: F401 - the Issue Form parser lives with Update App Intake
+from shared.shell import sh
 
-FACTORY_DIR = Path(__file__).resolve().parent.parent
-GROWTHBOOK_API = os.environ.get("GROWTHBOOK_API_HOST", "https://ai-factory-growthbook.fly.dev:3100") + "/api/v1"
 NOT_STARTED_CONCLUSIONS = ("action_required", "startup_failure")  # a workflow run GitHub ended before any job started: no log to diagnose
 PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to Fly", "deploy-fly.yml")]
-# Starter Template files the coder must not change: the workflows hold the Fly
-# token, and the flag wrapper is the release gate's other half.
-PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md", "eslint.config.mjs", ".prettierrc.json", ".prettierignore")
-# Protected files a template-sync Build Run copies from the Starter Template itself, before any Agent runs (an Agent may not edit
-# them, and no Agent is involved). Only files that are safe to overwrite belong here: nobody but the template ever changes them.
-TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR = (".github/dependabot.yml", ".github/workflows/test-gate.yml", ".github/workflows/rollback-fly.yml",
-                                            ".github/workflows/deploy-fly.yml")
-# The Starter's lint and formatter config is owned by the Orchestrator too, so the coder cannot loosen a rule to make a check pass. A tighter rule
-# can fail the app's existing code, so these are committed locally and pushed together with the coder's fixes (a push of the config alone would
-# put a red Test Gate on `main`); the coder, and only the coder, fixes what the new rules report.
-TEMPLATE_FILES_HELD = ("eslint.config.mjs", ".prettierrc.json", ".prettierignore")
-TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR = TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR + TEMPLATE_FILES_HELD
-SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-API_CHECK = str(FACTORY_DIR / "orchestrator" / "api_check.py")  # the helper the tester calls (see api_check.py)
-UI_CHECK = str(FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser counterpart (see ui_check.py)
+API_CHECK = str(config.FACTORY_DIR / "orchestrator" / "shared" / "api_check.py")  # the helper the tester calls (see api_check.py)
+UI_CHECK = str(config.FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser counterpart (see ui_check.py)
 
 
 
@@ -66,20 +78,10 @@ UI_CHECK = str(FACTORY_DIR / "orchestrator" / "ui_check.py")  # its browser coun
 
 
 def parse_intake(body, default_cap, ceiling):
-    # A new app's Intake asks "What should be built?"; an update Intake asks "What should change?".
-    task = form_section(body, "What should be built?") or form_section(body, "What should change?")
-    if not task or task == "_No response_":
-        raise run_stops.NeedsHuman("other", "The Intake's request field (\"What should be built?\" or \"What should change?\") is empty.")
-    raw = form_section(body, "Cost cap override (USD)").lstrip("$")
-    if not raw or raw == "_No response_":
-        return task, float(default_cap)
     try:
-        cap = float(raw)
-    except ValueError:
-        raise run_stops.NeedsHuman("other", f"Cost cap override {raw!r} is not a number.")
-    if not 0 < cap <= float(ceiling):
-        raise run_stops.NeedsHuman("other", f"Cost cap override ${cap} must be > 0 and <= the ${ceiling} ceiling.")
-    return task, cap
+        return read_form.read_request(body, default_cap, ceiling)
+    except ValueError as e:
+        raise run_stops.NeedsHuman("other", str(e))
 
 
 def identify_intake(issue, app, number):
@@ -88,18 +90,18 @@ def identify_intake(issue, app, number):
     # names the app in its form, and carries the `app:<slug>` label that Update App Intake adds after checking the repo.
     labels = {l["name"] for l in issue.get("labels", [])}
     body = issue.get("body") or ""
-    if update_intake.FORM_LABEL not in labels:
+    if intake_labels.UPDATE_APP_INTAKE not in labels:
         if issue["title"].strip() != app:
             raise run_stops.NeedsHuman("other", f"Intake #{number} is titled {issue['title']!r}, not {app!r}.")
         return False, {}
     try:
-        named = update_intake.app_name(body)
+        named = read_form.app_name(body)
     except ValueError as e:
         raise run_stops.NeedsHuman("other", f"Update App Intake #{number}: {e}.")
     if named != app or f"app:{app}" not in labels:
         raise run_stops.NeedsHuman("other", f"Update App Intake #{number} names {named!r} and is labelled "
                                   f"{sorted(l for l in labels if l.startswith('app:'))}, not {app!r}.")
-    return True, update_intake.plan_meta(body)
+    return True, child_tickets.read_marker(body)
 
 
 FINDING_CATEGORIES = ("correctness", "security", "data_safety", "requirement_not_met", "flag_misuse", "test_quality", "style", "duplication", "other")
@@ -300,33 +302,16 @@ def ui_section(wanted, helper_path):
             "\"expect\": {\"text\": [{\"role\": \"listitem\", \"contains\": \"factory-test-a\"}]}}]}`.")
 
 
-RETIRE_RE = re.compile(r"^retire-flag: ([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*$", re.M)  # one line per flag to retire
 
 
-FLAG_TAG_RE = re.compile(r"\s*\[flags?: [^\]]*\]")
 
 
-def flag_label(slug):
-    # The label that marks a story with its flag (GitHub labels hold 50 characters), or None for a slug too long to fit.
-    name = f"flag:{slug}"
-    return name if len(name) <= 50 else None
 
 
-def title_with_flags(title, slugs):
-    # The issue title carrying its flag(s), `... [flag: slug]`, replacing any earlier such tag; unchanged for no slugs.
-    if not slugs:
-        return title
-    base = FLAG_TAG_RE.sub("", title or "").rstrip()
-    return f"{base} [{'flag' if len(slugs) == 1 else 'flags'}: {', '.join(slugs)}]"
 
 
-def flag_description(issue_url, title):
-    # What a GrowthBook feature says about the story it came from: the issue link first, so the two can be followed both ways.
-    return f"{issue_url} {FLAG_TAG_RE.sub('', title or '').strip()}"[:300].strip()
 
 
-def flag_tags(issue, app):
-    return [f"intake-{issue}", f"app-{app}"]
 
 
 class Refused(Exception):
@@ -384,42 +369,16 @@ class NothingToDo(Exception):
     pass
 
 
-def retire_slugs(task):
-    # The slugs a task asks to retire (its `retire-flag: <slug>` lines), in order, without repeats.
-    return list(dict.fromkeys(RETIRE_RE.findall(task or "")))
 
 
-def manifest_slugs(flags_json):
-    try:
-        return {f["slug"] for f in json.loads(flags_json or "[]") if isinstance(f, dict) and isinstance(f.get("slug"), str)}
-    except ValueError:
-        return set()
 
 
-def removed_flag_slugs(base_flags_json, head_flags_json):
-    # Slugs that were in the manifest at the base and are not at the head: the flags a run retired.
-    return sorted(manifest_slugs(base_flags_json) - manifest_slugs(head_flags_json))
 
 
-COMMENT_START = ("//", "/*", "*", "#", "<!--")
 
 
-def code_references(grep_lines):
-    # The `git grep -n <tree> -e slug` hits that are code, not comments. Format: <tree>:<path>:<line>:<text>.
-    hits = []
-    for line in grep_lines:
-        parts = line.split(":", 3)
-        if len(parts) == 4 and not parts[3].strip().startswith(COMMENT_START):
-            hits.append(f"{parts[1]}:{parts[2]}")
-    return hits
 
 
-def retirement_problem(slug, hits):
-    if not hits:
-        return None
-    return (f"The flag `{slug}` is still referenced in code: {', '.join(hits[:8])}. A retirement removes the flag's check (keep the behaviour it "
-            "guarded, always on), its line in `flags.json`, and the tests of the flag-off behaviour; no code may mention the slug afterwards "
-            "(a comment may).")
 
 
 def derive_test(doc, expected_flags):
@@ -561,41 +520,14 @@ def stalled(entries, n):
     return bool(last[0]) and all(x == last[0] for x in last)
 
 
-ERROR_LOG_RE = re.compile(r'"level"\s*:\s*"(?:error|fatal)"', re.I)
 
 
-def count_errors(log_text):
-    # Error-level lines in a Managed App's structured (JSON) logs (STANDARDS-VISIBILITY.md).
-    return len(ERROR_LOG_RE.findall(log_text or ""))
 
 
-def watchdog_trip(samples, baseline_errors, max_failures, max_new_errors):
-    # The reason to switch a just-released flag off, or None. `samples` are in time order, each
-    # {"healthy": bool, "errors": int}. Trips on `max_failures` health failures in a row, or on the
-    # error count rising `max_new_errors` above what the app logged before the release.
-    streak = 0
-    for sample in samples:
-        streak = 0 if sample["healthy"] else streak + 1
-        if streak >= max_failures:
-            return f"the health check failed {streak} times in a row after the release"
-    if samples and max(sample["errors"] for sample in samples) - baseline_errors >= max_new_errors:
-        return (f"error-level log lines rose from {baseline_errors} to {max(s['errors'] for s in samples)} "
-                f"after the release (limit: {max_new_errors} new)")
-    return None
 
 
-def new_flag_slugs(base_json, head_json):
-    def slugs(text):
-        try:
-            return [e["slug"] for e in json.loads(text) if isinstance(e, dict) and "slug" in e]
-        except (ValueError, TypeError):
-            return []
-    base = set(slugs(base_json))
-    return [s for s in slugs(head_json) if s not in base]
 
 
-def protected_violations(changed_files):
-    return [f for f in changed_files if f.startswith(PROTECTED) or f in PROTECTED]
 
 
 LEDGER_LABEL = "factory-ledger"
@@ -624,9 +556,6 @@ def release_gate(ci_green, deploy_healthy, tester_passed, reviewer_clean, review
     return all([ci_green, deploy_healthy, tester_passed, reviewer_clean]) and reviewed_sha == head_sha
 
 
-def preview_token(master_secret, slug):
-    # Same derivation as infra/app-staging/preview-token.sh.
-    return hmac.new(master_secret.encode(), slug.encode(), hashlib.sha256).hexdigest()
 
 
 
@@ -635,9 +564,9 @@ def preview_token(master_secret, slug):
 
 def load_prompt(prompt_path):
     # A role prompt, with the shared reviewer rubric spliced in where it asks for `{{rubric}}`.
-    text = (FACTORY_DIR / "agents" / prompt_path).read_text()
+    text = (config.FACTORY_DIR / "agents" / prompt_path).read_text()
     if "{{rubric}}" in text:
-        text = text.replace("{{rubric}}", (FACTORY_DIR / "agents" / "prompts" / "reviewer-rubric.md").read_text().strip())
+        text = text.replace("{{rubric}}", (config.FACTORY_DIR / "agents" / "prompts" / "reviewer-rubric.md").read_text().strip())
     return text
 
 
@@ -686,7 +615,6 @@ REVIEW_SCHEMA = {
 
 
 FLAG_REF_RE = re.compile(r"^[\w.-]+/[\w.-]+#\d+:")
-TEST_FILE_RE = re.compile(r"(\.test\.|\.spec\.|/tests?/|/__tests__/)")
 
 
 def flag_findings(git, head, slugs):
@@ -708,8 +636,7 @@ def flag_findings(git, head, slugs):
         if entry is None:
             continue
         shown = json.dumps(entry)
-        hits = [line for line in git("grep", "-n", "-I", "-F", "-e", f'"{slug}"', "-e", f"'{slug}'", head, "--", "backend", "frontend").splitlines()
-                if not TEST_FILE_RE.search(line.split(":")[1] if line.count(":") > 1 else line)]
+        hits = flag_usage.code_reads(git, head, slug)
         if not hits:
             out.append(finding(slug, f"Flag `{slug}` is declared in flags.json but no code outside the tests reads it", shown,
                                "A declared flag must guard something, or it is released with nothing behind it.",
@@ -821,10 +748,6 @@ def single_call_review(base_url, key, model, system, user, timeout=300, attempts
 
 
 
-def git_auth_env(header):
-    # Environment variables that make git send `header` to GitHub. Passed this way, not as `git -c http.extraheader=...`, because a
-    # command line is readable by every user on the machine (`ps`, /proc/<pid>/cmdline) while an environment is not.
-    return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraheader", "GIT_CONFIG_VALUE_0": header}
 
 
 
@@ -839,11 +762,6 @@ def git_auth_env(header):
 
 
 
-def sh(cmd, cwd=None, env=None, check=True, timeout=None):
-    p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-    if check and p.returncode != 0:
-        raise RuntimeError(f"{' '.join(cmd[:3])}... failed ({p.returncode}): {(p.stderr or p.stdout)[-600:]}")
-    return p
 
 
 
@@ -884,6 +802,7 @@ class BuildRun:
     retiring = ()  # the flags this run retires in passing (set in setup)
     retry_state = {}  # the story's retry state from its issue (fixrequest.retry_state)
     reuse_flags = []  # the flag(s) a retried story keeps through every attempt
+    story_flags = ()  # the flag this run named for the story (flag_slug.py); it is switched on at release whether or not this run created it
     flag_issues = {}  # slug -> number of the story each released flag came from (from the State issue)
     declared_secrets = ()  # the secrets recorded on the Intake, checked at the start of the run (`setup`)
     agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
@@ -958,7 +877,7 @@ class BuildRun:
         # found and the guidance for this one. The same issue and the same flag run again.
         retry = fixrequest.retry_state([c.get("body", "") for c in issue.get("comments") or []])
         self.retry_state = retry
-        self.reuse_flags = [f for f in retry.get("flags", []) if isinstance(f, str) and SLUG_RE.fullmatch(f)]
+        self.reuse_flags = [f for f in retry.get("flags", []) if isinstance(f, str) and flag_manifest.SLUG_RE.fullmatch(f)]
         if retry:
             self.fix_meta = {"origin": self.issue, "attempt": int(retry.get("attempt", 0)), "history": retry.get("history", [])}
         if self.fix_meta:
@@ -971,7 +890,7 @@ class BuildRun:
         secrets = triage.find_secrets(issue["body"] or "")
         if secrets:
             raise Refused(triage.secret_refusal(secrets))
-        self.declared_secrets = update_intake.declared_secrets(issue)
+        self.declared_secrets = secrets_marker.declared_secrets(issue)
         if self.declared_secrets:
             # Checked before the planner, the coder, the reviewer or the tester is paid for, on every start (a retry, a child, a re-run).
             self.require_secrets(self.declared_secrets)
@@ -979,7 +898,7 @@ class BuildRun:
                 self.task += secrets_note(self.declared_secrets)
         self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
         # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
-        raw_cap = form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
+        raw_cap = read_form.form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
         self.cap_override = raw_cap if raw_cap and raw_cap != "_No response_" else None
         self.issue_title = issue.get("title", "")
         self.state.d["cap_usd"] = self.cap
@@ -991,12 +910,12 @@ class BuildRun:
         self.wait_for_capacity()
         self.meter = spend_budget.Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
         self.make_runner()
-        self.preview = preview_token(os.environ["PREVIEW_MASTER_SECRET"], self.app)
+        self.preview = preview_token.for_app(os.environ["PREVIEW_MASTER_SECRET"], self.app)
         print(f"::add-mask::{self.preview}", flush=True)
         # Clone with the PAT passed per command only, so the checkout stores no credential
         # and the coder (who runs in it) cannot push or read one.
         sh(["git", "clone", "-q", f"https://github.com/{self.app_repo}.git", str(self.app_dir)],
-           env={**os.environ, **git_auth_env(self.auth_header)})
+           env={**os.environ, **github.git_auth_env(self.auth_header)})
         self.share_with_agent(self.app_dir)
         self.install_dependencies()
         self.git("config", "user.name", "ai-factory-coder")
@@ -1018,7 +937,7 @@ class BuildRun:
         # Copy the Starter Template files in `group` that differ into the app checkout and commit them locally. Returns the paths changed.
         changed = []
         for rel in group:
-            src, dst = FACTORY_DIR / "templates" / "starter" / rel, self.app_dir / rel
+            src, dst = config.FACTORY_DIR / "templates" / "starter" / rel, self.app_dir / rel
             if not src.is_file():
                 continue
             wanted = src.read_bytes()
@@ -1062,9 +981,9 @@ class BuildRun:
         if "template-sync" not in labels:
             return
         try:
-            changed = self.copy_template_files(TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR)
+            changed = self.copy_template_files(starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR)
             if changed:
-                sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
+                sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **github.git_auth_env(self.auth_header)})
                 log("synced protected template files: " + ", ".join(changed))
         except Exception as e:  # noqa: BLE001
             log(f"could not sync protected template files: {type(e).__name__}: {e}")
@@ -1075,31 +994,21 @@ class BuildRun:
         if "template-sync" not in labels:
             return
         try:
-            changed = self.copy_template_files(TEMPLATE_FILES_HELD)
+            changed = self.copy_template_files(starter_template.TEMPLATE_FILES_HELD)
             if changed:
                 log("staged protected lint config, pushed with the coder's work: " + ", ".join(changed))
         except Exception as e:  # noqa: BLE001
             log(f"could not stage the lint config: {type(e).__name__}: {e}")
 
     def choose_flags_to_retire(self):
-        # The proven flags that ride along with this run (flag_retirement.py): none for a first build or an automatic retry. A task that
-        # names flags itself (`retire-flag:` lines, from an owner's Intake) retires those too.
-        named = retire_slugs(self.task)
-        picked = []
-        if self.update_intake and not self.fix_meta and self.build_kind == "update":
-            try:
-                import flag_retirement
-                owner = self.app_repo.split("/")[0]
-                state_flags, manifest = flag_retirement.app_flags(owner, self.app, self.pat)
-                if state_flags is not None:
-                    self.flag_issues = flag_retirement.issue_of(state_flags)
-                    limits = self.lim.get("flag_retirement") or {}
-                    picked = flag_retirement.piggyback_slugs(state_flags, manifest, time.strftime("%Y-%m-%d", time.gmtime()),
-                                                             int(limits.get("min_age_days", 1)), limits.get("piggyback_max", 5))
-            except Exception as e:  # noqa: BLE001 - retiring is never a reason to stop the run
-                log(f"could not choose flags to retire: {type(e).__name__}: {e}")
-        in_repo = manifest_slugs(self.git("show", "HEAD:flags.json", check=False).stdout)
-        return [s for s in dict.fromkeys(named + picked) if s in in_repo]
+        # The proven flags that ride along with this run (flag_lifecycle/retirement_selection.py).
+        picked, issues = retirement_selection.choose(
+            bool(self.update_intake and not self.fix_meta and self.build_kind == "update"), self.task, self.app_repo.split("/")[0], self.app,
+            self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout,
+            time.strftime("%Y-%m-%d", time.gmtime()))
+        if issues:
+            self.flag_issues = issues
+        return picked
 
     def check_models(self):
         # Before any work: a one-token request per distinct model this run will use. A model the provider no longer serves is replaced by the role's
@@ -1271,13 +1180,13 @@ class BuildRun:
                 problem = "You rewrote history. Add new commits on top of the existing ones only."
             else:
                 changed = self.git("diff", "--name-only", f"{base}..{head}").stdout.split("\n")
-                bad = protected_violations([c for c in changed if c])
+                bad = starter_template.protected_violations([c for c in changed if c])
                 if bad:
                     self.git("reset", "-q", "--hard", base)
                     problem = f"Your commits changed protected Starter Template files ({', '.join(bad)}). They were discarded. Redo the work without touching them."
                 else:
                     for slug in self.retiring:
-                        problem = retirement_problem(slug, code_references(
+                        problem = retirement_check.retirement_problem(slug, retirement_check.code_references(
                             self.git("grep", "-n", "-I", "-F", "-e", slug, head, check=False).stdout.splitlines()))
                         if problem:
                             break
@@ -1349,7 +1258,7 @@ class BuildRun:
         # Push the reviewed commit to `main` (which deploys it, dark if it is flagged). Only the Orchestrator pushes, and only code the
         # reviewer has passed.
         self.check_limits()
-        sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **git_auth_env(self.auth_header)})
+        sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **github.git_auth_env(self.auth_header)})
         self.state.d["head_sha"] = head
         self.state.d["commits"].append(head)
         self.state.stage("Push", "-", "-", 0, f"pushed {head[:8]}")
@@ -1479,8 +1388,8 @@ class BuildRun:
         # attempt's code stayed, dark) but is tested and released again like a new one.
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
-        flags = new_flag_slugs(base_flags, head_flags)
-        flags += [s for s in self.reuse_flags if s in manifest_slugs(head_flags) and s not in flags]
+        flags = flag_manifest.new_flag_slugs(base_flags, head_flags)
+        flags += [s for s in self.reuse_flags if s in flag_manifest.manifest_slugs(head_flags) and s not in flags]
         self.state.d["flags"] = list(flags)
         return flags
 
@@ -1563,28 +1472,16 @@ class BuildRun:
         return passed, failures, impact
 
     def gb(self, method, path, body=None):
-        return http_client.request(method, f"{GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
+        return http_client.request(method, f"{config.GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
 
     def link_flags_to_issue(self, slugs):
-        # The story names its flag: a `flag:<slug>` label, the flag in the title, and a comment with the full key (the flag, in turn, links
-        # back through its GrowthBook description and tag). Update App Intakes only: a first build's title must stay the bare app name.
+        # The story names its flag (flag_lifecycle/story_link.py). Update App Intakes only: a first build's title must stay the bare app name.
         # Best effort, never a reason to stop the run.
         if not self.update_intake or not slugs:
             return
         try:
-            for slug in slugs:
-                label = flag_label(slug)
-                if label:
-                    github.ensure_label(self.factory_repo, label, self.factory_token, "5319e7", "The feature flag of this story")
-                    self.gh(["issue", "edit", self.issue, "--repo", self.factory_repo, "--add-label", label], token=self.factory_token, check=False)
-            new_title = title_with_flags(getattr(self, "issue_title", ""), slugs)
-            if new_title and new_title != getattr(self, "issue_title", ""):
-                self.gh(["issue", "edit", self.issue, "--repo", self.factory_repo, "--title", new_title], token=self.factory_token, check=False)
-                self.issue_title = new_title
-            keys = ", ".join(f"`{self.app}.feature.{s}`" for s in slugs)
-            self.gh(["issue", "comment", self.issue, "--repo", self.factory_repo, "--body",
-                     f"Feature flag {keys}: released by [Build Run {self.run_id}]({self.run_url}). The flag in GrowthBook links back here."],
-                    token=self.factory_token, check=False)
+            self.issue_title = story_link.link(self.gh, github.ensure_label, self.factory_repo, self.factory_token, self.issue,
+                                               getattr(self, "issue_title", ""), self.app, self.run_id, self.run_url, slugs)
         except Exception as e:  # noqa: BLE001
             log(f"could not link the flag to its issue: {type(e).__name__}: {e}")
 
@@ -1594,9 +1491,8 @@ class BuildRun:
         if self.state.d.get("outcome") not in outcomes.OK:
             return
         try:
-            gone = removed_flag_slugs(self.git("show", f"{base}:flags.json", check=False).stdout, self.git("show", f"{head}:flags.json", check=False).stdout)
-            for slug in gone:
-                status, _ = self.gb("POST", f"/features/{self.app}.feature.{slug}", {"archived": True})
+            for slug, status in retirement_archive.archive_removed(self.gb, self.app, self.git("show", f"{base}:flags.json", check=False).stdout,
+                                                                   self.git("show", f"{head}:flags.json", check=False).stdout):
                 log(f"archived retired flag {slug} in GrowthBook (HTTP {status})")
                 story = getattr(self, "flag_issues", {}).get(slug)
                 if story:  # the flag's story hears that its flag is gone
@@ -1607,42 +1503,33 @@ class BuildRun:
             log(f"could not archive retired flags: {type(e).__name__}: {e}")
 
     def release(self, flags, head):
-        project = self.gb("GET", "/projects?limit=100")[1]["projects"][0]["id"]
-        released, kept = [], []
-        for slug in flags:
-            if not SLUG_RE.fullmatch(slug):
-                raise run_stops.NeedsHuman("other", f"flag slug {slug!r} is not a valid slug; nothing released")
-        for slug in flags:
-            key = f"{self.app}.feature.{slug}"
-            status, existing = self.gb("GET", f"/features/{key}")
-            if status == 200:
-                prod = (((existing.get("feature") or existing) if isinstance(existing, dict) else {}).get("environments") or {}).get("production") or {}
-                if slug in self.reuse_flags and prod.get("enabled") is False:
-                    # The story's own flag, switched off by the watchdog when its release broke production: the fix passed the gates, so
-                    # it is released again. Any other existing flag is left exactly as it is.
-                    self.gb("POST", f"/features/{key}", {"environments": {"production": {"enabled": True, "rules": []}}})
-                    released.append(key)
-                else:
-                    kept.append(key)
-                continue
-            feature = {"id": key, "owner": "ai-factory", "valueType": "boolean", "defaultValue": "true", "project": project,
-                       "environments": {"production": {"enabled": True, "rules": []}}}
-            # The feature points back at its story (issue link in the description, an `intake-<n>` tag); if GrowthBook refuses the extras the
-            # flag is still created without them, because a flag that cannot be released is worse than one without a pointer.
-            status, r = self.gb("POST", "/features", {**feature, "description": flag_description(getattr(self, "issue_url", ""), getattr(self, "issue_title", "")),
-                                                       "tags": flag_tags(getattr(self, "issue", ""), self.app)})
-            if status == 400:
-                status, r = self.gb("POST", "/features", feature)
-            if status != 200:
-                raise RuntimeError(f"creating flag {key} failed: HTTP {status} {r}")
-            released.append(key)
+        # Switch on the story's own flag(s). A flag that does not exist is never created here (flag_lifecycle/missing_flag.py): if the code reads it
+        # the change is dark with nothing to turn it on, which fails the run; if the code does not read it the change is already live, which is
+        # noted and left alone.
+        to_switch, kept, missing = release_features.check_flags(self.gb, self.app, flags, list(self.story_flags) + list(self.reuse_flags))
+        if missing:
+            named = self.state.d.get("named_flag")
+            dark, live = missing_flag.split(missing, lambda slug: bool(flag_usage.code_reads(lambda *a: self.git(*a, check=False).stdout, head, slug)))
+            self.state.d["flag_notes"] = ([missing_flag.note(s, "missing_dark", named) for s in dark]
+                                          + [missing_flag.note(s, "live_without_flag", named) for s in live])
+            if dark:
+                raise run_stops.FlagMissing(missing_flag.dark_message(dark, named))
+            self.state.d["flag_message"] = missing_flag.live_message(live, named, False)
+            log(self.state.d["flag_message"])
+        release_features.switch_on(self.gb, to_switch)
+        released = to_switch
         body = (f"**Released** by Build Run [{self.run_id}]({self.run_url}) for commit `{head}`.\n\n"
                 f"Enabled for everyone: {', '.join(f'`{k}`' for k in released) or 'none'}.\n"
                 + (f"Left untouched (already existed): {', '.join(f'`{k}`' for k in kept)}.\n" if kept else "")
+                + (f"\n{self.state.d['flag_message']}\n" if self.state.d.get("flag_message") else "")
                 + "\nRoll back by turning the flag off in GrowthBook.")
         self.gh(["api", f"repos/{self.app_repo}/commits/{head}/comments", "-f", f"body={body}"])
         self.state.d["release"] = {"released": released, "kept": kept}
         self.state.stage("Release", "-", "-", 0, f"{len(released)} flag(s) released")
+
+    def ungated_flags(self, head, flags):
+        # The declared flags no code reads: the change they belong to went live on deploy, whatever the flag says.
+        return [s for s in flags if not flag_usage.code_reads(lambda *a: self.git(*a, check=False).stdout, head, s)]
 
     def record_round(self, rnd, head, blocking):
         # Add this round to the scoreboard (state.json, so it reaches the Report, and artifacts/progress.json).
@@ -1657,52 +1544,32 @@ class BuildRun:
         try:
             p = sh(["flyctl", "logs", "--no-tail", "--app", self.app],
                    env={**os.environ, "FLY_API_TOKEN": os.environ.get("FLY_API_TOKEN", "")}, check=False, timeout=120)
-            return count_errors(p.stdout or "")
+            return watchdog.count_errors(p.stdout or "")
         except (OSError, subprocess.TimeoutExpired):
             return 0
 
     def disable_flags(self, keys):
-        # Switch flags off in production and read each back. Returns the keys that are still on.
-        still_on = []
-        for key in keys:
-            self.gb("POST", f"/features/{key}", {"environments": {"production": {"enabled": False, "rules": []}}})
-            status, r = self.gb("GET", f"/features/{key}")
-            env = ((r.get("feature") or r) if isinstance(r, dict) else {}).get("environments", {}).get("production", {})
-            if status != 200 or env.get("enabled") is not False:
-                still_on.append(key)
-        return still_on
+        return watchdog.disable_flags(self.gb, keys)
 
     def watch_release(self):
-        # After a release, watch the app for `watchdog_minutes`. A run of failed health checks, or a
-        # rise in error-level log lines, switches the flags this run released off by itself (never one
-        # that already existed, which the owner controls) and ends the run as `watchdog_disabled` so
-        # finalize opens the Issue. The flag is the rollback lever, and the release step never turns
-        # it back on. 0 minutes disables the watch.
+        # After a release, watch the app (flag_lifecycle/watchdog.py). A run of failed health checks, or a rise in error-level log lines,
+        # switches the flags this run released off by itself (never one that already existed, which the owner controls) and ends the run
+        # as `watchdog_disabled` so finalize opens the Issue. The flag is the rollback lever, and the release step never turns it back on.
         # The outcome was set just before this call and is not on disk yet. Save it now: the watch below can take
         # minutes, and a run cancelled during it must still report `released`, not look like a crash.
         self.state.save()
         keys = list((self.state.d.get("release") or {}).get("released") or [])
-        minutes = float(self.lim.get("watchdog_minutes", 0))
-        if minutes <= 0 or not keys:
+        if float(self.lim.get("watchdog_minutes", 0)) > 0 and keys:
+            log(f"watching {self.app} for {float(self.lim['watchdog_minutes']):g} minutes after the release")
+        minutes, reason, still_on = watchdog.watch(keys, self.lim, self.deadline, self.disable_flags, self.app_error_count,
+                                                   lambda: http_client.request("GET", f"https://{self.app}.fly.dev/api/health", timeout=20)[0])
+        if minutes is None:
             return
-        interval = float(self.lim.get("watchdog_interval_seconds", 30))
-        end = min(time.time() + minutes * 60, self.deadline)
-        baseline = self.app_error_count()
-        samples = []
-        log(f"watching {self.app} for {minutes:g} minutes after the release")
-        while time.time() < end:
-            time.sleep(interval)
-            status, _ = http_client.request("GET", f"https://{self.app}.fly.dev/api/health", timeout=20)
-            samples.append({"healthy": status == 200, "errors": self.app_error_count()})
-            reason = watchdog_trip(samples, baseline, int(self.lim.get("watchdog_max_failures", 3)),
-                                   int(self.lim.get("watchdog_max_errors", 5)))
-            if reason:
-                still_on = self.disable_flags(keys)
-                note = f" Could not confirm these are off: {', '.join(still_on)}; turn them off in GrowthBook now." if still_on else ""
-                self.state.d.update(outcome="watchdog_disabled", message=(
-                    f"Released {len(keys)} flag(s), then switched them off: {reason}.{note}"))
-                self.state.stage("Watchdog", "-", "-", 0, "flags switched off")
-                return
+        if reason:
+            note = f" Could not confirm these are off: {', '.join(still_on)}; turn them off in GrowthBook now." if still_on else ""
+            self.state.d.update(outcome="watchdog_disabled", message=(f"Released {len(keys)} flag(s), then switched them off: {reason}.{note}"))
+            self.state.stage("Watchdog", "-", "-", 0, "flags switched off")
+            return
         self.state.stage("Watchdog", "-", "-", 0, f"clean for {minutes:g} min")
 
     def plan_change(self):
@@ -1711,11 +1578,12 @@ class BuildRun:
         # when there is one change set, which becomes this run's task. A plan that fails the check, or that has a
         # blocking question, stops the run for a person.
         path = self.work / "plan.json"
-        limit = int(self.lim.get("planner_max_change_sets", planner.MAX_CHANGE_SETS))
+        limit = int(self.lim.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS))
+        max_criteria = int(self.lim.get("planner_max_criteria", validate_plan.MAX_CRITERIA))
         problems = []
 
         def check(doc):
-            found, _ = planner.validate_plan(doc, self.build_kind, limit, self.reuse_flags)
+            found, _ = validate_plan.validate_plan(doc, self.build_kind, limit, self.reuse_flags, max_criteria)
             problems[:] = found
             if found:
                 raise ValueError("; ".join(found))
@@ -1730,7 +1598,7 @@ class BuildRun:
         if blocked:
             self.state.stage("Plan", "planner", "1", cost, f"refused ({category})", usage)
             raise Refused(triage.refusal_text(category, reasons, possible))
-        _, questions = planner.validate_plan(doc, self.build_kind, limit, self.reuse_flags)
+        _, questions = validate_plan.validate_plan(doc, self.build_kind, limit, self.reuse_flags, max_criteria)
         if questions and getattr(self, "fix_meta", None):
             # An automatic retry has no person to answer. Take the most conservative reading and say so, in the plan comment.
             doc["assumptions"] = list(doc.get("assumptions") or []) + [
@@ -1752,17 +1620,43 @@ class BuildRun:
                 self.require_secrets(needed, record=True)
             self.task += secrets_note(needed)
         if len(sets) == 1:
-            self.task = update_intake.render_change_set_task(sets[0], request=self.task)
-            if sets[0].get("flag"):
-                self.state.d["flags"] = [sets[0]["flag"]]  # the story's flag, known before any code: a failure keeps it for the retry
+            self.task = render_child.render_change_set_task(sets[0], request=self.task)
+            if isinstance(sets[0].get("flag"), str):
+                self.state.d["flags"] = [sets[0]["flag"]]  # a slug the planner chose (older plans); `name_the_flag` handles `flag: true`
 
             self.spec = self.task
             return False
-        made = update_intake.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
-                                           planner.topological_order(sets), self.task, cap=self.cap_override, secrets=needed)
+        made = file_children.file_children(self.factory_repo, self.pat, self.app, int(self.issue), sets,
+                                           validate_plan.topological_order(sets), self.task, cap=self.cap_override, secrets=needed)
         self.state.d.update(outcome="planned", message="Planned as %d change sets, each now its own Update App Intake and Build Run, in order: %s."
                             % (len(made), ", ".join(f"{cs} (#{n})" for cs, n in made)))
         return True
+
+    def name_the_flag(self):
+        # A flagged change set's task carries a placeholder for the flag's slug (flag_lifecycle/flag_slug.py). Fill it with the story's flag: a
+        # retried story keeps the flag it had, any other is `issue-<n>` of this issue. Create the GrowthBook feature (production off) and record
+        # the flag in `flags.json` before the coder starts, so the coder only wraps code; the flag exists while it and the tester work.
+        if flag_slug.SLOT not in (self.task or ""):
+            return
+        slug = self.reuse_flags[0] if self.reuse_flags else flag_slug.for_story(self.issue)
+        self.task = flag_slug.name_in(self.task, slug)
+        if getattr(self, "spec", None):
+            self.spec = flag_slug.name_in(self.spec, slug)
+        self.state.d["flags"] = [slug]
+        self.story_flags = [slug]
+        self.state.d["named_flag"] = slug
+        if flag_slug.ensure_feature(self.gb, self.app, slug, getattr(self, "issue_url", ""), getattr(self, "issue_title", ""), self.issue):
+            self.state.d["created_flag"] = slug
+        self.state.save()
+        path = self.app_dir / "flags.json"
+        before = path.read_text() if path.is_file() else ""
+        after = flag_slug.add_to_manifest(before, slug, f"{self.factory_repo}#{self.issue}", getattr(self, "issue_title", "") or self.task.splitlines()[0])
+        if after != before:
+            path.write_text(after)
+            self.git("add", "--", "flags.json")
+            self.git("-c", "user.name=ai-factory-orchestrator", "-c", "user.email=orchestrator@ai-factory.local", "commit", "-q", "-m",
+                     f"chore: record the flag {slug} for #{self.issue}")
+            self.share_with_agent(self.app_dir)
 
     def require_secrets(self, needed, record=False):
         # Stop (AwaitingSecret) until every secret declared for this request exists as a GitHub Actions secret on the app's repository. Only
@@ -1776,7 +1670,7 @@ class BuildRun:
         missing = [x for x in needed if x["name"] not in have]
         if record:
             text = triage.secrets_request(missing, self.app_repo) if missing else "This request uses " + ", ".join(x["name"] for x in needed) + " (set)."
-            self.gh(["issue", "comment", str(self.issue), "--repo", self.factory_repo, "--body", text + "\n\n" + update_intake.secrets_marker(needed)],
+            self.gh(["issue", "comment", str(self.issue), "--repo", self.factory_repo, "--body", text + "\n\n" + secrets_marker.secrets_marker(needed)],
                     token=self.factory_token, check=False)
         if missing:
             raise AwaitingSecret("waiting for " + ", ".join(x["name"] for x in missing) + " to be set on " + self.app_repo
@@ -1786,7 +1680,7 @@ class BuildRun:
         # Put the plan on the Intake issue, so the owner can see what is about to be built and every assumption the
         # planner made (a product decision it made for them is otherwise only in a build artifact). Best effort.
         try:
-            body = update_intake.render_plan_comment(doc, questions)
+            body = plan_comment.render_plan_comment(doc, questions)
             self.gh(["issue", "comment", str(self.issue), "--repo", self.factory_repo, "--body", body],
                     token=self.factory_token, check=False)
         except Exception as e:  # noqa: BLE001
@@ -1803,9 +1697,9 @@ class BuildRun:
             base = self.state.d["base_sha"]
             findings_path = self.work / "findings-0.json"
             findings_path.write_text(json.dumps({"blocking": [], "minor": []}))
-            import flag_retirement
-            task = self.task + flag_retirement.retirement_block(self.retiring)
-            self.spec = (getattr(self, "spec", None) or self.task) + flag_retirement.retirement_note(self.retiring)
+            self.name_the_flag()
+            task = self.task + retirement_selection.retirement_block(self.retiring)
+            self.spec = (getattr(self, "spec", None) or self.task) + retirement_selection.retirement_note(self.retiring)
             self.spec += fixrequest.retry_note(self.reuse_flags, self.retry_state.get("attempt"))
             if self.retiring:
                 log("retiring in passing: " + ", ".join(self.retiring))
@@ -1839,6 +1733,15 @@ class BuildRun:
                             self.state.d["blocking"] = [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in broken]
                             raise Regression("the tester found behaviour that was live before this change no longer working: "
                                              + "; ".join(f"{r.get('check')}" for r in broken[:3]))
+                        if not tpassed and failed_checks(test_failures):
+                            ungated = self.ungated_flags(head, flags)
+                            if ungated:
+                                # The change is live with no gate (nothing reads its flag), so a failure is a failure in production: roll back.
+                                named = self.state.d.get("named_flag")
+                                self.state.d["flag_notes"] = [missing_flag.note(s, "live_and_failing", named) for s in ungated]
+                                self.state.d["blocking"] = [finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r)
+                                                            for r in failed_checks(test_failures)]
+                                raise Regression(missing_flag.live_message(ungated, named, True))
                         if tpassed or failed_checks(test_failures):
                             break
                         # Nothing failed, but checks were blocked or not run. The coder cannot fix that, so it gets no round for it: the
@@ -1862,9 +1765,13 @@ class BuildRun:
                     self.check_limits()
                     if flags:
                         self.release(flags, head)
-                        self.link_flags_to_issue(flags)
-                        self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
-                        self.watch_release()
+                        released = (self.state.d.get("release") or {}).get("released")
+                        if not released and self.state.d.get("flag_message"):
+                            self.state.d.update(outcome="nothing_to_release", message=self.state.d["flag_message"])
+                        else:
+                            self.link_flags_to_issue(flags)
+                            self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
+                            self.watch_release()
                     else:
                         self.state.d.update(outcome="nothing_to_release", message=(
                             "First build deployed and live; it has no flags to release." if self.build_kind == "first build"
@@ -1887,6 +1794,8 @@ class BuildRun:
             self.state.d.update(outcome="nothing_to_release", message=str(e))
         except Regression as e:
             self.state.d.update(outcome="regression", message=str(e))
+        except run_stops.FlagMissing as e:
+            self.state.d.update(outcome=outcomes.FLAG_MISSING, message=str(e))
         except Refused as e:
             self.state.d.update(outcome="refused", message=str(e))
         except AwaitingSecret as e:
@@ -1909,6 +1818,7 @@ class BuildRun:
 # --- finalize -------------------------------------------------------------------
 
 OUTCOME_TITLES = {
+    "flag_missing": "Build Run: not released (the flag the change is behind does not exist)",
     "budget_exhausted": "Build Run: budget exhausted",
     "round_limit": "Build Run: needs human (review round limit reached)",
     "time_limit": "Build Run: needs human (time limit reached)",
@@ -2029,8 +1939,8 @@ def update_state_issues(d, factory_repo, pat, factory_token):
                 gh(["issue", "pin", m.group(1), "--repo", repo], token)  # best effort; not every plan allows it
             return m.group(0) if m else ""
 
-        state_url = upsert(app_repo, pat, appstate.STATE_LABEL, "Factory: app state", "5319e7", lambda prev: appstate.render_state(prev, d))
-        upsert(factory_repo, factory_token, appstate.REGISTRY_LABEL, "Factory: Managed Apps", "5319e7",
+        state_url = upsert(app_repo, pat, app_state_record.STATE_LABEL, "Factory: app state", "5319e7", lambda prev: appstate.render_state(prev, d))
+        upsert(factory_repo, factory_token, app_state_record.REGISTRY_LABEL, "Factory: Managed Apps", "5319e7",
                lambda prev: appstate.render_registry(prev, d, state_url))
     except Exception as e:  # noqa: BLE001
         print(f"could not update the state issues: {type(e).__name__}", flush=True)
@@ -2137,33 +2047,10 @@ def rollback_failed_run(d, pat, lim):
     d["rollback"] = rollback_deploy(d, d["app"], f"{owner}/{d['app']}", pat, float(lim.get("rollback_timeout_minutes", 15)))
 
 
-DARK_BROKEN = "dark-broken"
 
 
-def is_dark_broken(d):
-    # Whether the run left a dark feature behind: it pushed code behind a flag and ended without releasing it (or with the watchdog
-    # having switched the release off, or the tester having found a regression and the deploy been rolled back). The code stays in `main`,
-    # behind a flag that is off, and is fixed forward. The flag is the identity of a dark feature, and its
-    # story issue (`flag:<slug>`) carries this label; `flags.json` does not, because every edit to it deploys.
-    return bool(d.get("flags") and d.get("commits")) and d.get("outcome") not in outcomes.OK + outcomes.ANSWERED + (outcomes.PROVIDER_BLOCKED,)
 
 
-def label_dark_feature(d, repo, token):
-    # Mark the story issue `dark-broken` when the run left a dark feature, and take the mark off when the story is released at last.
-    # Best effort: a label that cannot be set never changes the run's ending.
-    number = d.get("issue_number")
-    try:
-        env = {**os.environ, "GH_TOKEN": token}
-        if is_dark_broken(d):
-            github.ensure_label(repo, DARK_BROKEN, token, "b60205", "A dark feature that failed its checks; fixed forward behind its flag")
-            labels = [DARK_BROKEN] + [l for l in (flag_label(slug) for slug in d["flags"]) if l]  # the story names its flag, released or not
-            for name in labels[1:]:
-                github.ensure_label(repo, name, token, "0e8a16", "The feature flag this story's change is behind")
-            sh(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", ",".join(labels)], env=env, check=False)
-        elif d.get("outcome") == "released":
-            sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", f"{DARK_BROKEN},bug"], env=env, check=False)
-    except Exception as e:  # noqa: BLE001
-        print(f"could not label the dark feature: {type(e).__name__}", flush=True)
 
 
 def finish_update_intake(ok, repo, number, pat):
@@ -2175,7 +2062,7 @@ def finish_update_intake(ok, repo, number, pat):
             sh(["gh", "issue", "close", str(number), "--repo", repo, "--reason", "completed"], env=env, check=False)
             update_intake.advance(repo, pat, number)
         else:
-            sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", update_intake.GO], env=env, check=False)
+            sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", intake_labels.START], env=env, check=False)
     except Exception as e:  # noqa: BLE001
         print(f"could not finish the Update App Intake: {type(e).__name__}", flush=True)
 
@@ -2216,13 +2103,13 @@ def finalize():
         sh(["gh", "issue", "create", "--repo", f"{owner}/{app}", "--title", OUTCOME_TITLES.get(d["outcome"], "Build Run: crash"),
             "--body-file", str(work / "issue-body.md")], env={**os.environ, "GH_TOKEN": pat}, check=False)
     retry = ("" if ok or d.get("intake_kind") != "update" else
-             f"\n\nOnce the provider balance is topped up, add `{update_intake.GO}` again to retry." if d["outcome"] == "provider_blocked"
+             f"\n\nOnce the provider balance is topped up, add `{intake_labels.START}` again to retry." if d["outcome"] == "provider_blocked"
              else "" if d["outcome"] in outcomes.ANSWERED  # the message already says how to try again
-             else f"\n\nEdit this issue if the request needs to change, then add `{update_intake.GO}` again to retry.")
+             else f"\n\nEdit this issue if the request needs to change, then add `{intake_labels.START}` again to retry.")
     sh(["gh", "issue", "comment", d["issue_number"], "--repo", os.environ["GITHUB_REPOSITORY"], "--body",
         f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],
        env={**os.environ, "GH_TOKEN": ftoken}, check=False)
-    label_dark_feature(d, os.environ["GITHUB_REPOSITORY"], ftoken)
+    dark_feature.label_dark_feature(d, os.environ["GITHUB_REPOSITORY"], ftoken)
     if d.get("intake_kind") == "update":
         finish_update_intake(ok, os.environ["GITHUB_REPOSITORY"], d["issue_number"], pat)
     return 0 if ok else 1

@@ -18,7 +18,7 @@ has a real repo, Fly app, GrowthBook connection and deploy pipeline. It costs ab
    This leaves a released flag `bench-seed` in `flags.json` and in GrowthBook, which the `retire-named-flag` task retires on every pass (the runner never
    archives `bench-seed`).
 
-3. **Freeze it:** `GITHUB_REPOSITORY=<owner>/ai-factory python3 orchestrator/benchmark.py freeze`, which writes the bench app's current `main` into
+3. **Freeze it:** `GITHUB_REPOSITORY=<owner>/ai-factory PYTHONPATH=orchestrator python3 -m monitoring.benchmark freeze`, which writes the bench app's current `main` into
    `agents/benchmark/suite.json` as `base_sha`. Commit that file. Every task starts by forcing the bench app's `main` back to this commit.
 
 4. **Take the first baseline** (a pass with no candidate), then `benchmark.py accept` the result and commit `agents/benchmark/baseline.json`.

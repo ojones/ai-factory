@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -10,7 +11,21 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_run as b  # noqa: E402
-from shared import agent_output, agent_process, agent_usage, http_client, provider, run_stops, spend_budget  # noqa: E402
+from flag_lifecycle import flag_manifest, flag_slug, retirement_selection  # noqa: E402
+from flag_lifecycle.fake_growthbook import FakeGrowthBook  # noqa: E402
+from shared import (  # noqa: E402
+    agent_output,
+    agent_process,
+    agent_usage,
+    config,
+    github,
+    http_client,
+    preview_token,
+    provider,
+    run_stops,
+    spend_budget,
+    starter_template,
+)
 
 FORM = ("### What should be built?\r\n\r\nA notes app\r\nwith tags\r\n\r\n"
         "### Cost cap override (USD)\r\n\r\n{cap}\r\n")
@@ -113,26 +128,9 @@ class Verdicts(unittest.TestCase):
         self.assertFalse(b.derive_test({"results": []}, ["a"])[0])
 
 
-class Flags(unittest.TestCase):
-    def test_new_slugs_only(self):
-        base = '[{"slug":"a","description":"."}]'
-        head = '[{"slug":"a","description":"."},{"slug":"b","description":"."}]'
-        self.assertEqual(b.new_flag_slugs(base, head), ["b"])
-
-    def test_missing_base_or_garbage(self):
-        self.assertEqual(b.new_flag_slugs("", '[{"slug":"a"}]'), ["a"])
-        self.assertEqual(b.new_flag_slugs("[]", "not json"), [])
-
-    def test_slug_pattern(self):
-        for ok in ("todos-crud", "a1"):
-            self.assertTrue(b.SLUG_RE.fullmatch(ok))
-        for bad in ("../x", "A", "a b", "", "-a", "a/b"):
-            self.assertFalse(b.SLUG_RE.fullmatch(bad))
-
-
 class Guards(unittest.TestCase):
     def test_protected_paths(self):
-        bad = b.protected_violations([".github/workflows/deploy-fly.yml", "fly.toml", "fly/provision.sh",
+        bad = starter_template.protected_violations([".github/workflows/deploy-fly.yml", "fly.toml", "fly/provision.sh",
                                       "backend/src/feature-flags.ts", "INTAKE.md", "backend/src/app.ts",
                                       "flags.json", "backend/src/routes/notes.ts"])
         self.assertEqual(len(bad), 5)
@@ -167,7 +165,7 @@ class Prompts(unittest.TestCase):
     def test_placeholders(self):
         import re
         for role, supplied in self.SUPPLIED.items():
-            text = (b.FACTORY_DIR / "agents" / "prompts" / f"{role}.md").read_text()
+            text = (config.FACTORY_DIR / "agents" / "prompts" / f"{role}.md").read_text()
             self.assertEqual(set(re.findall(r"\{\{(\w+)\}\}", text)) - supplied, set(), role)
 
 
@@ -222,9 +220,9 @@ class SingleCallReview(unittest.TestCase):
 
 class PreviewToken(unittest.TestCase):
     def test_matches_the_shell_script_that_app_staging_uses(self):
-        shell = subprocess.run([str(b.FACTORY_DIR / "infra/app-staging/preview-token.sh"), "demo-app"],
+        shell = subprocess.run([str(config.FACTORY_DIR / "infra/app-staging/preview-token.sh"), "demo-app"],
                                env={**os.environ, "PREVIEW_MASTER_SECRET": "x"}, capture_output=True, text=True)
-        self.assertEqual(shell.stdout.strip(), b.preview_token("x", "demo-app"))
+        self.assertEqual(shell.stdout.strip(), preview_token.for_app("x", "demo-app"))
 
 
 class TokenUsage(unittest.TestCase):
@@ -326,7 +324,6 @@ class InstallDependencies(unittest.TestCase):
             env = sh.call_args.kwargs["env"]
             self.assertNotIn("FLY_API_TOKEN", env)
             self.assertEqual(sh.call_args.args[0][:2], ["npm", "ci"])
-
 
 
 class ReviewBeforePushThenTest(unittest.TestCase):
@@ -499,7 +496,7 @@ class SuppressionsAndLintConfig(unittest.TestCase):
                 pushes.append(cmd)
                 return real_sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=cwd, check=True)
             return real_sh(cmd, cwd=cwd, env=env, check=check, timeout=timeout)
-        with mock.patch.object(b, "FACTORY_DIR", factory), mock.patch.object(b, "sh", fake_sh):
+        with mock.patch.object(config, "FACTORY_DIR", factory), mock.patch.object(b, "sh", fake_sh):
             run.apply_template_files({"template-sync"})
             base = run.head()
             run.stage_template_config({"template-sync"})
@@ -513,7 +510,7 @@ class SuppressionsAndLintConfig(unittest.TestCase):
     def test_without_the_template_sync_label_nothing_is_copied(self):
         run, git, _, factory = self.run_with_template({"eslint.config.mjs": "// new\n"})
         from unittest import mock
-        with mock.patch.object(b, "FACTORY_DIR", factory):
+        with mock.patch.object(config, "FACTORY_DIR", factory):
             run.apply_template_files({"update-app-intake"})
             run.stage_template_config({"update-app-intake"})
         self.assertEqual((run.app_dir / "eslint.config.mjs").read_text(), "// old\n")
@@ -560,6 +557,8 @@ class RoundLoop(unittest.TestCase):
         run.head = lambda: run.last
         run.record_round = lambda *a: None
         run.release = lambda flags, head: run.calls.append("release")
+        run.ungated_flags = lambda head, flags: run.ungated
+        run.ungated = []
         run.link_flags_to_issue = lambda flags: None
         run.watch_release = lambda: None
         run.archive_retired_flags = lambda base, head: None
@@ -604,6 +603,31 @@ class RoundLoop(unittest.TestCase):
         self.assertNotIn("push c1", run.calls)  # the blocked commit never reached main
         self.assertEqual(run.state.d["commits"], ["c2"])
         self.assertEqual(run.state.d["outcome"], "released")
+
+    def test_a_failure_in_a_change_that_went_live_without_a_gate_is_a_regression_and_is_rolled_back(self):
+        run = self.make([(True, [], [])], [(False, [{"flag": "f", "check": "c", "status": "failed", "scope": "new"}], "dark_only")])
+        run.ungated = ["f"]
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "regression")
+        self.assertIn("rolled back", run.state.d["message"])
+        self.assertEqual(run.state.d["flag_notes"][0]["kind"], "live_and_failing")
+        self.assertNotIn("release", run.calls)
+
+    def test_a_clean_change_whose_flag_is_missing_and_unread_ends_without_a_release_and_with_a_note(self):
+        run = self.make([(True, [], [])], [(True, [], "ok")])
+        run.release = lambda flags, head: run.state.d.update(release={"released": [], "kept": []}, flag_message="went live on deploy without a gate")
+        self.go(run)
+        self.assertEqual((run.state.d["outcome"], run.state.d["message"]), ("nothing_to_release", "went live on deploy without a gate"))
+
+    def test_a_dark_flag_that_does_not_exist_is_a_failure_and_nothing_is_rolled_back(self):
+        run = self.make([(True, [], [])], [(True, [], "ok")])
+
+        def release(flags, head):
+            raise run_stops.FlagMissing("Not released: `f` is declared and read but does not exist")
+        run.release = release
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "flag_missing")
+        self.assertFalse(b.rollback_decision(run.state.d)[0])
 
     def test_a_dark_failure_is_fixed_forward_in_the_next_round(self):
         run = self.make([self.CLEAN, self.CLEAN], [self.FAILED_NEW, self.PASSED])
@@ -797,26 +821,6 @@ class Scoreboard(unittest.TestCase):
 class Watchdog(unittest.TestCase):
     ok, bad = {"healthy": True, "errors": 0}, {"healthy": False, "errors": 0}
 
-    def test_counts_only_error_level_json_lines(self):
-        log = '{"level":"info"}\n{"level": "error","msg":"x"}\n{"level":"FATAL"}\nplain error text\n'
-        self.assertEqual(b.count_errors(log), 2)
-        self.assertEqual(b.count_errors(None), 0)
-
-    def test_consecutive_health_failures_trip_it(self):
-        self.assertIsNotNone(b.watchdog_trip([self.ok, self.bad, self.bad, self.bad], 0, 3, 5))
-
-    def test_failures_that_recover_do_not(self):
-        self.assertIsNone(b.watchdog_trip([self.bad, self.bad, self.ok, self.bad, self.bad], 0, 3, 5))
-
-    def test_a_rise_in_errors_over_the_baseline_trips_it(self):
-        self.assertIsNotNone(b.watchdog_trip([{"healthy": True, "errors": 9}], 3, 3, 5))
-        self.assertIsNone(b.watchdog_trip([{"healthy": True, "errors": 7}], 3, 3, 5))
-
-    def test_errors_that_were_already_there_do_not(self):
-        self.assertIsNone(b.watchdog_trip([{"healthy": True, "errors": 40}] * 4, 40, 3, 5))
-
-    def test_no_samples_no_trip(self):
-        self.assertIsNone(b.watchdog_trip([], 0, 3, 5))
 
     def make(self, minutes, released):
         run = object.__new__(b.BuildRun)
@@ -1069,7 +1073,7 @@ class AgentIsolation(unittest.TestCase):
         self.assertIn("/srv/agent/run/pgid.txt", cmd)
 
     def test_the_git_credential_travels_in_the_environment_not_the_arguments(self):
-        env = b.git_auth_env("Authorization: Basic abc")
+        env = github.git_auth_env("Authorization: Basic abc")
         self.assertEqual(env["GIT_CONFIG_KEY_0"], "http.extraheader")
         self.assertEqual(env["GIT_CONFIG_VALUE_0"], "Authorization: Basic abc")
 
@@ -1126,84 +1130,78 @@ class ReportFromHelpers(unittest.TestCase):
         self.assertEqual(b.report_from_helper_failures({}, {}), None)
 
 
-class StoryAndFlagReferenceEachOther(unittest.TestCase):
-    def test_the_title_carries_the_flag_and_a_retry_does_not_pile_up_tags(self):
-        self.assertEqual(b.title_with_flags("app: add a page", ["todo-ui"]), "app: add a page [flag: todo-ui]")
-        self.assertEqual(b.title_with_flags("app: add a page [flag: todo-ui]", ["todo-ui"]), "app: add a page [flag: todo-ui]")
-        self.assertEqual(b.title_with_flags("app: a [flag: x]", ["y", "z"]), "app: a [flags: y, z]")
-        self.assertEqual(b.title_with_flags("app: a", []), "app: a")
+class ReleasingTheStorysFlag(unittest.TestCase):
+    OFF = {"environments": {"production": {"enabled": False, "rules": []}}}
 
-    def test_labels_descriptions_and_tags(self):
-        self.assertEqual(b.flag_label("todo-ui"), "flag:todo-ui")
-        self.assertIsNone(b.flag_label("x" * 60))
-        text = b.flag_description("https://github.com/o/r/issues/94", "app: a page [flag: todo-ui]")
-        self.assertTrue(text.startswith("https://github.com/o/r/issues/94 "))
-        self.assertNotIn("[flag", text)
-        self.assertEqual(b.flag_tags("94", "app"), ["intake-94", "app-app"])
-
-    def test_release_creates_the_feature_with_its_story_and_still_works_if_growthbook_refuses_the_extras(self):
+    def release_run(self, features=None, own=("todo-ui",), reuse=(), code=""):
         run = object.__new__(b.BuildRun)
-        run.app, run.issue, run.issue_url, run.issue_title, run.run_id, run.run_url = "app", "94", "https://github.com/o/r/issues/94", "app: a page", "7", "u"
-        run.app_repo, run.state = "o/app", b.State(Path("/tmp/x-state.json"), "app", "94", "u")
-        run.state.save = lambda: None
-        run.gh = lambda *a, **k: type("R", (), {"stdout": ""})()
-        posts = []
-
-        def gb(method, path, body=None):
-            if method == "GET":
-                return (200, {"projects": [{"id": "p"}]}) if path.startswith("/projects") else (404, {})
-            posts.append(body)
-            return (400, {}) if "tags" in body else (200, {})
-        run.gb = gb
-        run.release(["todo-ui"], "sha")
-        self.assertEqual(len(posts), 2)  # refused with the extras, created without them
-        self.assertEqual(posts[0]["tags"], ["intake-94", "app-app"])
-        self.assertIn("issues/94", posts[0]["description"])
-        self.assertNotIn("tags", posts[1])
-        self.assertEqual(run.state.d["release"]["released"], ["app.feature.todo-ui"])
-
-
-class RetryOnTheSameIssue(unittest.TestCase):
-    def release_run(self, existing_enabled, reuse):
-        run = object.__new__(b.BuildRun)
-        run.app, run.issue, run.issue_url, run.issue_title, run.run_id, run.run_url = "app", "94", "https://github.com/o/r/issues/94", "t", "7", "u"
-        run.app_repo, run.reuse_flags = "o/app", reuse
+        run.app, run.issue, run.run_id, run.run_url, run.app_repo = "app", "94", "7", "u", "o/app"
+        run.story_flags, run.reuse_flags = list(own), list(reuse)
         run.state = b.State(Path("/tmp/x-state.json"), "app", "94", "u")
         run.state.save = lambda: None
+        run.state.d["named_flag"] = "todo-ui"
         run.gh = lambda *a, **k: type("R", (), {"stdout": ""})()
-        posts = []
+        run.gb = FakeGrowthBook({k: json.loads(json.dumps(v)) for k, v in (features or {}).items()})
+        run.git = lambda *a, **k: type("R", (), {"stdout": code})()
+        return run
 
-        def gb(method, path, body=None):
-            if method == "GET":
-                if path.startswith("/projects"):
-                    return 200, {"projects": [{"id": "p"}]}
-                return 200, {"feature": {"environments": {"production": {"enabled": existing_enabled}}}}
-            posts.append((path, body))
-            return 200, {}
-        run.gb = gb
-        return run, posts
-
-    def test_the_stories_own_flag_the_watchdog_switched_off_is_released_again(self):
-        run, posts = self.release_run(False, ["todo-ui"])
+    def test_the_stories_own_flag_that_exists_off_is_switched_on_whether_or_not_this_run_created_it(self):
+        run = self.release_run({"app.feature.todo-ui": self.OFF})
         run.release(["todo-ui"], "sha")
-        self.assertEqual(posts, [("/features/app.feature.todo-ui", {"environments": {"production": {"enabled": True, "rules": []}}})])
-        self.assertEqual(run.state.d["release"]["released"], ["app.feature.todo-ui"])
+        self.assertTrue(run.gb.production_enabled("app.feature.todo-ui"))
+        self.assertEqual(run.state.d["release"], {"released": ["app.feature.todo-ui"], "kept": []})
+
+    def test_a_retried_stories_flag_the_watchdog_switched_off_is_released_again(self):
+        run = self.release_run({"app.feature.old-slug": self.OFF}, own=(), reuse=["old-slug"])
+        run.release(["old-slug"], "sha")
+        self.assertTrue(run.gb.production_enabled("app.feature.old-slug"))
 
     def test_any_other_existing_flag_is_left_exactly_as_it_is(self):
-        run, posts = self.release_run(False, [])
-        run.release(["todo-ui"], "sha")
-        self.assertEqual(posts, [])
-        self.assertEqual(run.state.d["release"], {"released": [], "kept": ["app.feature.todo-ui"]})
-        run, posts = self.release_run(True, ["todo-ui"])  # already on: nothing to re-enable
-        run.release(["todo-ui"], "sha")
-        self.assertEqual(posts, [])
+        run = self.release_run({"app.feature.other": self.OFF}, own=("todo-ui",))
+        run.release(["other"], "sha")
+        self.assertFalse(run.gb.production_enabled("app.feature.other"))
+        self.assertEqual(run.state.d["release"], {"released": [], "kept": ["app.feature.other"]})
 
+    def test_a_flag_that_does_not_exist_is_never_created(self):
+        run = self.release_run(code="abc:backend/src/a.ts:3:  isFeatureEnabled(res, 'todo-ui')\n")
+        with self.assertRaises(run_stops.FlagMissing):
+            run.release(["todo-ui"], "sha")
+        self.assertEqual([c[0] for c in run.gb.calls], ["GET"])
+
+    def test_missing_and_read_by_the_code_is_a_dark_failure_that_rolls_nothing_back_and_says_what_to_add(self):
+        run = self.release_run(code="abc:backend/src/a.ts:3:  isFeatureEnabled(res, 'todo-ui')\n")
+        with self.assertRaises(run_stops.FlagMissing) as caught:
+            run.release(["todo-ui"], "sha")
+        self.assertIn("A flag that can be turned on has to exist", str(caught.exception))
+        self.assertEqual(run.state.d["flag_notes"][0]["kind"], "missing_dark")
+        self.assertIsNone(run.state.d["release"])
+
+    def test_missing_and_not_read_by_the_code_means_it_is_already_live_so_it_is_noted_and_left_alone(self):
+        run = self.release_run(code="")
+        run.release(["todo-ui"], "sha")
+        self.assertEqual(run.state.d["flag_notes"][0]["kind"], "live_without_flag")
+        self.assertIn("went live on deploy without a gate", run.state.d["flag_message"])
+        self.assertEqual(run.state.d["release"], {"released": [], "kept": []})
+
+    def test_one_dark_flag_among_the_others_switches_nothing_on(self):
+        run = self.release_run({"app.feature.todo-ui": self.OFF}, code="abc:backend/src/a.ts:3:  'ghost'\n")
+        with self.assertRaises(run_stops.FlagMissing):
+            run.release(["todo-ui", "ghost"], "sha")
+        self.assertFalse(run.gb.production_enabled("app.feature.todo-ui"))
+
+    def test_the_declared_flags_no_code_reads_are_the_ungated_ones(self):
+        run = self.release_run()
+        run.git = lambda *args, **k: type("R", (), {"stdout": "abc:backend/src/a.ts:3:  isFeatureEnabled(res, 'todo-ui')\n" if "'todo-ui'" in args else ""})()
+        self.assertEqual(run.ungated_flags("abc", ["todo-ui", "other"]), ["other"])
+
+
+class RetryState(unittest.TestCase):
     def test_setup_reads_the_retry_state_from_the_issue_comments(self):
         import fixrequest as fr
         hidden = fr.with_retry_state({"attempt": 1, "flags": ["todo-ui"], "history": ["h"], "guidance": "Fix the regression.", "cap": 1.5})
         retry = fr.retry_state([c for c in ["note", hidden]])
         self.assertEqual(retry["flags"], ["todo-ui"])
-        self.assertTrue(all(b.SLUG_RE.fullmatch(f) for f in retry["flags"]))
+        self.assertTrue(all(flag_manifest.SLUG_RE.fullmatch(f) for f in retry["flags"]))
 
 
 class MisplacedFile(unittest.TestCase):
@@ -1339,6 +1337,113 @@ class CheckProblem(unittest.TestCase):
 
     def test_an_app_without_a_check_script_is_skipped(self):
         self.assertIsNone(self.make({"test": "x"}, exit_code=2).check_problem())
+
+
+class RunSpendLedger(unittest.TestCase):
+    def test_the_post_mortem_agents_spend_counts_toward_the_daily_cap(self):
+        line_run = b.ledger_line("2026-10-13", "app", 1.5, "99")
+        line_pm = b.ledger_line("2026-10-13", "retrospective", 0.25, "99-pm")
+        self.assertEqual(b.ledger_total([line_run, line_pm], "2026-10-13"), 1.75)
+
+    def test_record_agent_spend_writes_one_ledger_line_and_never_raises(self):
+        from unittest import mock
+
+        import retrospective as pm
+        budget = mock.Mock()
+        budget.refresh.return_value = 0.21
+        with mock.patch.object(b, "record_spend_in_ledger") as rec:
+            pm.record_agent_spend(budget, "jwt", "o/r", "tok", "7")
+        rec.assert_called_once_with({"app": "retrospective", "spent_usd": 0.21}, "o/r", "7-pm", "tok")
+        budget.refresh.side_effect = RuntimeError("down")
+        pm.record_agent_spend(budget, "jwt", "o/r", "tok", "7")
+
+
+def retirement_entry(slug, run, date="2026-10-10", state="released"):
+    return {"key": f"app.feature.{slug}", "date": date, "run_url": f"https://github.com/o/r/actions/runs/{run}", "state": state}
+
+
+class ChoosingFlagsToRetire(unittest.TestCase):
+    # BuildRun.choose_flags_to_retire with the State issue and manifest mocked.
+
+    def run_for(self, flags, *, update=True, fix=None, kind="update", task="Add a button", manifest="a,b,c,d", boom=False):
+        run = object.__new__(b.BuildRun)
+        run.update_intake, run.fix_meta, run.build_kind, run.task = update, fix or {}, kind, task
+        run.app, run.app_repo, run.pat, run.lim = "app", "o/app", "pat", {"flag_retirement": {"min_age_days": 1, "piggyback_max": 5}}
+        run.git = lambda *a, check=True: type("R", (), {"stdout": json.dumps([{"slug": s} for s in manifest.split(",")])})()
+        patched = mock.patch.object(retirement_selection, "app_flags", side_effect=RuntimeError("down") if boom else None, return_value=(flags, set(manifest.split(","))))
+        with patched, mock.patch.object(b.time, "strftime", return_value="2026-10-12"):
+            return run.choose_flags_to_retire()
+
+    flags = [retirement_entry("a", 100), retirement_entry("b", 200), retirement_entry("c", 300), retirement_entry("d", 400)]
+
+    def test_an_update_retires_the_whole_backlog_but_the_newest_release(self):
+        self.assertEqual(self.run_for(self.flags), ["a", "b", "c"])
+
+    def test_a_first_build_and_an_automatic_retry_retire_nothing(self):
+        self.assertEqual(self.run_for(self.flags, kind="first build"), [])
+        self.assertEqual(self.run_for(self.flags, fix={"origin": 1, "attempt": 1}), [])
+        self.assertEqual(self.run_for(self.flags, update=False), [])
+
+    def test_a_slug_gone_from_the_manifest_is_dropped_and_a_failed_lookup_does_not_stop_the_run(self):
+        self.assertEqual(self.run_for(self.flags, manifest="b,c,d"), ["b", "c"])
+        self.assertEqual(self.run_for(self.flags, boom=True), [])
+
+    def test_flags_the_owner_names_in_the_task_are_retired_too(self):
+        self.assertEqual(self.run_for(self.flags, task="Do it\nretire-flag: d\n", kind="update"), ["d", "a", "b", "c"])
+
+
+class NamingTheFlag(unittest.TestCase):
+    TASK = "Change set CS-1: T\n\nPut the whole change behind one feature flag with the slug `" + flag_slug.SLOT + "`."
+
+    def run_for(self, tmp, task=None, reuse=(), flags_json=None):
+        run = object.__new__(b.BuildRun)
+        run.task, run.reuse_flags, run.issue, run.factory_repo, run.app = task or self.TASK, list(reuse), "12", "o/f", "app"
+        run.issue_url, run.issue_title = "https://github.com/o/f/issues/12", "app: add a page"
+        run.gb, run.app_dir, run.story_flags = FakeGrowthBook(), Path(tmp), ()
+        run.share_with_agent = lambda path: None
+        run.state = b.State(Path(tmp) / "state.json", "app", "12", "u")
+        run.git_calls = []
+        run.git = lambda *a, **k: run.git_calls.append(a)
+        if flags_json is not None:
+            (Path(tmp) / "flags.json").write_text(flags_json)
+        return run
+
+    def test_the_flag_is_named_after_the_issue_created_off_and_recorded_before_the_coder_starts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_for(tmp)
+            run.name_the_flag()
+            self.assertIn("slug `issue-12`", run.task)
+            self.assertNotIn(flag_slug.SLOT, run.task)
+            self.assertEqual((run.state.d["flags"], run.story_flags, run.state.d["created_flag"]), (["issue-12"], ["issue-12"], "issue-12"))
+            self.assertFalse(run.gb.production_enabled("app.feature.issue-12"))
+            manifest = json.loads((Path(tmp) / "flags.json").read_text())
+            self.assertTrue(manifest[0]["description"].startswith("o/f#12: "))
+            self.assertEqual(run.git_calls[0], ("add", "--", "flags.json"))
+            self.assertIn("commit", run.git_calls[1])
+
+    def test_the_spec_the_reviewer_and_tester_check_against_names_it_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_for(tmp)
+            run.spec = run.task
+            run.name_the_flag()
+            self.assertIn("issue-12", run.spec)
+
+    def test_a_retried_story_keeps_the_flag_it_had_and_nothing_new_is_created_or_committed(self):
+        on = {"environments": {"production": {"enabled": False, "rules": []}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_for(tmp, reuse=["todo-ui"], flags_json='[{"slug": "todo-ui", "description": "o/f#12: x"}]')
+            run.gb = FakeGrowthBook({"app.feature.todo-ui": on})
+            run.name_the_flag()
+            self.assertIn("slug `todo-ui`", run.task)
+            self.assertEqual((run.git_calls, "created_flag" in run.state.d), ([], False))
+            self.assertEqual(run.story_flags, ["todo-ui"])
+            self.assertEqual([c[0] for c in run.gb.calls], ["GET"])
+
+    def test_a_task_with_no_placeholder_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_for(tmp, task="Fix a typo. It needs no flag.")
+            run.name_the_flag()
+            self.assertEqual((run.task, run.gb.calls, run.git_calls, run.state.d["flags"] if "flags" in run.state.d else None), ("Fix a typo. It needs no flag.", [], [], None))
 
 
 if __name__ == "__main__":

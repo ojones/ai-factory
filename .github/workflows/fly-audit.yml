@@ -2,7 +2,7 @@ name: Fly audit
 
 # Once a day (and on demand): list the Fly apps in the organization and open one `fly-orphans` issue for any that is neither
 # Factory infrastructure nor a Managed App the Factory created, since those bill for machines nothing will stop. Deletes nothing.
-# orchestrator/fly_audit.py does the work. FLY_ORG is the Fly organization slug (a repository variable; default `personal`).
+# orchestrator/monitoring/fly_audit.py does the work. FLY_ORG is the Fly organization slug (a repository variable; default `personal`).
 on:
   schedule:
     - cron: "37 6 * * *"
@@ -34,4 +34,4 @@ jobs:
           FLY_ORG: ${{ vars.FLY_ORG }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           FACTORY_GH_TOKEN: ${{ github.token }}
-        run: python orchestrator/fly_audit.py
+        run: PYTHONPATH=orchestrator python -m monitoring.fly_audit

@@ -2,7 +2,7 @@ name: Maintenance
 
 # Once a day (and on demand): turn each Managed App's open Dependabot pull requests (npm packages, Docker base image) into one
 # Update App Intake that starts itself. Dependabot only detects; the change goes through the normal Build Run and gate.
-# orchestrator/maintenance.py does the work; `limits.maintenance.enabled` in agents/profiles.yml is the switch.
+# orchestrator/maintenance/dependency_updates.py does the work; `limits.maintenance.enabled` in agents/profiles.yml is the switch.
 on:
   schedule:
     - cron: "7 8 * * *"
@@ -32,4 +32,4 @@ jobs:
         env:
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           FACTORY_GH_TOKEN: ${{ github.token }}
-        run: python orchestrator/maintenance.py
+        run: PYTHONPATH=orchestrator python -m maintenance.dependency_updates

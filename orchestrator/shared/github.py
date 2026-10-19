@@ -13,3 +13,9 @@ def run(args, token, check=False):
 
 def ensure_label(repo, name, token, color="0e8a16", description=""):
     run(["label", "create", name, "--repo", repo, "--color", color, "--description", description], token)
+
+
+def git_auth_env(header):
+    # Environment variables that make git send `header` to GitHub. Passed this way, not as `git -c http.extraheader=...`, because a
+    # command line is readable by every user on the machine (`ps`, /proc/<pid>/cmdline) while an environment is not.
+    return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraheader", "GIT_CONFIG_VALUE_0": header}

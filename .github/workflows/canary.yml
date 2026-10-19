@@ -31,4 +31,4 @@ jobs:
         env:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           FACTORY_GH_TOKEN: ${{ github.token }}
-        run: python orchestrator/canary.py
+        run: PYTHONPATH=orchestrator python -m monitoring.canary

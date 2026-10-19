@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import appstate as a  # noqa: E402
+from shared import app_state_record  # noqa: E402
 
 
 def report(app="notes", outcome="released", day="2026-10-10", released=("notes.feature.search",), url="https://github.com/o/f/actions/runs/1", **kw):
@@ -20,7 +21,7 @@ class AppState(unittest.TestCase):
         self.assertIn("| 2026-10-10 | released | update | 2 | $0.46 | search |", body)
         self.assertIn("| `notes.feature.search` | 2026-10-10 | released |", body)
         again = a.render_state(body, report(day="2026-10-11", released=("notes.feature.tags",), url="https://x/2"))
-        data = a.load(again)
+        data = app_state_record.load(again)
         self.assertEqual(len(data["runs"]), 2)
         self.assertEqual([f["key"] for f in data["flags"]], ["notes.feature.search", "notes.feature.tags"])
 
@@ -28,42 +29,42 @@ class AppState(unittest.TestCase):
         body = ""
         for i in range(a.MAX_RUNS + 3):
             body = a.render_state(body, report(day=f"2026-09-{i + 1:02d}", released=(f"notes.feature.f{i}",), url=f"https://x/{i}"))
-        data = a.load(body)
+        data = app_state_record.load(body)
         self.assertEqual(len(data["runs"]), a.MAX_RUNS)
         self.assertEqual(len(data["flags"]), a.MAX_RUNS + 3)
 
     def test_a_watchdog_disable_marks_the_flag(self):
         body = a.render_state("", report(outcome="watchdog_disabled"))
         self.assertIn("switched off by the watchdog", body)
-        self.assertEqual(a.load(body)["flags"][0]["state"], "switched off by the watchdog")
+        self.assertEqual(app_state_record.load(body)["flags"][0]["state"], "switched off by the watchdog")
 
     def test_a_run_with_no_release_still_shows_and_a_second_release_of_a_flag_updates_it(self):
         body = a.render_state("", report(outcome="round_limit", released=(), release=None))
         self.assertIn("None yet.", body)
         self.assertIn("| round_limit |", body)
         body = a.render_state(a.render_state("", report(outcome="watchdog_disabled")), report(day="2026-10-12", url="https://x/3"))
-        self.assertEqual([(f["date"], f["state"]) for f in a.load(body)["flags"]], [("2026-10-12", "released")])
+        self.assertEqual([(f["date"], f["state"]) for f in app_state_record.load(body)["flags"]], [("2026-10-12", "released")])
 
     def test_a_dark_feature_is_listed_but_is_never_taken_for_a_released_flag_and_a_later_release_replaces_it(self):
         dark = report(outcome="round_limit", released=(), flags=["pin"], commits=["h"], issue_number="12")
         body = a.render_state("", dark)
         self.assertIn("| `notes.feature.pin` | 2026-10-10 | dark (failed its checks", body)
-        self.assertEqual([f["state"].split(" ")[0] for f in a.load(body)["flags"]], ["dark"])  # not "released": nothing retires it
+        self.assertEqual([f["state"].split(" ")[0] for f in app_state_record.load(body)["flags"]], ["dark"])  # not "released": nothing retires it
         released = a.render_state(body, report(day="2026-10-11", released=("notes.feature.pin",), flags=["pin"], commits=["h2"], issue_number="12"))
-        self.assertEqual([(f["key"], f["state"]) for f in a.load(released)["flags"]], [("notes.feature.pin", "released")])
+        self.assertEqual([(f["key"], f["state"]) for f in app_state_record.load(released)["flags"]], [("notes.feature.pin", "released")])
         for outcome in ("refused", "provider_blocked"):  # never built: no dark feature remains
-            self.assertEqual(a.load(a.render_state("", dict(dark, outcome=outcome)))["flags"], [], outcome)
-        regressed = a.load(a.render_state("", dict(dark, outcome="regression")))["flags"]
+            self.assertEqual(app_state_record.load(a.render_state("", dict(dark, outcome=outcome)))["flags"], [], outcome)
+        regressed = app_state_record.load(a.render_state("", dict(dark, outcome="regression")))["flags"]
         self.assertEqual([f["state"].split(" ")[0] for f in regressed], ["dark"])  # rolled back, but its code stays in main
 
     def test_data_with_double_dashes_and_pipes_survives(self):
         url = "https://github.com/o/my--app/actions/runs/1"
         body = a.render_state("", report(app="my--app", url=url, outcome="a|b"))
-        self.assertEqual(a.load(body)["runs"][0]["run_url"], url)
+        self.assertEqual(app_state_record.load(body)["runs"][0]["run_url"], url)
         self.assertIn("a\\|b", body)
         self.assertEqual(body.count("<!--"), 1)
-        self.assertEqual(a.load("not a state issue"), {})
-        self.assertEqual(a.load("<!-- factory-data:{broken -->"), {})
+        self.assertEqual(app_state_record.load("not a state issue"), {})
+        self.assertEqual(app_state_record.load("<!-- factory-data:{broken -->"), {})
 
     def test_the_registry_has_one_row_per_app_with_a_running_count(self):
         body = a.render_registry("", report(app="notes"), "https://github.com/o/notes/issues/3")

@@ -25,13 +25,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import appstate  # noqa: E402
 import build_run as b  # noqa: E402
-import fixrequest  # noqa: E402
-import update_intake  # noqa: E402
-from shared import config, github  # noqa: E402
+from request import file_intake, find_intakes  # noqa: E402
+from shared import app_state_record, config  # noqa: E402
 
 LABEL = "production-feedback"
+LABEL_DESC = "Filed and started by the Orchestrator from production feedback"
+STARTED_NOTE = "Started automatically from production feedback. The planner runs first."
 DEFECT_LABEL = "escaped-defect"
 CLIP = 240
 DEFAULTS = {"enabled": True, "min_occurrences": 3, "max_per_app_per_day": 2}
@@ -138,42 +138,13 @@ def gh(args, token):
     return b.sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=False)
 
 
-def managed_apps(repo, token):
-    out = gh(["issue", "list", "--repo", repo, "--label", appstate.REGISTRY_LABEL, "--state", "open", "--json", "body"], token).stdout
-    found = json.loads(out or "[]")
-    return sorted(appstate.load(found[0]["body"]).get("apps", {})) if found else []
-
-
 def app_logs(app):
     p = b.sh(["flyctl", "logs", "--no-tail", "--app", app], env={**os.environ}, check=False, timeout=120)
     return p.stdout or ""
 
 
-def intakes_with(repo, token, app, label, state="open"):
-    out = gh(["issue", "list", "--repo", repo, "--label", f"{label},app:{app}", "--state", state, "--limit", "100",
-              "--json", "number,title,createdAt"], token).stdout
-    return json.loads(out or "[]")
-
-
 def intakes(repo, token, app, state="open"):
-    return intakes_with(repo, token, app, LABEL, state)
-
-
-def file_intake(repo, token, pat, app, title, request, label=LABEL, label_desc="Filed and started by the Orchestrator from production feedback",
-                started_note="Started automatically from production feedback. The planner runs first."):
-    # Create an Update App Intake for the app and start it. The PAT adds the start label, because an event made by the Actions token
-    # does not start workflows. Returns the issue number, or None.
-    for name, color, desc in ((update_intake.FORM_LABEL, "1d76db", "A change request for an existing Managed App"), (f"app:{app}", "1d76db", ""),
-                              (label, "fbca04", label_desc), (update_intake.GO, "0e8a16", "Start this change now")):
-        github.ensure_label(repo, name, token, color, desc)
-    out = gh(["issue", "create", "--repo", repo, "--title", title, "--label", f"{update_intake.FORM_LABEL},app:{app},{label}",
-              "--body", fixrequest.intake_form(app, request)], token).stdout
-    m = re.search(r"/issues/(\d+)", out or "")
-    if not m:
-        return None
-    gh(["issue", "edit", m.group(1), "--repo", repo, "--add-label", update_intake.GO], pat)  # the PAT, so the label starts the run
-    gh(["issue", "comment", m.group(1), "--repo", repo, "--body", started_note], token)
-    return int(m.group(1))
+    return find_intakes.intakes_with(repo, token, app, LABEL, state)
 
 
 def scan_app(repo, token, pat, app, cfg):
@@ -185,7 +156,7 @@ def scan_app(repo, token, pat, app, cfg):
     new, again = decide(groups, open_fps, len(open_now), created_today, cfg)
     filed = []
     for fp in new:
-        n = file_intake(repo, token, pat, app, title_for(app, fp), error_request(app, fp, groups[fp]))
+        n = file_intake.file_update_app_intake(repo, token, pat, app, title_for(app, fp), error_request(app, fp, groups[fp]), LABEL, LABEL_DESC, STARTED_NOTE)
         if n:
             filed.append(n)
             b.log(f"{app}: filed #{n} for error {fp} ({groups[fp]['count']} occurrences)")
@@ -209,7 +180,7 @@ def scan_defect_labels(repo, token, pat, app, cfg):
             continue
         if len(open_now) + len(filed) >= 1 or made_today + len(filed) >= int(cfg["max_per_app_per_day"]):
             break
-        n = file_intake(repo, token, pat, app, title, defect_request(app, issue))
+        n = file_intake.file_update_app_intake(repo, token, pat, app, title, defect_request(app, issue), LABEL, LABEL_DESC, STARTED_NOTE)
         if n:
             filed.append(n)
             gh(["issue", "comment", str(issue["number"]), "--repo", f"{owner}/{app}", "--body", f"Filed as {repo}#{n}; the Factory is working on it."], pat)
@@ -223,7 +194,7 @@ def main():
     if not cfg["enabled"]:
         b.log("production feedback is off")
         return 0
-    for app in managed_apps(repo, token):
+    for app in app_state_record.managed_apps(repo, token):
         try:
             made = scan_defect_labels(repo, token, pat, app, cfg) or scan_app(repo, token, pat, app, cfg)
             b.log(f"{app}: {len(made)} new Intake(s)")

@@ -1,7 +1,10 @@
 # The Factory's configuration: agents/profiles.yml, read fresh each time it is asked for.
+import os
 from pathlib import Path
 
-PROFILES = Path(__file__).resolve().parent.parent.parent / "agents" / "profiles.yml"
+FACTORY_DIR = Path(__file__).resolve().parent.parent.parent
+PROFILES = FACTORY_DIR / "agents" / "profiles.yml"
+GROWTHBOOK_API = os.environ.get("GROWTHBOOK_API_HOST", "https://ai-factory-growthbook.fly.dev:3100") + "/api/v1"
 
 
 def load():

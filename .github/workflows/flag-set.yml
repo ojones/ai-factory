@@ -1,7 +1,7 @@
 name: Flag set
 
 # Manual: switch one Managed App flag on or off in production. Off is the rollback for a released change; on is for a test.
-# orchestrator/flag_set.py changes only the production `enabled` switch of a flag that already exists and reads it back.
+# orchestrator/flag_lifecycle/set_flag.py changes only the production `enabled` switch of a flag that already exists and reads it back.
 on:
   workflow_dispatch:
     inputs:
@@ -42,4 +42,4 @@ jobs:
           APP: ${{ inputs.app }}
           FLAG: ${{ inputs.flag }}
           STATE: ${{ inputs.state }}
-        run: python orchestrator/flag_set.py "$APP" "$FLAG" "$STATE"
+        run: PYTHONPATH=orchestrator python -m flag_lifecycle.set_flag "$APP" "$FLAG" "$STATE"

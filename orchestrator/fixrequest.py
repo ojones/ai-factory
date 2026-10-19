@@ -20,6 +20,7 @@ import json
 import re
 
 import update_intake
+from request import intake_labels
 from shared import github
 
 LABEL = "fix-request"
@@ -104,6 +105,11 @@ def requirements(facts, result, rollback, app_side=False):
         reqs.append(f"The run no longer crashes (it stopped with: {message}).")
     elif outcome == "regression":
         reqs.append(f"The regression is fixed ({message}): the behaviour the tester found broken works again with the change in place, behind the same flag, and a test covers it. The code is still in `main` (nothing was reverted), so fix it forward; the flag is released only after a clean pass.")
+    elif outcome == "flag_missing":
+        notes = facts.get("flag_notes") or []
+        slugs = ", ".join(f"`{n.get('slug')}`" for n in notes) or "the change's flag"
+        reqs.append(f"The change is released behind a flag that exists in GrowthBook ({message}): use exactly the flag the task names for the story and add no other, so "
+                    f"{slugs} can be switched on. Nothing was rolled back; the code is still in `main`, dark, so fix it forward.")
     elif outcome == "watchdog_disabled":
         reqs.append(f"The regression the watchdog found is fixed ({message}). The flag it switched off is dead: remove it from flags.json together with the code it guarded, and deliver the corrected change behind a new flag of its own, which is released only after a clean pass.")
     else:
@@ -261,10 +267,6 @@ def app_request(facts, result, rollback, original, category=None, history=(), ca
     return "\n".join(parts)
 
 
-def intake_form(app, request, cap=None):
-    return (f"### App name\n\n{app}\n\n### What should change?\n\n{request}\n\n### Cost cap override (USD)\n\n{cap if cap else '_No response_'}\n")
-
-
 # --- GitHub (not unit-tested) -------------------------------------------------
 
 
@@ -337,13 +339,13 @@ def file_app_retry(repo, token, pat, facts, result, rollback, lim, category):
     new_state = {"attempt": attempt, "flags": flags, "history": history, "last_run": facts.get("run_url"),
                  "guidance": app_request(facts, result, rollback, None, category, history, cap_note, flags)[:6000]}
     for name, color, desc in ((RETRYING, "fbca04", "This story failed and is being retried on the same issue and flag"),
-                              ("needs-human", "b60205", "The Orchestrator stopped and needs a person"), (update_intake.GO, "0e8a16", "Start this change now")):
+                              ("needs-human", "b60205", "The Orchestrator stopped and needs a person"), (intake_labels.START, "0e8a16", "Start this change now")):
         github.ensure_label(repo, name, token, color, desc)
     github.run(["issue", "comment", str(number), "--repo", repo, "--body", f"## Attempt {attempt - 1 or 'zero'} did not complete\n\n"
         + render(facts, result, rollback, "app", story["url"], auto, flags) + "\n" + with_retry_state(new_state)], token)
     if autostart:
         github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", RETRYING, "--remove-label", "needs-human"], token)
-        github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", update_intake.GO], pat)  # the PAT: the Actions token would not start the workflow
+        github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", intake_labels.START], pat)  # the PAT: the Actions token would not start the workflow
     else:
         github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", "needs-human", "--remove-label", RETRYING], token)
     return {"target": "app", "url": story["url"], "started": autostart, "attempt": attempt}

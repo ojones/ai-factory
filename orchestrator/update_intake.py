@@ -7,7 +7,7 @@
 #
 # The Build Run then plans (agents/prompts/planner.md), and if the plan is one change set it codes, tests, reviews and
 # releases that change. If the plan has several change sets, the Build Run files one child issue per change set
-# (labels `update-app-intake`, `app:<slug>`, `plan:<parent>`) and ends. The first child with nothing to wait for gets
+# (planning/file_children.py: sub-issues of the Intake, blocked by their dependencies; labels `update-app-intake`, `app:<slug>`, `plan:<parent>`) and ends. The first child with nothing to wait for gets
 # `proceed-with-change` straight away; the others get `waiting-on-plan`. When a child's Build Run succeeds, `advance`
 # gives `proceed-with-change` to the next sibling whose dependencies are now all closed (one at a time). So the children run one after
 # another, never two pending runs of one app at once (GitHub keeps only one pending run per concurrency group).
@@ -22,84 +22,15 @@ import os
 import re
 import sys
 
-from shared import github
+from request import check_target_app, intake_labels, read_form
+from shared import child_tickets, github
 
-GO = "proceed-with-change"
-FORM_LABEL = "update-app-intake"
-WAIT = "waiting-on-plan"
-APP_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
-META_RE = re.compile(r"<!-- factory-plan:(.*?) -->", re.S)
+WAIT = child_tickets.WAIT
 FIX_RE = re.compile(r"<!-- factory-fix:(.*?) -->", re.S)
-SECRETS_RE = re.compile(r"<!-- factory-secrets:(.*?) -->", re.S)
 AUTO_FIX = "auto-fix"
 
 
 # --- pure logic (unit-tested) -------------------------------------------------
-
-
-def form_section(body, heading):
-    # Text under `### <heading>` in an Issue Form body, surrounding blanks trimmed.
-    out, on = [], False
-    for line in (body or "").replace("\r", "").split("\n"):
-        if line == f"### {heading}":
-            on = True
-        elif line.startswith("### "):
-            on = False
-        elif on:
-            out.append(line)
-    return "\n".join(out).strip()
-
-
-def app_name(body):
-    # The Managed App named in the form, or ValueError.
-    name = form_section(body, "App name")
-    if not name or name == "_No response_":
-        raise ValueError('the "App name" field is empty')
-    if not APP_RE.fullmatch(name) or len(name) > 30:
-        raise ValueError(f"`{name}` is not a Managed App name (lowercase letters, digits and single hyphens, at most 30 characters)")
-    return name
-
-
-def is_factory_repo(description, factory_repo):
-    # True only for a repo App Staging created: its description carries `Intake: <factory repo>#<n>`.
-    return bool(re.match(rf"^Intake: {re.escape(factory_repo)}#\d+$", (description or "").strip()))
-
-
-def plan_meta(body):
-    # The plan metadata hidden in a child issue's body ({} for any other issue).
-    m = META_RE.search(body or "")
-    if not m:
-        return {}
-    try:
-        meta = json.loads(m.group(1))
-        return meta if isinstance(meta, dict) else {}
-    except ValueError:
-        return {}
-
-
-def secrets_marker(needed):
-    # The hidden marker that records which secrets a request declared (names and purposes, never values), so every later start checks them
-    # before any Agent is paid for, whichever path it takes.
-    return "<!-- factory-secrets:" + json.dumps([{"name": x["name"], "purpose": x.get("purpose", "")} for x in needed], separators=(",", ":")) + " -->"
-
-
-def declared_secrets(issue):
-    # The secrets recorded for this Intake: in a hidden marker in any comment, or in a child issue's plan metadata. [{name, purpose}].
-    found = {}
-    sources = [c.get("body", "") for c in issue.get("comments") or []]
-    for text in sources:
-        m = SECRETS_RE.search(text or "")
-        try:
-            items = json.loads(m.group(1)) if m else []
-        except ValueError:
-            items = []
-        for x in items if isinstance(items, list) else []:
-            if isinstance(x, dict) and isinstance(x.get("name"), str):
-                found[x["name"]] = {"name": x["name"], "purpose": str(x.get("purpose", ""))}
-    for x in plan_meta(issue.get("body")).get("secrets") or []:
-        if isinstance(x, dict) and isinstance(x.get("name"), str):
-            found[x["name"]] = {"name": x["name"], "purpose": str(x.get("purpose", ""))}
-    return list(found.values())
 
 
 def fix_meta(body):
@@ -119,61 +50,12 @@ def with_fix_meta(meta):
     return f"<!-- factory-fix:{json.dumps(meta, separators=(',', ':')).replace('--', chr(92) + 'u002d' + chr(92) + 'u002d')} -->"
 
 
-def one_line(text, limit=80):
-    return " ".join(str(text).split())[:limit]
-
-
-def render_change_set_task(cs, request=None, parent=None):
-    # The task text for one change set: what the coder, tester and reviewer are given as the spec.
-    lines = [f"Change set {cs['id']}: {cs['title']}", ""]
-    if parent:
-        lines += [f"Part of a larger request, planned in #{parent}. Do only this change set.", ""]
-    if request:
-        lines += ["The original request, for context only (do just this change set):", "", request.strip(), ""]
-    lines += ["Acceptance criteria:"] + [f"- {c}" for c in cs.get("criteria", [])]
-    lines += ["", "How each will be checked:"] + [f"- {v}" for v in cs.get("verification", [])]
-    if cs.get("out_of_scope"):
-        lines += ["", "Out of scope:"] + [f"- {o}" for o in cs["out_of_scope"]]
-    if cs.get("flag"):
-        lines += ["", f"Put the whole change behind one feature flag with the slug `{cs['flag']}`."]
-    else:
-        lines += ["", "Users cannot see or reach any difference from this change, so it needs no flag: do not add one, and do not put "
-                      "anything that is live now behind a new flag."]
-    return "\n".join(lines).strip()
-
-
-def render_plan_comment(plan, questions=()):
-    # The plan as a comment on the Update App Intake: change sets with their flags, the assumptions the planner made on the
-    # owner's behalf, and any question it needs answered. Anything the owner disagrees with can be corrected in the issue.
-    sets = plan.get("change_sets") or []
-    lines = [f"**Plan: {len(sets)} change set{'s' if len(sets) != 1 else ''}.**", ""]
-    for cs in sets:
-        flag = f"flag `{cs['flag']}`" if cs.get("flag") else "no flag (internal)"
-        lines.append(f"- **{cs.get('id')}** {one_line(cs.get('title', ''), 120)} ({flag})")
-    if plan.get("assumptions"):
-        lines += ["", "**Assumptions I made for you** (not asked, because they looked low-impact; if one is wrong, the change is behind a flag and can be switched off, then fix the request here and add `proceed-with-change` again):"]
-        lines += [f"- {one_line(a, 300)}" for a in plan["assumptions"]]
-    if questions:
-        lines += ["", "**I need an answer before building anything:**"] + [f"- {one_line(q, 400)}" for q in questions]
-    return "\n".join(lines)
-
-
-def child_body(app, task, parent, cs_id, depends_on, cap=None, secrets=None):
-    # A child issue's body: the Update App Intake form fields plus hidden plan metadata.
-    meta = {"parent": parent, "cs": cs_id, "depends_on": depends_on}
-    if secrets:
-        meta["secrets"] = [{"name": x["name"], "purpose": x.get("purpose", "")} for x in secrets]
-    # The metadata goes first: text after the last "### " heading would be read as part of that field.
-    return (f"<!-- factory-plan:{json.dumps(meta, separators=(',', ':'))} -->\n\n"
-            f"### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n{cap if cap else '_No response_'}\n")
-
-
 def ready_to_start(children):
     # The number of the one child to start now, as a list (empty when none). Each child is {number, state, labels,
     # depends_on}. It must be open, waiting, not already started, with every issue it depends on closed (an unknown
     # dependency counts as open). At most one is started, and none while another is open with `proceed-with-change`:
     # one app runs one Build Run at a time, and GitHub drops all but one pending run, so two started together would lose one.
-    if any(c["state"].upper() == "OPEN" and GO in c["labels"] for c in children):
+    if any(c["state"].upper() == "OPEN" and intake_labels.START in c["labels"] for c in children):
         return []
     state = {c["number"]: c["state"].upper() for c in children}
     ready = [c["number"] for c in children
@@ -185,49 +67,22 @@ def ready_to_start(children):
 # --- GitHub (not unit-tested) -------------------------------------------------
 
 
-def file_children(repo, pat, app, parent, change_sets, order, request, cap=None, secrets=None):
-    # Create one issue per change set, dependencies first, and start those with nothing to wait for.
-    # Returns [(change set id, issue number)].
-    for name, color, desc in ((FORM_LABEL, "1d76db", "A change request for an existing Managed App"),
-                              (WAIT, "fbca04", "Waiting for an earlier change set of the same plan"),
-                              (GO, "0e8a16", "Start this change now"), (f"app:{app}", "1d76db", f"Issues about the Managed App {app}"),
-                              (f"plan:{parent}", "ededed", f"Change sets planned in #{parent}")):
-        github.ensure_label(repo, name, pat, color, desc)
-    by_id = {cs["id"]: cs for cs in change_sets}
-    numbers, made = {}, []
-    for cs_id in order:
-        cs = by_id[cs_id]
-        deps = [numbers[d] for d in cs.get("depends_on") or []]
-        task = render_change_set_task(cs, parent=parent)
-        out = github.run(["issue", "create", "--repo", repo, "--title", f"{app}: {one_line(cs['title'])}", "--body", child_body(app, task, parent, cs_id, deps, cap, secrets),
-                  "--label", f"{FORM_LABEL},app:{app},plan:{parent},{WAIT}"], pat, check=True).stdout
-        m = re.search(r"/issues/(\d+)", out)
-        numbers[cs_id] = int(m.group(1))
-        made.append((cs_id, numbers[cs_id]))
-    # Start the first one with nothing to wait for. Done last, so every child exists before the first run begins; the
-    # rest are started one at a time by `advance` as each finishes.
-    first = next((cs_id for cs_id in order if not by_id[cs_id].get("depends_on")), None)
-    if first:
-        github.run(["issue", "edit", str(numbers[first]), "--repo", repo, "--remove-label", WAIT, "--add-label", GO], pat)
-    return made
-
-
 def siblings(repo, pat, parent):
     out = github.run(["issue", "list", "--repo", repo, "--label", f"plan:{parent}", "--state", "all", "--limit", "100",
               "--json", "number,state,labels,body"], pat).stdout
     return [{"number": i["number"], "state": i["state"], "labels": {l["name"] for l in i["labels"]},
-             "depends_on": plan_meta(i["body"]).get("depends_on", [])} for i in json.loads(out or "[]")]
+             "depends_on": child_tickets.read_marker(i["body"]).get("depends_on", [])} for i in json.loads(out or "[]")]
 
 
 def advance(repo, pat, number):
     # After child #number's Build Run succeeded and its issue is closed: start the siblings it was holding up.
     body = json.loads(github.run(["issue", "view", str(number), "--repo", repo, "--json", "body"], pat).stdout or "{}").get("body", "")
-    parent = plan_meta(body).get("parent")
+    parent = child_tickets.read_marker(body).get("parent")
     if not parent:
         return []
     started = ready_to_start(siblings(repo, pat, parent))
     for n in started:
-        github.run(["issue", "edit", str(n), "--repo", repo, "--remove-label", WAIT, "--add-label", GO], pat)
+        github.run(["issue", "edit", str(n), "--repo", repo, "--remove-label", WAIT, "--add-label", intake_labels.START], pat)
     return started
 
 
@@ -238,21 +93,21 @@ def start():
 
     def refuse(why):
         github.run(["issue", "comment", number, "--repo", repo, "--body",
-            f"**Update App Intake stopped:** {why}\n\nFix this, then add the `{GO}` label again to start. ([run]({run_url}))"], token)
-        github.run(["issue", "edit", number, "--repo", repo, "--remove-label", GO], token)
+            f"**Update App Intake stopped:** {why}\n\nFix this, then add the `{intake_labels.START}` label again to start. ([run]({run_url}))"], token)
+        github.run(["issue", "edit", number, "--repo", repo, "--remove-label", intake_labels.START], token)
         print(f"::error::{why}")
         return 1
 
     try:
-        app = app_name(body)
+        app = read_form.app_name(body)
     except ValueError as e:
         return refuse(str(e))
-    if not form_section(body, "What should change?") or form_section(body, "What should change?") == "_No response_":
+    if not read_form.form_section(body, "What should change?") or read_form.form_section(body, "What should change?") == "_No response_":
         return refuse('the "What should change?" field is empty.')
     info = github.run(["api", f"repos/{owner}/{app}"], pat)
     if info.returncode != 0:
         return refuse(f"`{owner}/{app}` does not exist. An update Intake changes an app the Factory already built; a new app starts with an Intake.")
-    if not is_factory_repo(json.loads(info.stdout).get("description"), repo):
+    if not check_target_app.is_factory_repo(json.loads(info.stdout).get("description"), repo):
         return refuse(f"`{owner}/{app}` was not created by this Factory (its description is not an `Intake: {repo}#<n>` marker), so the Factory will not change it.")
     github.ensure_label(repo, f"app:{app}", pat, "1d76db", f"Issues about the Managed App {app}")
     github.run(["issue", "edit", number, "--repo", repo, "--add-label", f"app:{app}"], pat, check=True)

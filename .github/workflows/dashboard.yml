@@ -3,7 +3,7 @@ name: Dashboard
 # Once a day (and on demand): collect the Reports of Build Runs it has not seen, keep the history on the
 # `factory-data` branch (history.json and a static index.html, which GitHub Pages can serve if Pages is
 # enabled for that branch), and write a short digest into this run's summary. No server, no database.
-# orchestrator/dashboard.py does the work.
+# orchestrator/monitoring/dashboard.py does the work.
 on:
   schedule:
     - cron: "17 6 * * *"
@@ -46,7 +46,7 @@ jobs:
           fi
 
       - name: Update history and dashboard, write the digest
-        run: python factory/orchestrator/dashboard.py data
+        run: PYTHONPATH=factory/orchestrator python -m monitoring.dashboard data
 
       - name: Publish to the history branch
         run: |

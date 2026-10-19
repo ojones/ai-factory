@@ -11,13 +11,13 @@ ALLOWED = {
     "request": set(),
     "planning": {"request"},
     "staging": set(),
-    "build_run": {"request", "flag_lifecycle"},
+    "build_run": {"request", "flag_lifecycle", "planning"},  # until the planning process takes plan_change out of the Build Run (ticket 13)
     "flag_lifecycle": {"request"},
     "retrospective": {"try_fix"},
     "try_fix": {"request", "planning"},
     "bugs": {"request"},
     "maintenance": {"request"},
-    "monitoring": set(),
+    "monitoring": {"request"},
 }
 
 

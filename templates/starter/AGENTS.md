@@ -76,6 +76,12 @@ business logic plus one boot/health-check smoke test — see
   adds it in code. The Orchestrator reads this to create and release flags
   after review; an unrecorded flag never gets released. A flagged change
   ships dark: it must stay behind its flag until the Orchestrator releases it.
+- **Test every flag both ways.** For each flag in `flags.json`, write one
+  test inside `withFlag("<slug>", false, ...)` (the old behaviour is
+  unchanged) and one inside `withFlag("<slug>", true, ...)` (the new
+  behaviour), using `withFlag` from `backend/src/__tests__/with-flag.ts`, and
+  check the flag in one place only. `npm run check` fails when either test is
+  missing or the flag is checked more than once.
 - Preview: requests carrying `PREVIEW_TOKEN` (header `X-Preview-Token`, or
   `?preview=`) see every feature flag as on, so reviewers can test dark
   features. This is wired in `feature-flags.ts`; don't build another bypass.

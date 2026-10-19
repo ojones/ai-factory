@@ -3,6 +3,7 @@ OK = ("released", "nothing_to_release", "planned")  # `planned`: an update was s
 ANSWERED = ("refused", "awaiting_secret")  # an answer to the requester, not a failure: nothing is retried, filed or learned from
 PROVIDER_BLOCKED = "provider_blocked"
 WATCHDOG_DISABLED = "watchdog_disabled"
+FLAG_MISSING = "flag_missing"  # deployed dark behind a flag that does not exist, so nothing can turn it on
 
 
 def is_ok(outcome):

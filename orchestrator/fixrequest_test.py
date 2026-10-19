@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_run as b  # noqa: E402
 import fixrequest as fr  # noqa: E402
 import update_intake as u  # noqa: E402
+from request import intake_labels, read_form, render_form  # noqa: E402
 from shared import github  # noqa: E402
 
 FACTS = {"app": "demo", "outcome": "round_limit", "message": "4 review rounds used without a clean pass", "run_url": "https://x/run/9",
@@ -94,8 +95,8 @@ class Content(unittest.TestCase):
         for needle in ("did not complete", "round_limit", "Retire the flag foo.", "Requirements for this attempt:"):
             self.assertIn(needle, text)
         self.assertNotIn("invented a flag", text)  # a Factory-side cause is not the app request's business
-        issue = fr.render(FACTS, RESULT, REVERT, "app") + "\n---\n\n" + fr.intake_form("demo", text)
-        self.assertEqual(u.app_name(issue), "demo")
+        issue = fr.render(FACTS, RESULT, REVERT, "app") + "\n---\n\n" + render_form.form_body("demo", text)
+        self.assertEqual(read_form.app_name(issue), "demo")
         self.assertEqual(b.parse_intake(issue, 2.0, 10.0)[0], text)
         self.assertEqual(b.parse_intake(issue, 2.0, 10.0)[1], 2.0)  # the explanation did not leak into the cost-cap field
 
@@ -207,14 +208,14 @@ class Filing(unittest.TestCase):
         labels = create[create.index("--label") + 1]
         self.assertIn("factory-fix-request", labels)
         self.assertNotIn("update-app-intake", labels)
-        self.assertFalse([c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c])
+        self.assertFalse([c for c in calls if c[:2] == ["issue", "edit"] and intake_labels.START in c])
 
     def state_of(self, calls):
         comment = next(c for c in calls if c[:2] == ["issue", "comment"])
         return comment[comment.index("--body") + 1], fr.retry_state([comment[comment.index("--body") + 1]])
 
     def started(self, calls):
-        return [c for c in calls if c[:2] == ["issue", "edit"] and u.GO in c]
+        return [c for c in calls if c[:2] == ["issue", "edit"] and intake_labels.START in c]
 
     def test_an_app_cause_updates_the_same_issue_and_restarts_it_with_the_pat_so_no_person_is_needed(self):
         out, calls = self.run_it(dict(RESULT, category="spec_ambiguity"))
@@ -292,6 +293,13 @@ class Filing(unittest.TestCase):
         self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]])
         comment = next(c for c in calls if c[:2] == ["issue", "comment"])
         self.assertIn("Failed again", comment[comment.index("--body") + 1])
+
+class FlagMissingRequirements(unittest.TestCase):
+    def test_a_missing_flag_asks_for_the_flag_the_task_names_and_says_nothing_was_rolled_back(self):
+        facts = {"outcome": "flag_missing", "message": "Not released: `x` ...", "flag_notes": [{"slug": "x", "kind": "missing_dark", "guess": "g"}], "commits": ["h"]}
+        reqs = fr.requirements(facts, None, None)
+        self.assertTrue(any("exists in GrowthBook" in r and "`x`" in r and "Nothing was rolled back" in r for r in reqs))
+
 
 
 if __name__ == "__main__":

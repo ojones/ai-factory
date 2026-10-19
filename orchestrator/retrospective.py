@@ -48,7 +48,8 @@ from pathlib import Path
 
 import build_run as b
 import fixrequest
-from shared import agent_output, agent_process, config, outcomes, spend_budget
+from flag_lifecycle import dark_feature
+from shared import agent_output, agent_process, config, github, outcomes, spend_budget
 
 LABEL = "factory-learning"
 CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
@@ -108,7 +109,7 @@ def collect_facts(work, d):
             "rounds": rounds, "recurring_findings": recurring, "stages": stages,
             "final_minor": [{k: f.get(k, "") for k in ("summary", "evidence", "file", "line")} for f in final_minor],
             "improvements": [i for i in d.get("improvements") or [] if isinstance(i, dict) and i.get("summary")],
-            "dark_broken": b.is_dark_broken(d), "bugs": [x for x in d.get("bugs") or [] if isinstance(x, dict) and x.get("check")]}
+            "dark_broken": dark_feature.is_dark_broken(d), "flag_notes": d.get("flag_notes") or [], "bugs": [x for x in d.get("bugs") or [] if isinstance(x, dict) and x.get("check")]}
 
 
 def fingerprint(facts):
@@ -136,6 +137,10 @@ def lessons_from(facts):
             "The run broke a design invariant: " + "; ".join(f"{a['rule']}: {a['detail']}" for a in facts["audit"]), severe=True)
     if outcome == "watchdog_disabled":
         add("watchdog_disabled", [], f"The watchdog switched a release off: {facts['message']}", severe=True)
+    for note in (facts.get("flag_notes") or [])[:1]:
+        # A flag was missing when it was needed (flag_lifecycle/missing_flag.py): record it and the guess, so a pattern can be fixed in the Orchestrator or the app.
+        add("flag_missing", [note.get("kind"), "named" if note.get("guess", "").startswith("the flag") else "other"],
+            f"A flag was missing at release ({note.get('kind')}): `{note.get('slug')}`. Likely cause: {note.get('guess')}.", severe=note.get("kind") != "missing_dark")
     if ok and facts.get("review_passes", 0) >= EXTRA_ROUND_PASSES:
         basis = facts["recurring_findings"] or sorted({normalize(s) for r in facts["rounds"] for s in r["blocking"]})
         add("many_rounds", basis, f"It needed {facts['review_passes']} review passes. Blocking findings across the rounds: "
@@ -713,7 +718,7 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
                 ["git", "commit", "-qm", f"Retrospective fix: {result.get('change_summary', 'proposed change')[:70]}\n\nFor #{issue_no}."]):
         b.sh(cmd, cwd=factory)
     auth = "AUTHORIZATION: basic " + __import__("base64").b64encode(f"x-access-token:{pat}".encode()).decode()
-    b.sh(["git", "push", "-q", "origin", branch], cwd=factory, env={**os.environ, **b.git_auth_env(auth)})
+    b.sh(["git", "push", "-q", "origin", branch], cwd=factory, env={**os.environ, **github.git_auth_env(auth)})
     numstat = b.sh(["git", "diff", "--numstat", "HEAD~1", "HEAD"], cwd=factory).stdout
     fixture = lesson_has_fixture(keep)
     reason = (result.get("no_fixture_reason") or "").strip()
@@ -771,7 +776,7 @@ def lesson_main(number):
     cfg, key = config.load(), os.environ.get("DEEPINFRA_API_KEY")
     if not key or "retrospective" not in cfg.get("roles", {}):
         return 0
-    propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, [number], os.environ.get("GITHUB_RUN_ID", "0"))
+    propose(config.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, [number], os.environ.get("GITHUB_RUN_ID", "0"))
     return 0
 
 
@@ -825,7 +830,7 @@ def main():
     cfg, key = config.load(), os.environ.get("DEEPINFRA_API_KEY")
     result = None
     if targets and key and "retrospective" in cfg.get("roles", {}):
-        result = propose(b.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, targets, os.environ.get("GITHUB_RUN_ID", "0"))
+        result = propose(config.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, targets, os.environ.get("GITHUB_RUN_ID", "0"))
     filed_request = None
     if wants_fix_request(d, cfg.get("limits", {})):
         try:
@@ -852,7 +857,7 @@ def main():
 def auto_merge_check(base, head):
     # Exit 0 only if the diff base...head is an additive lint/formatter change. The PR checks workflow
     # calls this before merging a PR labelled `auto-merge-candidate`; it does not trust the label.
-    numstat = b.sh(["git", "diff", "--numstat", f"{base}...{head}"], cwd=b.FACTORY_DIR).stdout
+    numstat = b.sh(["git", "diff", "--numstat", f"{base}...{head}"], cwd=config.FACTORY_DIR).stdout
     ok = auto_merge_eligible(numstat)
     print("auto-merge eligible" if ok else "not eligible for auto-merge (a human merges this)")
     return 0 if ok else 1

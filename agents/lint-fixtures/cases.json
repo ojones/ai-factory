@@ -1,5 +1,5 @@
 {
-  "description": "Cases for the Starter Template's custom lint rules (templates/starter/eslint.config.mjs). Each has a file name (rules apply by path), code, and the message fragments the lint must report, in order; an empty list means clean. orchestrator/starter_lint_test.py runs them. A new or tightened rule adds cases here.",
+  "description": "Cases for the Starter Template's custom lint rules (templates/starter/eslint.config.mjs). Each has a file name (rules apply by path), code, and the message fragments the lint must report, in order; an empty list means clean. orchestrator/starter_lint_test.py runs them. A new or tightened rule adds cases here. \"flagCases\" are for templates/starter/scripts/check-flags.mjs (slugs from flags.json, files by path); starter_lint_test.py runs them.",
   "cases": [
     {
       "name": "a test reads an application file (named import)",
@@ -146,6 +146,106 @@
       "filename": "backend/src/app.ts",
       "code": "export const run = () => { add(1, 2); };\n",
       "expect": []
+    }
+  ],
+  "flagCases": [
+    {
+      "name": "a flag with both tests and one check is clean",
+      "slugs": [
+        "issue-5"
+      ],
+      "files": {
+        "backend/src/r.ts": "export async function r(res) { if (await isFeatureEnabled(res, \"issue-5\")) return 1; return 0; }\n",
+        "backend/src/__tests__/r.test.ts": "it(\"x\", async () => { await withFlag(\"issue-5\", false, async () => { expect(1).toBe(1); }); });\nit(\"x\", async () => { await withFlag(\"issue-5\", true, async () => { expect(1).toBe(1); }); });\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "no flags declared is clean",
+      "slugs": [],
+      "files": {
+        "backend/src/r.ts": "export async function r(res) { if (await isFeatureEnabled(res, \"issue-5\")) return 1; return 0; }\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "a flag with no tests at all",
+      "slugs": [
+        "issue-5"
+      ],
+      "files": {
+        "backend/src/r.ts": "export async function r(res) { if (await isFeatureEnabled(res, \"issue-5\")) return 1; return 0; }\n"
+      },
+      "expect": [
+        "no flag-off test",
+        "no flag-on test"
+      ]
+    },
+    {
+      "name": "a flag with only the flag-on test",
+      "slugs": [
+        "issue-5"
+      ],
+      "files": {
+        "backend/src/r.ts": "export async function r(res) { if (await isFeatureEnabled(res, \"issue-5\")) return 1; return 0; }\n",
+        "backend/src/__tests__/r.test.ts": "it(\"x\", async () => { await withFlag(\"issue-5\", true, async () => { expect(1).toBe(1); }); });\n"
+      },
+      "expect": [
+        "no flag-off test"
+      ]
+    },
+    {
+      "name": "a flag with only the flag-off test",
+      "slugs": [
+        "issue-5"
+      ],
+      "files": {
+        "backend/src/r.ts": "export async function r(res) { if (await isFeatureEnabled(res, \"issue-5\")) return 1; return 0; }\n",
+        "backend/src/__tests__/r.test.ts": "it(\"x\", async () => { await withFlag(\"issue-5\", false, async () => { expect(1).toBe(1); }); });\n"
+      },
+      "expect": [
+        "no flag-on test"
+      ]
+    },
+    {
+      "name": "a withFlag test for another slug does not count",
+      "slugs": [
+        "issue-6"
+      ],
+      "files": {
+        "backend/src/__tests__/r.test.ts": "it(\"x\", async () => { await withFlag(\"issue-5\", false, async () => { expect(1).toBe(1); }); });\nit(\"x\", async () => { await withFlag(\"issue-5\", true, async () => { expect(1).toBe(1); }); });\n"
+      },
+      "expect": [
+        "issue-6\" has no flag-off",
+        "issue-6\" has no flag-on"
+      ]
+    },
+    {
+      "name": "a withFlag test in a comment does not count",
+      "slugs": [
+        "issue-5"
+      ],
+      "files": {
+        "backend/src/__tests__/r.test.ts": "// withFlag(\"issue-5\", false, f); withFlag(\"issue-5\", true, f)\n"
+      },
+      "expect": [
+        "no flag-off test",
+        "no flag-on test"
+      ]
+    },
+    {
+      "name": "two entry points for one flag",
+      "slugs": [
+        "issue-5"
+      ],
+      "files": {
+        "backend/src/r.ts": "export async function r(res) { if (await isFeatureEnabled(res, \"issue-5\")) return 1; return 0; }\n",
+        "backend/src/s.ts": "export async function r(res) { if (await isFeatureEnabled(res, \"issue-5\")) return 1; return 0; }\n",
+        "backend/src/__tests__/r.test.ts": "it(\"x\", async () => { await withFlag(\"issue-5\", false, async () => { expect(1).toBe(1); }); });\nit(\"x\", async () => { await withFlag(\"issue-5\", true, async () => { expect(1).toBe(1); }); });\n"
+      },
+      "expect": [
+        "checked in 2 places"
+      ]
     }
   ]
 }

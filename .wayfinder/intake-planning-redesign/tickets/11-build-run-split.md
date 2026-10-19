@@ -3,7 +3,7 @@ title: Build Run domain: split build_run.py by responsibility
 type: task
 status: open
 assignee:
-blocked_by: [08-flag-lifecycle-domain.md]
+blocked_by: [08c-dark-mode-is-unit-tested-and-retirement-removes-tests.md]
 ---
 
 ## Question

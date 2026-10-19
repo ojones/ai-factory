@@ -1,7 +1,7 @@
 {
   "app": "factory-bench",
   "base_sha": "",
-  "note": "base_sha is set by `python3 orchestrator/benchmark.py freeze` after the bench app is staged and seeded (see docs/benchmark-protocol.md). {pass} in a request is replaced by a short id of the pass, so each pass uses flag names no earlier pass created (GrowthBook cannot delete a feature, and an existing flag is never re-released).",
+  "note": "base_sha is set by `PYTHONPATH=orchestrator python3 -m monitoring.benchmark freeze` after the bench app is staged and seeded (see docs/benchmark-protocol.md). {pass} in a request is replaced by a short id of the pass, so each pass uses flag names no earlier pass created (GrowthBook cannot delete a feature, and an existing flag is never re-released).",
   "tasks": [
     {
       "id": "flagged-route",

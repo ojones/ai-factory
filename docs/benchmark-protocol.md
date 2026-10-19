@@ -36,7 +36,7 @@ The whole-run suite takes **1.4 to 3 hours** and **about $0.60 to $3.20** (five 
    - tester: `agents/smoke-tester/run.py` (seeded-bug notes API; about $1.8 a pass at 2 trials)
    - planner, pipeline, retrospective: no component benchmark yet; go straight to the whole-run suite.
 2. **Dry run the whole-run pass:** Actions, "Benchmark", leave `execute` off, `candidate` = `coder=<new-model-id>` (any `role=model` pairs, comma separated). It prints
-   the plan and the estimate and spends nothing. Locally: `python3 orchestrator/benchmark.py plan --candidate coder=<new-model-id>`.
+   the plan and the estimate and spends nothing. Locally: `PYTHONPATH=orchestrator python3 -m monitoring.benchmark plan --candidate coder=<new-model-id>`.
 3. **Run it:** the same workflow with `execute` on. The runner creates a branch with the candidate's `profiles.yml` (and the limits that keep passes comparable: no
    flag-retirement ride-along, a 2-minute watchdog, no daily cap), then for each task resets the bench app to its frozen commit, files the Intake, dispatches the real
    `build-run.yml` from that branch, waits, reads the Report and runs the oracle. It deletes the branch and archives the bench flags at the end.
@@ -62,7 +62,7 @@ that should be refused as well as built, so a cheaper model cannot win by being 
 Each role in `agents/profiles.yml` may name a `fallback_model`. Before any work, a Build Run asks the provider for one token from each model it will use
 (`BuildRun.check_models`). A model the provider no longer serves is replaced by its fallback for that run (recorded as `fallbacks` in the Report); if there is no
 usable fallback the run stops at once with the reason instead of failing after a checkout and a planner call. A zero balance is still `provider_blocked`.
-Every night the **model canary** (`canary.yml`, `orchestrator/canary.py`) asks the same question of every configured model, primaries and fallbacks, and keeps one
+Every night the **model canary** (`canary.yml`, `orchestrator/monitoring/canary.py`) asks the same question of every configured model, primaries and fallbacks, and keeps one
 `model-drift` issue open while any is missing, so a retirement is found before an unattended run meets it. Choose the replacement with the steps above.
 
 ## Setting up the bench app (once)

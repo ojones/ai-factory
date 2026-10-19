@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import retrospective as pm  # noqa: E402
-from shared import agent_process, http_client  # noqa: E402
+from shared import agent_process, config, http_client  # noqa: E402
 
 
 def write_findings(work, n, summaries):
@@ -199,7 +199,7 @@ class Guardrails(unittest.TestCase):
         self.assertIn("frontend/", pm.bad_fixture_reason({"agents/smoke/fixtures/f.diff": "diff --git a/frontend/x b/frontend/x\n"}) or "frontend/")
 
     def test_existing_smoke_fixtures_all_pass_the_fixture_rule(self):
-        root = Path(pm.b.FACTORY_DIR) / "agents/smoke/fixtures"
+        root = Path(config.FACTORY_DIR) / "agents/smoke/fixtures"
         texts = {str(p): p.read_text() for p in root.glob("*.diff")}
         self.assertTrue(texts)
         self.assertIsNone(pm.bad_fixture_reason(texts))
@@ -565,6 +565,24 @@ class AgentCredential(unittest.TestCase):
         cfg = {"limits": {"jwt_ttl_seconds": 100}, "roles": {"retrospective": {"model": "m/x"}}}
         with mock.patch.object(http_client, "request", return_value=(500, {})):
             self.assertIsNone(pm.mint_agent_key(cfg, "parent-key"))
+
+class FlagNotes(unittest.TestCase):
+    def facts(self, notes, outcome="nothing_to_release"):
+        return {"outcome": outcome, "message": "m", "rounds": [], "recurring_findings": [], "stages": [], "review_passes": 1, "flag_notes": notes}
+
+    def test_a_missing_flag_note_becomes_one_lesson_with_its_kind_and_guess(self):
+        note = {"slug": "x", "kind": "live_without_flag", "guess": "the coder added `x` besides the flag the Orchestrator created"}
+        lessons = pm.lessons_from(self.facts([note]))
+        self.assertEqual([x["kind"] for x in lessons], ["flag_missing"])
+        self.assertIn("live_without_flag", lessons[0]["detail"])
+        self.assertIn("besides the flag", lessons[0]["detail"])
+        self.assertTrue(lessons[0]["severe"])
+
+    def test_a_dark_missing_flag_is_not_severe_and_a_run_without_notes_has_no_such_lesson(self):
+        dark = {"slug": "x", "kind": "missing_dark", "guess": "g"}
+        self.assertFalse(pm.lessons_from(self.facts([dark], outcome="flag_missing"))[0]["severe"])
+        self.assertEqual([x["kind"] for x in pm.lessons_from(self.facts([]))], [])
+
 
 
 if __name__ == "__main__":
