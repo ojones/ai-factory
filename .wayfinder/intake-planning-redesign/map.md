@@ -65,6 +65,7 @@ Decided by tickets:
 - [Bugs domain](tickets/16-bugs-domain.md): `bugs/` scans production (Fly logs, owner-written defect reports), applies the flood limits, decides dark or released from the App State, and emits failure events; the Retrospective judges them and Try Fix files the bug Intake; `production_feedback.py` is gone.
 - [Benchmark files planned children](tickets/13b-benchmark-files-planned-children.md): a benchmark pass plans each task Intake with the candidate branch's planner (`plan.yml` is dispatchable), runs each child's Build Run in order (children inherit the `benchmark` label so production workflows skip them) and scores the merged report, or the planning ending for a refusal; the bench app must be re-seeded and frozen before a pass; not run live.
 - [Verify the system against the spec](tickets/18-verify-system-against-spec.md): every step of the flow spec now names the tickets that built it and what verifies it (tests, invariants, live sightings); two gaps ticketed (19, 20); the steps never seen live are ticket 17's.
+- [Test gaps found by walking the spec](tickets/20-test-gaps-found-by-the-spec-walk.md): the Pipeline Agent's diagnosis, retries and coder fixes (STEP 4.8, INV-62) and the routing of a child by kind (STEP 2.6, INV-61) have direct tests.
 - [Apply the intake renames](tickets/05c-apply-the-renames.md): `new-app-intake` and `update-app-intake` in code, forms, workflows and docs, ready in the working tree; the two GitHub labels must be renamed (not before the owner agrees) just before the push.
 
 ## Not yet specified

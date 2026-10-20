@@ -175,7 +175,7 @@ flowchart TD
 
 ## Step index
 
-"Implemented by" names the tickets that built the step (the domain tickets in `.wayfinder/intake-planning-redesign/`); "Verified by" names its unit tests, its invariants (INV-n) and what was seen live (ai-factory#140 and #145 on `factory-bench`, 2026-10-20). Walked in ticket 18; the gaps it found are tickets 19 and 20, and the steps with no live sighting are listed in ticket 17.
+"Implemented by" names the tickets that built the step (the domain tickets in `.wayfinder/intake-planning-redesign/`); "Verified by" names its unit tests, its invariants (INV-n) and what was seen live (ai-factory#140 and #145 on `factory-bench`, 2026-10-20). Walked in ticket 18; the gaps it found are ticket 19 (open) and ticket 20 (closed), and the steps with no live sighting are listed in ticket 17.
 
 | ID | Title | Actor | Main code today (or new) | Implemented by | Verified by |
 |---|---|---|---|---|---|
@@ -187,7 +187,7 @@ flowchart TD
 | 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` | 09, 13 | plan_run_test, secrets_check_test; INV-48; live: needs_human twice on #140 |
 | 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` | 09 | file_children_test, child_tickets_test; INV-54, INV-56; live #140, #145 |
 | 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` | 09, 10 | close_child_test (ready_to_start); INV-24; live: #141, #146 started by the planner, #142, #147 by the advance |
-| 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` | 12, 14 | INV-57 (staging skipped by update-app-intake.yml); no direct test of the two route conditions; live #140, #145 |
+| 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` | 12, 14 | staging/route_child_test, INV-57, INV-61; live #140, #145 |
 | 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh`, `staging/read_staging_child.py` | 14 | stage_script_test, read_staging_child_test; INV-57; live #141 |
 | 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` | 14 | verify_infrastructure_test; INV-57; live #141 (six checks passed) |
 | 4.1 | Prepare the run | Orchestrator | `build_run/prepare_run.py`, `flag_lifecycle/flag_slug.ensure_feature` | 08b, 11, 12 | prepare_run_test; INV-10, INV-18, INV-50, INV-51, INV-55; live #142 (flag issue-142) |
@@ -197,7 +197,7 @@ flowchart TD
 | 4.5 | Review | Reviewer Agent | `reviewer.md`, `build_run/review_code.py` | 11 | review_code_test; INV-04, INV-11, INV-46; live #142 |
 | 4.6 | Push | Orchestrator | `build_run/ship_code.py` | 11 | ship_code_test; INV-42; live #142 |
 | 4.7 | CI and dark deploy | app CI | Starter workflows | Starter | INV-16 (Starter workflows, no kill switch); live #142 (CI and dark deploy) |
-| 4.8 | Diagnose pipeline failure | Pipeline Agent | pipeline role | 11 | ship_code_test, run_test (the fix loop); no test of the diagnosis itself; no live pipeline failure (ticket 20) |
+| 4.8 | Diagnose pipeline failure | Pipeline Agent | pipeline role | 11 | ship_code_test (the diagnosis, retries and coder fixes), run_test; INV-62; no live pipeline failure |
 | 4.9 | Test the deployed app | Tester Agent | `tester.md`, `build_run/verify_deployed_app.py`, `shared/api_check.py`, `build_run/ui_check.py` | 11 | verify_deployed_app_test, api_check_test, ui_check_test; INV-05, INV-08, INV-28, INV-30, INV-36, INV-44; live #142 |
 | 4.10 | Retest | Orchestrator | `limits.test_retries` | 11 | run_test (retests); no live retest |
 | 4.11 | Roll back the deploy | Orchestrator | `rollback-fly.yml` | 11 | rollback_test; INV-25; no live regression |

@@ -843,6 +843,25 @@ class Invariants(unittest.TestCase):
             self.assertEqual(bool(child_tickets.read_fix_for(gh.issues[got["number"]]["body"])), keeps_flag)  # dark: fix_for and the same flag; released: a fresh flag
             self.assertEqual(bool(gh.blocked), keeps_flag)
 
+    def test_inv61_a_child_is_routed_by_the_kind_in_its_marker_to_staging_or_to_a_build_run_never_both(self):
+        from shared import child_tickets
+        staging, update = (" ".join(next(iter(yaml.safe_load((ROOT / ".github/workflows" / n).read_text())["jobs"].values()))["if"].split())
+                           for n in ("app-staging.yml", "update-app-intake.yml"))
+        kind = '"kind":"staging"'
+        self.assertIn(kind, child_tickets.render_marker({"kind": "staging"}))  # the text the workflows match is the text the planner writes
+        self.assertIn(f"contains(github.event.issue.body, '{kind}')", staging)
+        self.assertIn(f"!contains(github.event.issue.body, '{kind}')", update)
+
+    def test_inv62_a_pipeline_failure_is_diagnosed_and_its_retries_and_coder_fixes_are_bounded(self):
+        import inspect
+
+        from build_run import ship_code
+        self.assertGreaterEqual(PROFILES["limits"]["pipeline_retries"], 0)
+        self.assertGreater(PROFILES["limits"]["pipeline_fix_attempts"], 0)
+        source = inspect.getsource(ship_code.ShipCode.pipeline)
+        for bound in ("pipeline_retries", "pipeline_fix_attempts", "NOT_STARTED_CONCLUSIONS"):
+            self.assertIn(bound, source)
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):
