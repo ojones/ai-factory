@@ -20,7 +20,7 @@ class ChangeSets(unittest.TestCase):
 
     def test_the_task_carries_criteria_checks_scope_and_the_flag(self):
         text = render_child.render_change_set_task(self.CS, request="Record sightings and filter them", parent=7)
-        for needle in ("Change set CS-2: Filter by species", "planned in #7", "Record sightings and filter them", "- AC-1: ?species= filters",
+        for needle in ("Change set CS-2: Filter by species", "Do only this change set", "Record sightings and filter them", "- AC-1: ?species= filters",
                        "- curl with the filter", "- sorting", "slug `species-filter`"):
             self.assertIn(needle, text)
 

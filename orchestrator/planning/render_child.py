@@ -11,7 +11,7 @@ def render_change_set_task(cs, request=None, parent=None):
     # The task text for one change set: what the coder, tester and reviewer are given as the spec.
     lines = [f"Change set {cs['id']}: {cs['title']}", ""]
     if parent:
-        lines += [f"Part of a larger request, planned in #{parent}. Do only this change set.", ""]
+        lines += ["Part of a larger request that was planned into change sets. Do only this change set. This ticket is all you need: the code is in your working directory, and nothing is to be looked up on GitHub (the plan's issue number is in the ticket's marker for people, not for you).", ""]
     if request:
         lines += ["The original request, for context only (do just this change set):", "", request.strip(), ""]
     lines += ["Acceptance criteria:"] + [f"- {c}" for c in cs.get("criteria", [])]

@@ -1,13 +1,13 @@
 {
   "app": "factory-bench",
   "base_sha": "",
-  "note": "base_sha is set by `PYTHONPATH=orchestrator python3 -m monitoring.benchmark freeze` after the bench app is staged and seeded (see docs/benchmark-protocol.md). {pass} in a request is replaced by a short id of the pass, so each pass uses flag names no earlier pass created (GrowthBook cannot delete a feature, and an existing flag is never re-released).",
+  "note": "base_sha and seed_flag are set by `PYTHONPATH=orchestrator python3 -m monitoring.benchmark freeze --seed-flag issue-<n>` after the bench app is staged and seeded (see docs/benchmark-protocol.md and agents/benchmark/bench-app-spec.md). {pass} in a request is replaced by a short id of the pass; {seed_flag} by the flag the bench app was seeded with (a flag is named `issue-<n>` after its story, so every task's own flag is new by construction, GrowthBook cannot delete a feature, and an existing flag is never re-released).",
   "tasks": [
     {
       "id": "flagged-route",
       "tags": ["core"],
       "cost_cap": 1.0,
-      "request": "Add GET /api/version that answers 200 with the JSON {\"version\": \"1\"}. It is a user-visible change, so ship it behind a feature flag named `version-{pass}`: with the flag off the route answers 404 like any unknown route. Keep all other behaviour unchanged.",
+      "request": "Add GET /api/version that answers 200 with the JSON {\"version\": \"1\"}. It is a user-visible change, so ship it behind a feature flag: with the flag off the route answers 404 like any unknown route. Keep all other behaviour unchanged.",
       "expected": {"outcomes": ["released"]},
       "oracle": {"checks": [
         {"id": "version", "name": "version answers", "request": {"method": "GET", "path": "/api/version", "auth": "preview"}, "expect": {"status": 200, "json": {"version": "1"}}},
@@ -18,7 +18,7 @@
       "id": "edge-case-validation",
       "tags": ["core", "edge-cases"],
       "cost_cap": 1.0,
-      "request": "Add PUT /api/todos/:id/text that renames a todo. Behind a feature flag named `rename-{pass}`. The body is {\"text\": string}. Answer 200 with the updated todo. The text is trimmed; blank or whitespace-only text answers 400 {\"error\": \"text is required\"}; text over 200 characters answers 400 {\"error\": \"text too long\"}; an id that is not a positive integer (0, -1, 1abc) answers 400 {\"error\": \"invalid id\"}; an unknown id answers 404 {\"error\": \"not found\"}.",
+      "request": "Add PUT /api/todos/:id/text that renames a todo. Behind a feature flag. The body is {\"text\": string}. Answer 200 with the updated todo. The text is trimmed; blank or whitespace-only text answers 400 {\"error\": \"text is required\"}; text over 200 characters answers 400 {\"error\": \"text too long\"}; an id that is not a positive integer (0, -1, 1abc) answers 400 {\"error\": \"invalid id\"}; an unknown id answers 404 {\"error\": \"not found\"}.",
       "expected": {"outcomes": ["released"]},
       "setup": [{"id": "mk", "name": "create one", "request": {"method": "POST", "path": "/api/todos", "auth": "preview", "json": {"text": "factory-bench-a"}}, "expect": {"status": 201}, "capture": {"tid": "id"}}],
       "oracle": {"checks": [
@@ -44,7 +44,7 @@
       "id": "retire-named-flag",
       "tags": ["core", "retirement"],
       "cost_cap": 1.0,
-      "request": "retire-flag: bench-seed\n\nRetire the feature flag `bench-seed`: remove its check and keep the behaviour it guarded, always on; remove its entry from flags.json; delete the tests of the flag-off behaviour; leave no code mentioning the slug (a comment may). No new flag.",
+      "request": "retire-flag: {seed_flag}\n\nRetire the feature flag `{seed_flag}`: remove its check and keep the behaviour it guarded, always on; remove its entry from flags.json; delete the tests of the flag-off behaviour; leave no code mentioning the slug (a comment may). No new flag.",
       "expected": {"outcomes": ["nothing_to_release", "released"]},
       "oracle": {"checks": [
         {"id": "seed-route", "name": "the seed route answers without a token", "request": {"method": "GET", "path": "/api/bench-seed", "auth": "none"}, "expect": {"status": 200}}
@@ -54,7 +54,7 @@
       "id": "ambiguous-spec",
       "tags": ["core", "assumptions"],
       "cost_cap": 1.0,
-      "request": "Add DELETE /api/todos/:id/undo that brings back the most recently deleted todo. Behind a feature flag named `undo-{pass}`. When nothing has been deleted it answers 404 {\"error\": \"nothing to undo\"}. (The request does not say whether undo can be repeated; choose the most conservative reading and record the assumption.)",
+      "request": "Add DELETE /api/todos/:id/undo that brings back the most recently deleted todo. Behind a feature flag. When nothing has been deleted it answers 404 {\"error\": \"nothing to undo\"}. (The request does not say whether undo can be repeated; choose the most conservative reading and record the assumption.)",
       "expected": {"outcomes": ["released"]},
       "oracle": {"checks": [
         {"id": "nothing", "name": "nothing to undo is 404", "request": {"method": "DELETE", "path": "/api/todos/undo-probe/undo", "auth": "preview"}, "expect": {"status": [400, 404]}}

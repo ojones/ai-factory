@@ -202,11 +202,35 @@ class Trigger(unittest.TestCase):
             self.assertIn(f"github.event.label.name == '{label}'", cond)
         self.assertIn("factory-plan", cond)  # a child ticket (it carries the update-app-intake label) is never planned
         self.assertIn("benchmark", cond)
-        self.assertIn("plan-${{ github.event.issue.number }}", wf["concurrency"]["group"])
+        self.assertIn("github.event_name == 'workflow_dispatch'", cond)  # only the benchmark dispatches it, with an issue number
+        self.assertIn("issue_number", wf[True]["workflow_dispatch"]["inputs"])
+        self.assertIn("plan-${{ github.event.issue.number || inputs.issue_number }}", wf["concurrency"]["group"])
         self.assertIs(wf["concurrency"]["cancel-in-progress"], False)
         text = (ROOT / ".github/workflows/plan.yml").read_text()
         for absent in ("setup-node", "flyctl", "playwright"):
             self.assertNotIn(absent, text)
+
+
+class Inheritance(unittest.TestCase):
+    def test_an_intake_with_the_benchmark_label_hands_it_to_its_children_and_other_labels_stay_behind(self):
+        got = plan_run.read_intake(issue(("update-app-intake", "benchmark", "bug")), "o/f", info(), LIMITS)
+        self.assertEqual(got["inherit"], ["benchmark"])
+        self.assertEqual(plan_run.read_intake(issue(), "o/f", info(), LIMITS)["inherit"], [])
+
+    def test_children_are_filed_with_the_inherited_label_so_production_workflows_skip_them(self):
+        from unittest import mock
+
+        from shared import github
+
+        from planning import file_children
+        gh = FakeIssues()
+        gh.add(7)
+        with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
+            file_children.file_children("o/f", "pat", "notes", 7, [cs(1)], ["CS-1"], "req", inherit=["benchmark"])
+        child = next(i for n, i in gh.issues.items() if n != 7)
+        self.assertEqual({x["name"] for x in child["labels"]} >= {"benchmark", "update-app-intake", "app:notes"}, True)
+        wf = (ROOT / ".github/workflows/update-app-intake.yml").read_text()
+        self.assertIn("!contains(github.event.issue.labels.*.name, 'benchmark')", wf)  # and so is the production start of such a child
 
 
 class SeedWorkdir(unittest.TestCase):

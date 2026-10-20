@@ -53,6 +53,12 @@ class Suite(unittest.TestCase):
         bad = {"tasks": [{"id": "a", "request": "x", "expected": {"outcomes": []}, "oracle": {"checks": []}}, {"id": "a", "request": ""}]}
         self.assertGreaterEqual(len(bm.validate_suite(bad)), 2)
 
+    def test_a_frozen_suite_whose_task_names_the_seed_flag_must_have_one(self):
+        suite = {"app": "b", "base_sha": "abc", "tasks": [{"id": "r", "request": "retire-flag: {seed_flag}", "expected": {"outcomes": ["released"]}, "oracle": {"checks": []}}]}
+        self.assertTrue(any("seed_flag" in x for x in bm.validate_suite(suite)))
+        self.assertEqual(bm.validate_suite(dict(suite, seed_flag="issue-142")), [])
+        self.assertEqual(bm.validate_suite(dict(suite, base_sha="")), [])  # before the bench app is frozen there is nothing to check
+
     def test_pass_ids_make_flag_names_unique_and_task_selection_checks_names(self):
         self.assertEqual(bm.fill_request("flag `v-{pass}`", "10141200"), "flag `v-10141200`")
         suite = {"tasks": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}
@@ -112,6 +118,57 @@ class Comparison(unittest.TestCase):
     def test_the_estimate_prices_refusals_as_nearly_free(self):
         est = bm.estimate([task("a"), task("r", tags=["refusal"])])
         self.assertEqual((est["runs"], est["refusals"]), (1, 1))
+
+
+class Planned(unittest.TestCase):
+    def test_planning_ends_planned_when_it_filed_children_else_as_the_ending_it_commented(self):
+        self.assertEqual(bm.planning_ending([], [{"number": 5}]), "planned")
+        self.assertEqual(bm.planning_ending(["**Planning stopped (refused):** payments", "other"], []), "refused")
+        self.assertEqual(bm.planning_ending(["**Planning stopped (needs human):** a question"], []), "needs_human")
+        self.assertEqual(bm.planning_ending(["**Planning stopped (awaiting secret):** x"], []), "awaiting_secret")
+        self.assertIsNone(bm.planning_ending(["unrelated"], []))
+        self.assertEqual(bm.planning_ending(["**Planning stopped (needs human):** old", "**Planning stopped (refused):** new"], []), "refused")  # the last word
+
+    def test_children_run_after_what_blocks_them_and_otherwise_by_number(self):
+        self.assertEqual(bm.child_order([{"number": 12, "blockers": [11]}, {"number": 11, "blockers": []}, {"number": 13, "blockers": [12]}]), [11, 12, 13])
+        self.assertEqual(bm.child_order([{"number": 9, "blockers": [99]}, {"number": 8}]), [8, 9])  # a blocker outside the plan is ignored
+        with self.assertRaises(ValueError):
+            bm.child_order([{"number": 1, "blockers": [2]}, {"number": 2, "blockers": [1]}])
+
+    def test_the_planners_cost_is_read_from_the_ledger_by_its_run_id(self):
+        lines = ["ledger 2026-10-20 factory-bench 0.0482 run:111-plan", "ledger 2026-10-20 factory-bench 0.1306 run:222", "ledger 2026-10-20 factory-bench 0.0900 run:333-plan"]
+        self.assertEqual(bm.ledger_cost(lines, 111), 0.0482)
+        self.assertEqual(bm.ledger_cost(lines, 222), 0.0)  # a Build Run's own line is not a planning cost
+        self.assertEqual(bm.ledger_cost(lines, 1), 0.0)
+
+    def test_a_task_that_ends_at_planning_scores_on_the_planning_ending_and_its_cost(self):
+        refusal = task("refuse-payments", outcomes=("refused",), tags=("refusal",), max_cost=0.25)
+        ok = bm.score_task(refusal, bm.planning_report("refused", 0.06), [])
+        self.assertTrue(ok["passed"])
+        self.assertFalse(bm.score_task(refusal, bm.planning_report("refused", 0.5), [])["passed"])  # over its cost limit
+        self.assertFalse(bm.score_task(refusal, bm.planning_report("needs_human", 0.06), [])["passed"])  # the wrong ending
+
+    def test_a_plan_with_several_children_is_one_report_with_everything_added_up(self):
+        a = {"outcome": "released", "spent_usd": 0.1, "review_passes": 1, "started_at": "2026-10-20T10:00:00", "finished_at": "2026-10-20T10:20:00"}
+        b = {"outcome": "released", "spent_usd": 0.2, "review_passes": 2, "started_at": "2026-10-20T10:21:00", "finished_at": "2026-10-20T10:50:00"}
+        got = bm.merge_reports(0.05, [a, b])
+        self.assertEqual((got["outcome"], got["spent_usd"], got["review_passes"], got["started_at"], got["finished_at"]),
+                         ("released", 0.35, 3, "2026-10-20T10:00:00", "2026-10-20T10:50:00"))
+        stuck = bm.merge_reports(0.05, [a, dict(b, outcome="round_limit")])
+        self.assertEqual(stuck["outcome"], "round_limit")  # the first ending that is not good
+        self.assertIsNone(bm.merge_reports(0.05, [None]))  # nothing ran
+
+    def test_the_run_started_by_the_dispatch_is_the_first_one_newer_than_what_was_there_before(self):
+        runs = [{"databaseId": 30}, {"databaseId": 20}, {"databaseId": 10}]
+        self.assertEqual(bm.newest_run_after(runs, 20), 30)
+        self.assertEqual(bm.newest_run_after(runs, 5), 10)  # the earliest new one, not a stale newest
+        self.assertIsNone(bm.newest_run_after(runs, 30))
+        self.assertEqual(bm.newest_run_after(runs, None), 10)
+
+    def test_the_seed_flag_is_filled_into_a_request_and_the_estimate_counts_a_refusal_as_planning_only(self):
+        self.assertEqual(bm.fill_request("retire-flag: {seed_flag} at {pass}", "0101", "issue-142"), "retire-flag: issue-142 at 0101")
+        est = bm.estimate([task("a"), task("r", tags=["refusal"])])
+        self.assertGreater(est["cost_low"], 0.12)  # the planner is in every task's price
 
 
 class DryRun(unittest.TestCase):

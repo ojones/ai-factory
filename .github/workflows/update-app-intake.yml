@@ -4,7 +4,7 @@ name: Update App Intake
 # issue and dispatches a Build Run, which plans the change, then codes, tests and reviews it
 # (orchestrator/build_run/start_build.py; ARCHITECTURE.md: Intake). A change set that waits on an earlier one of the same
 # plan is given the label by the Orchestrator when its dependencies finish; that is done with the PAT, because a
-# label added with the Actions token would not start this workflow.
+# label added with the Actions token would not start this workflow. A child with the `benchmark` label is skipped: the benchmark dispatches its Build Run itself, from the candidate branch.
 on:
   issues:
     types: [labeled]
@@ -19,7 +19,8 @@ jobs:
     if: >-
       github.event.label.name == 'proceed-with-change' &&
       contains(github.event.issue.labels.*.name, 'update-app-intake') &&
-      !contains(github.event.issue.body, '"kind":"staging"')
+      !contains(github.event.issue.body, '"kind":"staging"') &&
+      !contains(github.event.issue.labels.*.name, 'benchmark')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

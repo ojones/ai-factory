@@ -8,29 +8,37 @@ name: Plan
 # issue, remove the label and add it again. `limits.planner_enabled` in agents/profiles.yml is the switch.
 #
 # A child ticket carries the `update-app-intake` label too, so it is never planned: the job skips a body with the `factory-plan` marker. A benchmark
-# task issue is not planned either (the benchmark measures a Build Run, and has to be reworked to file planned children: see the ticket's resolution).
+# task issue is not planned by its label either; the benchmark dispatches this workflow itself (below) so a pass measures the planner too, and the children inherit the `benchmark`
+# label, which keeps update-app-intake.yml from starting them with the production models.
 on:
   issues:
     types: [labeled]
+  # The benchmark plans its task Intakes from a candidate branch, so the planner it measures is the branch's (monitoring/benchmark.py); nothing else dispatches this.
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Intake issue number in ai-factory"
+        required: true
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: plan-${{ github.event.issue.number }}
+  group: plan-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 env:
-  ISSUE_NUMBER: ${{ github.event.issue.number }}
+  ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
 
 jobs:
   plan:
     # Job-level, so label events this job does not handle never queue behind a real one.
     if: >-
-      (github.event.label.name == 'update-app-intake' || github.event.label.name == 'new-app-intake') &&
+      github.event_name == 'workflow_dispatch' ||
+      ((github.event.label.name == 'update-app-intake' || github.event.label.name == 'new-app-intake') &&
       !contains(github.event.issue.body, 'factory-plan:') &&
-      !contains(github.event.issue.labels.*.name, 'benchmark')
+      !contains(github.event.issue.labels.*.name, 'benchmark'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

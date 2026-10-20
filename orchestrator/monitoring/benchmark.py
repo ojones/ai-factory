@@ -14,8 +14,9 @@
 #   PYTHONPATH=orchestrator python3 -m monitoring.benchmark accept  RESULT.json                                       make a result the new baseline
 #   PYTHONPATH=orchestrator python3 -m monitoring.benchmark freeze                                                    record the bench app's current main as the frozen base
 #
-# A candidate is a branch whose agents/profiles.yml names the candidate models; the runner dispatches the real `build-run.yml` from that branch, so
-# production code carries no "benchmark mode". The branch also pins the limits that would make passes incomparable (no flag retirement
+# A candidate is a branch whose agents/profiles.yml names the candidate models; the runner files each task as an Update App Intake labelled `benchmark`, dispatches the
+# real `plan.yml` from that branch (so the planner it measures is the branch's), then dispatches the real `build-run.yml` from that branch for each child the plan filed,
+# in order, so production code carries no "benchmark mode" (the label only keeps the production workflows from starting the children with the production models). The branch also pins the limits that would make passes incomparable (no flag retirement
 # ride-along, a short watchdog, no daily cap). See docs/benchmark-protocol.md.
 import json
 import re
@@ -83,14 +84,17 @@ def validate_suite(suite):
             problems.append(f"{tid}: expected.outcomes is required")
         if not isinstance(t.get("oracle", {}).get("checks"), list):
             problems.append(f"{tid}: oracle.checks must be a list (empty for a task that must be refused)")
+        if "{seed_flag}" in t.get("request", "") and suite.get("base_sha") and not suite.get("seed_flag"):
+            problems.append(f"{tid}: the request names {{seed_flag}} but the suite has none: run `freeze --seed-flag issue-<n>`")
         ids = [c.get("id") for c in t.get("oracle", {}).get("checks", []) + t.get("setup", [])]
         if len(ids) != len(set(ids)):
             problems.append(f"{tid}: duplicate oracle or setup check ids")
     return problems
 
 
-def fill_request(request, pass_id):
-    return request.replace("{pass}", pass_id)
+def fill_request(request, pass_id, seed_flag=""):
+    # `{pass}` is a short id of the pass; `{seed_flag}` is the flag the bench app was seeded with (`issue-<n>`, named after its story), which the retirement task removes.
+    return request.replace("{pass}", pass_id).replace("{seed_flag}", seed_flag)
 
 
 def select_tasks(suite, names):
@@ -117,6 +121,67 @@ def score_task(task, report, oracle_results):
     return {"id": task["id"], "tags": task.get("tags", []), "outcome": outcome, "outcome_ok": outcome_ok, "cost_ok": cost_ok,
             "oracle_failed": failed, "oracle_ok": not failed, "passed": bool(outcome_ok and cost_ok and not failed and report is not None),
             "cost_usd": round(cost, 4), "rounds": int((report or {}).get("review_passes") or 0), "minutes": minutes_between(started, finished)}
+
+
+PLANNING_STOP = re.compile(r"\*\*Planning stopped \(([a-z ]+)\)")
+
+
+def planning_ending(comments, children):
+    # How planning ended: `planned` when it filed children, else the ending it commented ("refused", "needs_human", "awaiting_secret"), else None (it
+    # produced neither: the run failed before it could say).
+    if children:
+        return "planned"
+    for body in reversed(comments or []):
+        m = PLANNING_STOP.search(body or "")
+        if m:
+            return m.group(1).strip().replace(" ", "_")
+    return None
+
+
+def child_order(children):
+    # The issue numbers of a plan's children in the order they run: a child after every child that blocks it, otherwise by number. `children` are
+    # [{number, blockers: [numbers]}]; a blocker outside the plan is ignored.
+    numbers = {c["number"] for c in children}
+    waiting = {c["number"]: {b for b in c.get("blockers", []) if b in numbers} for c in children}
+    out = []
+    while waiting:
+        ready = sorted(n for n, deps in waiting.items() if not deps - set(out))
+        if not ready:
+            raise ValueError("the plan's children block each other")
+        out.append(ready[0])
+        del waiting[ready[0]]
+    return out
+
+
+def ledger_cost(ledger_lines, run_id):
+    # What the spend ledger recorded for a run id (a planning run is recorded as `<run id>-plan`), or 0.0.
+    for line in ledger_lines:
+        m = re.search(rf"\b(\d+(?:\.\d+)?) run:{re.escape(str(run_id))}-plan\b", line)
+        if m:
+            return float(m.group(1))
+    return 0.0
+
+
+def planning_report(ending, cost, started=None, finished=None):
+    # The Report of a task that ended at planning (no Build Run was started).
+    return {"outcome": ending, "spent_usd": round(cost, 4), "review_passes": 0, "started_at": started, "finished_at": finished}
+
+
+def merge_reports(plan_cost, reports):
+    # One Report for a task whose plan filed children: the first ending that is not good, else the last; cost, rounds and time added up with the planner's cost.
+    # None when no Build Run produced a report.
+    reports = [r for r in reports if r]
+    if not reports:
+        return None
+    bad = next((r for r in reports if r.get("outcome") not in outcomes.OK), None)
+    return {"outcome": (bad or reports[-1]).get("outcome"), "spent_usd": round(plan_cost + sum(float(r.get("spent_usd") or 0) for r in reports), 4),
+            "review_passes": sum(int(r.get("review_passes") or 0) for r in reports), "started_at": reports[0].get("started_at"), "finished_at": reports[-1].get("finished_at")}
+
+
+def newest_run_after(runs, before_id):
+    # The id of the first run started after the dispatch: `runs` newest first, `before_id` the newest id seen before it (0 when none).
+    newer = [r["databaseId"] for r in runs if r["databaseId"] > (before_id or 0)]
+    return min(newer) if newer else None
 
 
 def minutes_between(a, b):
@@ -182,10 +247,11 @@ def render_report(label, candidate_models, agg, verdict=None):
 
 
 def estimate(tasks):
-    # A rough price and duration for a pass, from what real runs have cost ($0.1 to $0.6 and 16 to 35 minutes an update run, a refusal about nothing).
+    # A rough price and duration for a pass, from what real runs have cost: planning $0.04 to $0.10 and about 5 minutes, then $0.1 to $0.6 and 16 to 35 minutes for each
+    # Build Run (a task is one child unless its plan splits); a refusal ends at planning and costs the planner at most.
     ran = [t for t in tasks if "refusal" not in t.get("tags", [])]
-    return {"runs": len(ran), "refusals": len(tasks) - len(ran), "cost_low": round(0.12 * len(ran), 2), "cost_high": round(0.6 * len(ran) + 0.1 * (len(tasks) - len(ran)), 2),
-            "hours_low": round(0.27 * len(ran), 1), "hours_high": round(0.6 * len(ran), 1)}
+    return {"runs": len(ran), "refusals": len(tasks) - len(ran), "cost_low": round(0.16 * len(ran), 2), "cost_high": round(0.7 * len(ran) + 0.1 * (len(tasks) - len(ran)), 2),
+            "hours_low": round(0.35 * len(ran), 1), "hours_high": round(0.7 * len(ran), 1)}
 
 
 # --- the runner: GitHub, git and the deployed bench app (not unit-tested; `plan` is a dry run) ---------------------------------------------------
@@ -243,31 +309,67 @@ def reset_bench(owner, app, base_sha):
     return True
 
 
-def file_task_issue(repo, app, pass_id, task):
+def file_task_issue(repo, app, pass_id, task, seed_flag=""):
     import os
 
     from shared import github
     token = os.environ["FACTORY_PAT"]
     for label in (intake_labels.UPDATE_APP_INTAKE, f"app:{app}", "benchmark"):
         github.ensure_label(repo, label, token, "ededed", "Benchmark pass")
-    body = render_form.form_body(app, fill_request(task["request"], pass_id), f"{task.get('cost_cap', 1.0):.2f}")
+    body = render_form.form_body(app, fill_request(task["request"], pass_id, seed_flag), f"{task.get('cost_cap', 1.0):.2f}")
     out = gh(["issue", "create", "--repo", repo, "--title", f"bench {pass_id}: {task['id']}", "--label", f"{intake_labels.UPDATE_APP_INTAKE},app:{app},benchmark", "--body", body])
     return re.search(r"/issues/(\d+)", out).group(1)
 
 
-def dispatch_and_wait(repo, app, branch, issue, timeout_min=75):
-    # Dispatch the real Build Run workflow from the candidate branch and wait for it. Returns the run id.
-    gh(["workflow", "run", "build-run.yml", "--repo", repo, "--ref", branch, "-f", f"issue_number={issue}", "-f", f"app_name={app}"])
+def dispatch_and_wait(repo, workflow, branch, inputs, timeout_min=75):
+    # Dispatch a real workflow (`plan.yml` or `build-run.yml`) from the candidate branch and wait for it. Returns the run id, or None if it never started.
+    def runs():
+        return json.loads(gh(["run", "list", "--repo", repo, "--workflow", workflow, "--branch", branch, "--limit", "10", "--json", "databaseId,status,createdAt"], check=False) or "[]")
+    before = max([r["databaseId"] for r in runs()] or [0])
+    gh(["workflow", "run", workflow, "--repo", repo, "--ref", branch, *[a for k, v in inputs.items() for a in ("-f", f"{k}={v}")]])
     run_id, deadline = None, time.time() + timeout_min * 60
     while time.time() < deadline:
-        runs = json.loads(gh(["run", "list", "--repo", repo, "--workflow", "build-run.yml", "--branch", branch, "--limit", "5", "--json", "databaseId,status,createdAt"], check=False) or "[]")
-        if run_id is None and runs:
-            run_id = runs[0]["databaseId"]
-        mine = [r for r in runs if r["databaseId"] == run_id]
+        found = runs()
+        run_id = run_id or newest_run_after(found, before)
+        mine = [r for r in found if r["databaseId"] == run_id]
         if mine and mine[0]["status"] == "completed":
             return run_id
         time.sleep(30)
     return run_id
+
+
+def plan_children(repo, issue):
+    # The Intake's child tickets, [{number, blockers}], from GitHub's sub-issues and dependencies.
+    out = json.loads(gh(["api", f"repos/{repo}/issues/{issue}/sub_issues?per_page=100"], check=False) or "[]")
+    return [{"number": c["number"], "blockers": [b["number"] for b in json.loads(gh(["api", f"repos/{repo}/issues/{c['number']}/dependencies/blocked_by"], check=False) or "[]")]} for c in out]
+
+
+def planning_cost(repo, run_id):
+    ledger = json.loads(gh(["issue", "list", "--repo", repo, "--label", "factory-ledger", "--state", "open", "--json", "number"], check=False) or "[]")
+    if not ledger or not run_id:
+        return 0.0
+    comments = json.loads(gh(["issue", "view", str(ledger[0]["number"]), "--repo", repo, "--json", "comments"], check=False) or "{}").get("comments", [])
+    return ledger_cost([c.get("body", "") for c in comments], run_id)
+
+
+def run_task(repo, app, branch, issue):
+    # One task end to end, as a real request: plan the Intake from the candidate branch, then run the Build Run of each child it filed, in order, stopping at the first
+    # child that does not release. Returns the task's Report (state.json shape), or None if nothing ran.
+    plan_run = dispatch_and_wait(repo, "plan.yml", branch, {"issue_number": issue}, timeout_min=30)
+    cost = planning_cost(repo, plan_run)
+    children = plan_children(repo, issue)
+    comments = [c.get("body", "") for c in json.loads(gh(["issue", "view", str(issue), "--repo", repo, "--json", "comments"], check=False) or "{}").get("comments", [])]
+    ending = planning_ending(comments, children)
+    if not children:
+        return planning_report(ending, cost) if ending else None
+    reports = []
+    for number in child_order(children):
+        run_id = dispatch_and_wait(repo, "build-run.yml", branch, {"issue_number": number, "app_name": app})
+        report = read_report(repo, run_id) if run_id else None
+        reports.append(report)
+        if not report or report.get("outcome") not in outcomes.OK:
+            break
+    return merge_reports(cost, reports)
 
 
 def read_report(repo, run_id):
@@ -330,16 +432,15 @@ def run_pass(label, overrides, task_names, execute):
     try:
         for task in tasks:
             reset_bench(owner, app, suite["base_sha"])
-            issue = file_task_issue(repo, app, pass_id, task)
-            run_id = dispatch_and_wait(repo, app, branch, issue)
-            report = read_report(repo, run_id) if run_id else None
+            issue = file_task_issue(repo, app, pass_id, task, suite.get("seed_flag", ""))
+            report = run_task(repo, app, branch, issue)
             oracle = run_oracle(app, task) if report and report.get("outcome") in outcomes.OK else []
             score = score_task(task, report, oracle)
             scores.append(score)
             print(f"{task['id']}: {'PASS' if score['passed'] else 'FAIL'} ({score['outcome']}, ${score['cost_usd']:.3f}, {score['rounds']} rounds)", flush=True)
     finally:
         delete_branch(repo, branch)
-        archive_bench_flags(app)
+        archive_bench_flags(app, keep=(suite.get("seed_flag") or "bench-seed",))
         reset_bench(owner, app, suite["base_sha"])
     agg = aggregate(scores)
     base = json.load(open(BASELINE)) if BASELINE.exists() else None
@@ -361,6 +462,7 @@ def main(argv):
     ap.add_argument("--tasks", default="")
     ap.add_argument("--label", default="baseline")
     ap.add_argument("--execute", action="store_true")
+    ap.add_argument("--seed-flag", default="", help="freeze: the flag the bench app was seeded with (for example issue-142)")
     a = ap.parse_args(argv[1:])
     try:
         overrides = parse_candidate(a.candidate)
@@ -371,6 +473,8 @@ def main(argv):
             repo = _env()["GITHUB_REPOSITORY"]
             sha = gh(["api", f"repos/{repo.split('/')[0]}/{suite['app']}/commits/main", "--jq", ".sha"]).strip()
             suite["base_sha"] = sha
+            if a.seed_flag:
+                suite["seed_flag"] = a.seed_flag
             SUITE.write_text(json.dumps(suite, indent=2) + "\n")
             print(f"froze {suite['app']} at {sha}")
             return 0

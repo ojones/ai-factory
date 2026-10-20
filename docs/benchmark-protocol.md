@@ -21,11 +21,11 @@ from the final outcome by code, run on every change and compared with a baseline
 | Change | Run | Spend |
 |---|---|---|
 | Any change to a prompt or a role's model | Unit tests and the reviewer smoke fixtures (CI, automatic) | cents |
-| A new model for one role | The role's component benchmark (below), then the whole-run suite | $0.2 to $2, then $0.6 to $3.2 |
-| A prompt or planner/validator change that alters behaviour | The whole-run suite | $0.6 to $3.2 |
+| A new model for one role | The role's component benchmark (below), then the whole-run suite | $0.2 to $2, then $0.8 to $3.7 |
+| A prompt or planner/validator change that alters behaviour | The whole-run suite | $0.8 to $3.7 |
 | Nothing pending | Nothing. The nightly model canary runs on its own. | about a cent |
 
-The whole-run suite takes **1.4 to 3 hours** and **about $0.60 to $3.20** (five real Build Runs at $0.1 to $0.6 each plus two refusals that cost almost nothing;
+The whole-run suite takes **1.8 to 3.5 hours** and **about $0.80 to $3.70** (five tasks, each planned at $0.04 to $0.10 and then a Build Run at $0.1 to $0.6, plus two refusals that end at planning;
 `benchmark.py plan` prints the estimate). Do not run it on a schedule: run it when a swap is actually pending.
 
 ## Evaluating a candidate model, step by step
@@ -38,8 +38,11 @@ The whole-run suite takes **1.4 to 3 hours** and **about $0.60 to $3.20** (five 
 2. **Dry run the whole-run pass:** Actions, "Benchmark", leave `execute` off, `candidate` = `coder=<new-model-id>` (any `role=model` pairs, comma separated). It prints
    the plan and the estimate and spends nothing. Locally: `PYTHONPATH=orchestrator python3 -m monitoring.benchmark plan --candidate coder=<new-model-id>`.
 3. **Run it:** the same workflow with `execute` on. The runner creates a branch with the candidate's `profiles.yml` (and the limits that keep passes comparable: no
-   flag-retirement ride-along, a 2-minute watchdog, no daily cap), then for each task resets the bench app to its frozen commit, files the Intake, dispatches the real
-   `build-run.yml` from that branch, waits, reads the Report and runs the oracle. It deletes the branch and archives the bench flags at the end.
+   flag-retirement ride-along, a 2-minute watchdog, no daily cap), then for each task resets the bench app to its frozen commit, files the task as an Update App Intake labelled `benchmark`, dispatches the real
+   `plan.yml` from that branch (so the planner measured is the candidate's), then dispatches the real `build-run.yml` from that branch for each child the plan filed, in order,
+   stopping at the first child that does not release. A task that ends at planning (a refusal, a question, a missing secret) is scored on that ending. The `benchmark` label is
+   inherited by the children, which keeps the production workflows from starting them with the production models. The runner reads the Report (cost, rounds and time of the
+   planner and every Build Run added up, the planner's cost from the spend ledger) and runs the oracle. It deletes the branch and archives the bench flags at the end.
 4. **Read the result** (the step summary and the `benchmark-result` artifact): passes, cost, rounds and minutes per task, and a verdict against the baseline.
 5. **Accept or reject.** The rules (`rules.json`) accept a candidate when:
    - it passes no more than `max_pass_drop` (1) fewer tasks than the baseline,
@@ -53,8 +56,8 @@ The whole-run suite takes **1.4 to 3 hours** and **about $0.60 to $3.20** (five 
 
 ## What it does not cover (yet)
 
-First builds (they need a fresh app each time; the coder replay covers them), UI changes (the tester's `ui-check` has its own tests), multi-change-set plans, and the
-retrospective Agent. Add a task to `suite.json` when a real failure shows a gap: start from real failures, with an expected outcome and an oracle, and include cases
+A new app's plan and staging (they need a fresh app each time), UI changes (the tester's `ui-check` has its own tests), plans of several change sets (the tasks are one
+slice each; the runner can run more than one child, but no task asks for it), failures and their fixes (Try Fix), and the retrospective Agent. Add a task to `suite.json` when a real failure shows a gap: start from real failures, with an expected outcome and an oracle, and include cases
 that should be refused as well as built, so a cheaper model cannot win by being careless.
 
 ## Fallback and the nightly canary

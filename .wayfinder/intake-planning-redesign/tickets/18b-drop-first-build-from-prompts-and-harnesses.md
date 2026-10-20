@@ -2,7 +2,7 @@
 title: Drop the first-build concept from prompts and eval harnesses
 type: task
 status: open
-assignee:
+assignee: ojones
 blocked_by: [17-live-proof.md]
 ---
 

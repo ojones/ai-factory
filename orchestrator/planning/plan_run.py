@@ -73,7 +73,7 @@ def read_intake(issue, repo, repo_info, limits):
         if not check_target_app.is_factory_repo(json.loads(info.stdout).get("description"), repo):
             raise Stop(NEEDS_HUMAN, f"`{app}` was not created by this Factory (its description is not an `Intake: {repo}#<n>` marker), so the Factory will not change it.")
     raw_cap = read_form.form_section(body, "Cost cap override (USD)").lstrip("$")
-    return {"kind": kind, "app": app, "task": task, "cap": cap, "fix_for": child_tickets.read_fix_for(body) or None, "cap_override": raw_cap if raw_cap and raw_cap != read_form.NO_ANSWER else None,
+    return {"kind": kind, "app": app, "task": task, "cap": cap, "fix_for": child_tickets.read_fix_for(body) or None, "inherit": [x for x in sorted(labels) if x in file_children.INHERITED], "cap_override": raw_cap if raw_cap and raw_cap != read_form.NO_ANSWER else None,
             "declared": secrets_marker.declared_secrets(issue), "label": intake_labels.UPDATE_APP_INTAKE if kind == "update" else intake_labels.NEW_APP_INTAKE}
 
 
@@ -227,7 +227,7 @@ def main():
         run = PlanRun(number, intake, lim, ask, lambda text: gh(["issue", "comment", number, "--repo", repo, "--body", text]),
                       lambda: secret_names_of(app_repo, gh), tickets,
                       lambda parent, sets, order, secrets, fix=None: file_children.file_children(repo, pat, intake["app"], parent, sets, order, intake["task"],
-                                                                                                  cap=intake["cap_override"], secrets=secrets, tickets=tickets, fix=fix),
+                                                                                                  cap=intake["cap_override"], secrets=secrets, tickets=tickets, fix=fix, inherit=intake["inherit"]),
                       repo, pat)
         result = run.run()
     except run_stops.ProviderBlocked as e:

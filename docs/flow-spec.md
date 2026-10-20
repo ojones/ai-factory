@@ -175,48 +175,50 @@ flowchart TD
 
 ## Step index
 
+"Implemented by" names the tickets that built the step (the domain tickets in `.wayfinder/intake-planning-redesign/`); "Verified by" names its unit tests, its invariants (INV-n) and what was seen live (ai-factory#140 and #145 on `factory-bench`, 2026-10-20). Walked in ticket 18; the gaps it found are tickets 19 and 20, and the steps with no live sighting are listed in ticket 17.
+
 | ID | Title | Actor | Main code today (or new) | Implemented by | Verified by |
 |---|---|---|---|---|---|
-| 1.1 | New App Intake submitted | owner | `ISSUE_TEMPLATE/new-app-intake.yml` |  |  |
-| 1.2 | Update App Intake submitted | owner | `ISSUE_TEMPLATE/update-app-intake.yml` |  |  |
-| 1.3 | Automated change request | maintenance, template_sync, flag_lifecycle, try_fix | each module's `file_*`, `try_fix/file_bug.py` |  |  |
-| 2.1 | Plan | Planner Agent | `planning/plan_run.py` (`plan.yml`), `planning/validate_plan.py` |  |  |
-| 2.2 | Refuse | Orchestrator | `planning/triage.feasibility`, `Refused` |  |  |
-| 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` |  |  |
-| 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` |  |  |
-| 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` |  |  |
-| 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` |  |  |
-| 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh`, `staging/read_staging_child.py` |  |  |
-| 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` |  |  |
-| 4.1 | Prepare the run | Orchestrator | `build_run/prepare_run.py`, `flag_lifecycle/flag_slug.ensure_feature` |  |  |
-| 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_lifecycle.retirement_selection.piggyback_slugs` |  |  |
-| 4.3 | Code | Coder Agent | `agents/prompts/coder.md` |  |  |
-| 4.4 | Pre-review check | Orchestrator | `limits.precheck`, Starter `scripts/check-flags.mjs` |  |  |
-| 4.5 | Review | Reviewer Agent | `reviewer.md`, `build_run/review_code.py` |  |  |
-| 4.6 | Push | Orchestrator | `build_run/ship_code.py` |  |  |
-| 4.7 | CI and dark deploy | app CI | Starter workflows |  |  |
-| 4.8 | Diagnose pipeline failure | Pipeline Agent | pipeline role |  |  |
-| 4.9 | Test the deployed app | Tester Agent | `tester.md`, `build_run/verify_deployed_app.py`, `shared/api_check.py`, `build_run/ui_check.py` |  |  |
-| 4.10 | Retest | Orchestrator | `limits.test_retries` |  |  |
-| 4.11 | Roll back the deploy | Orchestrator | `rollback-fly.yml` |  |  |
-| 4.12 | Release gate | Orchestrator | `build_run/gate_release.py` |  |  |
-| 4.13 | Release | Orchestrator | `build_run/gate_release.py`, `flag_lifecycle/` |  |  |
-| 4.14 | Child fails | Orchestrator | `retrospective/close_child.finish_update_intake` |  |  |
-| 5.1-5.7 | Flag lifecycle | Orchestrator | `flag_lifecycle/`, `retrospective/app_state.py` |  |  |
-| 6.1 | Child closed | Orchestrator | `retrospective/close_child.finish_update_intake` |  |  |
-| 6.2 | Retrospective | Retrospective Agent | `retrospective/finalize.py`, `retrospective/run_retrospective.py`, `retrospective/cause.py`, `retrospective/event_verdicts.py` |  |  |
-| 6.3 | Advance to the next child | Orchestrator | `retrospective/close_child.advance` |  |  |
-| 6.4 | Parent closes | Orchestrator | `retrospective/close_child.advance` |  |  |
-| 6.5 | App live and recorded | Orchestrator | `retrospective/app_state.py` |  |  |
-| 6.6 | Ongoing signals | scheduled workflows | `template_sync`, `maintenance` |  |  |
-| 6.7 | Judge events with no run | Retrospective Agent | `retrospective/judge_events.py`, `retrospective/event_verdicts.py` |  |  |
-| 7.1 | File the bug Intake | Orchestrator | `try_fix/file_bug.py`, `planning/fix_for.py`, `retrospective/close_child.settle_fix` |  |  |
-| 7.2 | Factory fix request | Orchestrator | `try_fix/factory_fix_request.py`, bug template (ticket 15c) |  |  |
-| 7.3 | Learning PR | Retrospective Agent | `factory-run.yml` |  |  |
-| 7.4 | Resume the failed child | Orchestrator | `retrospective/close_child.advance`, `try_fix/resume_after_merge.py` |  |  |
-| 7.5 | Needs human | Orchestrator | `try_fix/needs_human.py` |  |  |
-| 7.6 | Write the bug ticket | Try Fix Agent | `try_fix/write_bug.py`, `try_fix/validate_bug.py`, `try_fix/render_bug.py` |  |  |
-| 8.1-8.4 | Bugs found later | bugs domain | `bugs/scan_production.py`, `bugs/scan_logs.py`, `bugs/escaped_defects.py`, `bugs/route_bug.py`, `bugs/to_event.py`, `bugs/flood_limits.py`; `try_fix/file_events.py` |  |  |
+| 1.1 | New App Intake submitted | owner | `ISSUE_TEMPLATE/new-app-intake.yml` | 06 | live #140 (the form's issue shape only; no unit test of the form) |
+| 1.2 | Update App Intake submitted | owner | `ISSUE_TEMPLATE/update-app-intake.yml` | 06, 13 | INV-22; plan_run_test; live #145 |
+| 1.3 | Automated change request | maintenance, template_sync, flag_lifecycle, try_fix | each module's `file_*`, `try_fix/file_bug.py` | 06, 15d | INV-33, INV-35; maintenance tests; file_bug_test; live: scheduled sources only, no bug Intake yet |
+| 2.1 | Plan | Planner Agent | `planning/plan_run.py` (`plan.yml`), `planning/validate_plan.py` | 09, 13 | plan_run_test, validate_plan_test; INV-54, INV-56; live #140 (four attempts), #145 |
+| 2.2 | Refuse | Orchestrator | `planning/triage.feasibility`, `Refused` | 09, 13 | triage tests, refusal_test; INV-40; no live refusal |
+| 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` | 09, 13 | plan_run_test, secrets_check_test; INV-48; live: needs_human twice on #140 |
+| 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` | 09 | file_children_test, child_tickets_test; INV-54, INV-56; live #140, #145 |
+| 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` | 09, 10 | close_child_test (ready_to_start); INV-24; live: #141, #146 started by the planner, #142, #147 by the advance |
+| 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` | 12, 14 | INV-57 (staging skipped by update-app-intake.yml); no direct test of the two route conditions; live #140, #145 |
+| 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh`, `staging/read_staging_child.py` | 14 | stage_script_test, read_staging_child_test; INV-57; live #141 |
+| 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` | 14 | verify_infrastructure_test; INV-57; live #141 (six checks passed) |
+| 4.1 | Prepare the run | Orchestrator | `build_run/prepare_run.py`, `flag_lifecycle/flag_slug.ensure_feature` | 08b, 11, 12 | prepare_run_test; INV-10, INV-18, INV-50, INV-51, INV-55; live #142 (flag issue-142) |
+| 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_lifecycle.retirement_selection.piggyback_slugs` | 08c | retirement_selection_test; INV-37; no live run with a ride-along flag |
+| 4.3 | Code | Coder Agent | `agents/prompts/coder.md` | 11 | agent prompts; INV-01, INV-02, INV-09, INV-12, INV-13, INV-21, INV-32, INV-34, INV-41, INV-49; smoke-coder; live #142, #146 |
+| 4.4 | Pre-review check | Orchestrator | `limits.precheck`, Starter `scripts/check-flags.mjs` | 08c | check-flags.mjs; INV-47, INV-53; live #142 |
+| 4.5 | Review | Reviewer Agent | `reviewer.md`, `build_run/review_code.py` | 11 | review_code_test; INV-04, INV-11, INV-46; live #142 |
+| 4.6 | Push | Orchestrator | `build_run/ship_code.py` | 11 | ship_code_test; INV-42; live #142 |
+| 4.7 | CI and dark deploy | app CI | Starter workflows | Starter | INV-16 (Starter workflows, no kill switch); live #142 (CI and dark deploy) |
+| 4.8 | Diagnose pipeline failure | Pipeline Agent | pipeline role | 11 | ship_code_test, run_test (the fix loop); no test of the diagnosis itself; no live pipeline failure (ticket 20) |
+| 4.9 | Test the deployed app | Tester Agent | `tester.md`, `build_run/verify_deployed_app.py`, `shared/api_check.py`, `build_run/ui_check.py` | 11 | verify_deployed_app_test, api_check_test, ui_check_test; INV-05, INV-08, INV-28, INV-30, INV-36, INV-44; live #142 |
+| 4.10 | Retest | Orchestrator | `limits.test_retries` | 11 | run_test (retests); no live retest |
+| 4.11 | Roll back the deploy | Orchestrator | `rollback-fly.yml` | 11 | rollback_test; INV-25; no live regression |
+| 4.12 | Release gate | Orchestrator | `build_run/gate_release.py` | 11 | gate_release_test; INV-03; live #142 |
+| 4.13 | Release | Orchestrator | `build_run/gate_release.py`, `flag_lifecycle/` | 08, 11 | gate_release_test; INV-06, INV-07, INV-52; live #142 (clean watch; a trip not seen) |
+| 4.14 | Child fails | Orchestrator | `retrospective/close_child.finish_update_intake` | 10, 11, 15d | finalize_test, close_child_test; INV-19, INV-29; live: #147 stopped provider_blocked and was left without the start label |
+| 5.1-5.7 | Flag lifecycle | Orchestrator | `flag_lifecycle/`, `retrospective/app_state.py` | 08, 08b, 08c | flag_lifecycle tests, app_state_test; INV-37, INV-38, INV-43, INV-51, INV-53; live: 5.1, 5.2 (issue-142, issue-146); 5.3 to 5.7 not seen |
+| 6.1 | Child closed | Orchestrator | `retrospective/close_child.finish_update_intake` | 10 | close_child_test; live #141, #142, #146 |
+| 6.2 | Retrospective | Retrospective Agent | `retrospective/finalize.py`, `retrospective/run_retrospective.py`, `retrospective/cause.py`, `retrospective/event_verdicts.py` | 10, 15b | finalize_test, cause_test, event_verdicts_test; INV-14, INV-17, INV-20, INV-45, INV-58; live: released runs and one provider_blocked; no failure with a cause |
+| 6.3 | Advance to the next child | Orchestrator | `retrospective/close_child.advance` | 10 | close_child_test; INV-23; live: #141 to #142, #146 to #147 |
+| 6.4 | Parent closes | Orchestrator | `retrospective/close_child.advance` | 10 | close_child_test; live #140 |
+| 6.5 | App live and recorded | Orchestrator | `retrospective/app_state.py` | 10 | app_state_test; live: the App State issue was not read |
+| 6.6 | Ongoing signals | scheduled workflows | `template_sync`, `maintenance` | 07 | dependency_updates_test, template_sync_test; INV-33, INV-35; live: scheduled runs succeed daily |
+| 6.7 | Judge events with no run | Retrospective Agent | `retrospective/judge_events.py`, `retrospective/event_verdicts.py` | 15b | judge_events_test, event_verdicts_test; INV-58; no live batch yet (production-feedback.yml runs every six hours) |
+| 7.1 | File the bug Intake | Orchestrator | `try_fix/file_bug.py`, `planning/fix_for.py`, `retrospective/close_child.settle_fix` | 15, 15d | file_bug_test, file_failure_test; INV-26, INV-27, INV-39; no live bug Intake |
+| 7.2 | Factory fix request | Orchestrator | `try_fix/factory_fix_request.py`, bug template (ticket 15c) | 15, 15d | factory_fix_request_test, file_bug_test; INV-26; no live Factory cause |
+| 7.3 | Learning PR | Retrospective Agent | `factory-run.yml` | 10 | learning_pr_test; INV-15; no live learning PR in this redesign |
+| 7.4 | Resume the failed child | Orchestrator | `retrospective/close_child.advance`, `try_fix/resume_after_merge.py` | 15, 15d | resume_after_merge_test, close_child_test (settle_fix); INV-27; no live resume |
+| 7.5 | Needs human | Orchestrator | `try_fix/needs_human.py` | 15 | file_bug_test, file_failure_test; INV-27; live: only the provider alert (#148) |
+| 7.6 | Write the bug ticket | Try Fix Agent | `try_fix/write_bug.py`, `try_fix/validate_bug.py`, `try_fix/render_bug.py` | 15c | write_bug_test, validate_bug_test, render_bug_test; INV-59; the model's tickets unmeasured |
+| 8.1-8.4 | Bugs found later | bugs domain | `bugs/scan_production.py`, `bugs/scan_logs.py`, `bugs/escaped_defects.py`, `bugs/route_bug.py`, `bugs/to_event.py`, `bugs/flood_limits.py`; `try_fix/file_events.py` | 16 | bugs tests (scan_logs, flood_limits, route_bug, to_event, scan_production), file_events_test; INV-31, INV-60; no live production error |
 
 ## From a failure to a fix
 
