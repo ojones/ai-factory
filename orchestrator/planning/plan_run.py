@@ -11,6 +11,7 @@
 import base64
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -131,6 +132,13 @@ class PlanRun:
 # --- the real world (not unit-tested) -------------------------------------------
 
 
+def seed_workdir(app_dir, starter=None):
+    # A new app has no code yet, so the planner reads the Starter Template it will start from (a copy, so reading it changes nothing): the same AGENTS.md, flag client and
+    # routes the coder will find. Without it the planner asked people questions the code answers (found by the second and third live planning).
+    starter = Path(starter or config.FACTORY_DIR / "templates" / "starter")
+    shutil.copytree(starter, app_dir, ignore=shutil.ignore_patterns("node_modules", ".git", "dist", "build"), dirs_exist_ok=True)
+
+
 def available_model(cfg, role, key):
     # The role's model, or its fallback when the provider no longer serves it; NeedsHuman when neither is served.
     profile = cfg["roles"][role]
@@ -188,7 +196,9 @@ def main():
             if agent_user:
                 sh(["sudo", "-n", "setfacl", "-R", "-m", f"u:{agent_user}:rwX,u:{e.get('USER', 'runner')}:rwX", str(app_dir)], check=False)
         else:
-            app_dir.mkdir(parents=True, exist_ok=True)
+            seed_workdir(app_dir)
+            if agent_user:
+                sh(["sudo", "-n", "setfacl", "-R", "-m", f"u:{agent_user}:rwX,u:{e.get('USER', 'runner')}:rwX", str(app_dir)], check=False)
         runner = agent_runner.AgentRunner(cfg, budget, art, work, app_dir, agent_user, on_spend=lambda jwt: round(budget.refresh(jwt), 6))
         path = work / "plan.json"
 

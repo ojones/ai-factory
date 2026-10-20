@@ -209,5 +209,29 @@ class Trigger(unittest.TestCase):
             self.assertNotIn(absent, text)
 
 
+class SeedWorkdir(unittest.TestCase):
+    def test_a_new_apps_planner_gets_a_copy_of_the_starter_without_its_dependencies(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            starter, work = Path(tmp) / "starter", Path(tmp) / "work" / "app"
+            (starter / "backend" / "src").mkdir(parents=True)
+            (starter / "node_modules" / "x").mkdir(parents=True)
+            (starter / "AGENTS.md").write_text("rules")
+            (starter / "backend" / "src" / "app.ts").write_text("code")
+            plan_run.seed_workdir(work, starter)
+            self.assertEqual((work / "AGENTS.md").read_text(), "rules")
+            self.assertTrue((work / "backend" / "src" / "app.ts").exists())
+            self.assertFalse((work / "node_modules").exists())
+            (work / "AGENTS.md").write_text("changed")
+            self.assertEqual((starter / "AGENTS.md").read_text(), "rules")  # a copy: reading or editing it never touches the Starter
+
+    def test_the_real_starter_has_what_the_planner_is_told_to_read(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            plan_run.seed_workdir(Path(tmp) / "app")
+            self.assertTrue((Path(tmp) / "app" / "AGENTS.md").exists())
+            self.assertTrue((Path(tmp) / "app" / "backend" / "src" / "app.ts").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
