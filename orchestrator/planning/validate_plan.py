@@ -132,7 +132,9 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, ma
         if not cs.get("verification"):
             problems.append(f"{name} says nothing about how it will be verified")
         links = cs.get("requirements")
-        if not isinstance(links, list) or not links:
+        if kind == "staging" and not links:
+            links = []  # the staging change set serves the infrastructure, not a requirement of the request, so it may link none
+        elif not isinstance(links, list) or not links:
             problems.append(f"{name} is not linked to any requirement")
         else:
             for link in links:

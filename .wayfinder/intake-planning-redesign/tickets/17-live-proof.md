@@ -2,7 +2,7 @@
 title: Live proof
 type: task
 status: open
-assignee:
+assignee: ojones
 blocked_by: [14-staging-domain.md, 14b-new-app-intakes-are-planned.md, 15-try-fix-domain.md, 15b-failure-events-and-retrospective-verdicts.md, 15c-try-fix-agent-and-bug-template.md, 15d-file-the-bug-intake-and-fix-for.md, 16-bugs-domain.md]
 ---
 

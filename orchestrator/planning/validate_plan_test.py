@@ -207,6 +207,19 @@ class RollbackSized(unittest.TestCase):
         plan["change_sets"][2]["kind"] = "staging"
         self.assertTrue(any("only one of kind `staging`" in x for x in check(plan, "first build")[0]))
 
+    def test_the_staging_change_set_needs_no_requirement_link_but_a_business_one_still_does(self):
+        # found by the first live planning: the staging change set has no business logic, so the planner rightly links it to nothing
+        for empty in ([], None):
+            plan = self.new_app()
+            plan["change_sets"][0]["requirements"] = empty
+            self.assertEqual(check(plan, "first build"), ([], []))
+        plan = self.new_app()
+        plan["change_sets"][0]["requirements"] = ["REQ-99"]
+        self.assertTrue(any("unknown requirement REQ-99" in x for x in check(plan, "first build")[0]))
+        plan = self.new_app()
+        plan["change_sets"][1]["requirements"] = []
+        self.assertTrue(any("not linked to any requirement" in x for x in check(plan, "first build")[0]))
+
     def test_staging_has_no_flag_and_exists_only_for_a_new_app(self):
         plan = self.new_app()
         plan["change_sets"][0]["flag"] = True
