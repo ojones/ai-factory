@@ -49,7 +49,7 @@ def finalize():
         (work / "issue-body.md").write_text(body)
         sh(["gh", "issue", "create", "--repo", f"{owner}/{app}", "--title", outcomes.TITLES.get(d["outcome"], "Build Run: crash"),
             "--body-file", str(work / "issue-body.md")], env={**os.environ, "GH_TOKEN": pat}, check=False)
-    retry = ("" if ok or d.get("intake_kind") != "update" else
+    retry = ("" if ok else
              f"\n\nOnce the provider balance is topped up, add `{intake_labels.START}` again to retry." if d["outcome"] == "provider_blocked"
              else "" if d["outcome"] in outcomes.ANSWERED  # the message already says how to try again
              else f"\n\nEdit this issue if the request needs to change, then add `{intake_labels.START}` again to retry.")
@@ -57,8 +57,7 @@ def finalize():
         f"**Build Run {'finished' if ok else 'stopped'}: `{d['outcome']}`.** {d['message']} ([run]({run_url})){retry}"],
        env={**os.environ, "GH_TOKEN": ftoken}, check=False)
     dark_feature.label_dark_feature(d, os.environ["GITHUB_REPOSITORY"], ftoken)
-    if d.get("intake_kind") == "update":
-        close_child.finish_update_intake(ok, os.environ["GITHUB_REPOSITORY"], d["issue_number"], pat)
+    close_child.finish_update_intake(ok, os.environ["GITHUB_REPOSITORY"], d["issue_number"], pat)
     return 0 if ok else 1
 
 

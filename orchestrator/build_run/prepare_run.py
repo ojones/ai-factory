@@ -12,10 +12,11 @@ from flag_lifecycle import (
     flag_slug,
     retirement_selection,
 )
-from planning import secrets_marker, triage
+from planning import secrets_check, secrets_marker, triage
 from request import read_form
 from shared import (
     agent_process,
+    child_tickets,
     config,
     github,
     preview_token,
@@ -29,7 +30,7 @@ from shared.console import log
 from shared.shell import sh
 from try_fix import fix_request
 
-from build_run import endings, plan_change, read_child, verify_deployed_app
+from build_run import endings, read_child, verify_deployed_app
 
 DEPLOY_WORKFLOW = ".github/workflows/deploy-fly.yml"
 
@@ -53,7 +54,8 @@ class PrepareRun:
         out = self.gh(["issue", "view", self.issue, "--repo", self.factory_repo, "--json", "title,body,labels,comments"],
                       token=self.factory_token).stdout
         issue = json.loads(out)
-        self.update_intake, self.plan_meta = read_child.identify_intake(issue, self.app, self.issue)
+        self.plan_meta = read_child.identify_intake(issue, self.app, self.issue)
+        self.locate_plan()
         self.fix_meta = fix_request.fix_meta(issue["body"] or "")  # an older-style retry carried its state in the body
         # A story that failed before carries its retry state in a comment on this same issue: the attempt, its flag, what the earlier attempts
         # found and the guidance for this one. The same issue and the same flag run again.
@@ -64,7 +66,6 @@ class PrepareRun:
             self.fix_meta = {"origin": self.issue, "attempt": int(retry.get("attempt", 0)), "history": retry.get("history", [])}
         if self.fix_meta:
             self.state.d["fix"] = self.fix_meta
-        self.state.d["intake_kind"] = "update" if self.update_intake else "new"
         self.task, self.cap = read_child.parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
                                            self.lim["cost_cap_usd_ceiling"])
         if retry.get("guidance"):
@@ -77,7 +78,7 @@ class PrepareRun:
             # Checked before the planner, the coder, the reviewer or the tester is paid for, on every start (a retry, a child, a re-run).
             self.require_secrets(self.declared_secrets)
             if self.plan_meta:
-                self.task += plan_change.secrets_note(self.declared_secrets)
+                self.task += secrets_check.secrets_note(self.declared_secrets)
         self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
         # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
         raw_cap = read_form.form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
@@ -106,14 +107,34 @@ class PrepareRun:
         self.apply_template_files(labels)
         self.state.d["base_sha"] = self.head()
         self.stage_template_config(labels)
-        # The base of a first build is the seed commit, the repository's root. Any later Build Run
-        # starts from a commit with history, so its change is an update that needs flags.
-        has_parent = bool(self.git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()[1:])
-        self.build_kind = "update" if has_parent else "first build"
         self.state.d["build_kind"] = self.build_kind
         self.retiring = self.choose_flags_to_retire()
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
+
+    def locate_plan(self):
+        # The plan this child belongs to, from the sub-issues API (not a label or the title): only the parent's number and state are read, never its
+        # body. A child must carry a marker and be a sub-issue of the open plan the marker names, or it is refused as not planned yet.
+        found = child_tickets.parent_info(self.factory_repo, self.issue, self.factory_token, lambda args, token: self.gh(args, token=token, check=False))
+        read_child.require_planned(self.issue, self.plan_meta, found)
+        self.parent = found["number"]
+        self.state.d["parent"] = self.parent
+
+    def require_secrets(self, needed, record=False):
+        # Stop (AwaitingSecret) until every secret declared for this request exists as a GitHub Actions secret on the app's repository. The planning
+        # process made the first check and left the declared names in a marker; this check runs again at the start of every Build Run, before any
+        # Agent is paid for (a retry, a child, a re-run). `record` also comments the request on the Intake; nothing here reads a value.
+        try:
+            have = secrets_check.present_names(lambda args: self.gh(args, check=False), self.app_repo)
+        except secrets_check.SecretsUnreadable as e:
+            raise run_stops.NeedsHuman("other", str(e))
+        self.state.d["secrets"] = [x["name"] for x in needed]
+        missing = secrets_check.missing_secrets(needed, have)
+        if record:
+            self.gh(["issue", "comment", str(self.issue), "--repo", self.factory_repo, "--body", secrets_check.request_comment(needed, missing, self.app_repo)],
+                    token=self.factory_token, check=False)
+        if missing:
+            raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, "add `proceed-with-change` again"))
 
     def copy_template_files(self, group):
         # Copy the Starter Template files in `group` that differ into the app checkout and commit them locally. Returns the paths changed.
@@ -185,7 +206,7 @@ class PrepareRun:
     def choose_flags_to_retire(self):
         # The proven flags that ride along with this run (flag_lifecycle/retirement_selection.py).
         picked, issues = retirement_selection.choose(
-            bool(self.update_intake and not self.fix_meta and self.build_kind == "update"), self.task, self.app_repo.split("/")[0], self.app,
+            not self.fix_meta and self.build_kind == "update", self.task, self.app_repo.split("/")[0], self.app,
             self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout,
             time.strftime("%Y-%m-%d", time.gmtime()))
         if issues:
@@ -205,7 +226,7 @@ class PrepareRun:
                 seen[model] = provider.model_status(base, key, model)
             return seen[model]
 
-        for role in ["coder", "tester", "reviewer"] + (["planner"] if self.update_intake else []):
+        for role in ["coder", "tester", "reviewer"]:
             profile = self.cfg["roles"].get(role)
             if not profile:
                 continue
@@ -313,7 +334,8 @@ class PrepareRun:
         # the flag in `flags.json` before the coder starts, so the coder only wraps code; the flag exists while it and the tester work.
         if flag_slug.SLOT not in (self.task or ""):
             return
-        slug = self.reuse_flags[0] if self.reuse_flags else flag_slug.for_story(self.issue)
+        # A fix child names the failed story's flag (`flag_story` in its marker); any other child, its own number.
+        slug = self.reuse_flags[0] if self.reuse_flags else flag_slug.for_story(child_tickets.story_number(getattr(self, "plan_meta", None) or {}, self.issue))
         self.task = flag_slug.name_in(self.task, slug)
         if getattr(self, "spec", None):
             self.spec = flag_slug.name_in(self.spec, slug)

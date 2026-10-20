@@ -11,7 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from flag_lifecycle import flag_manifest, flag_slug, retirement_selection  # noqa: E402
 from flag_lifecycle.fake_growthbook import FakeGrowthBook  # noqa: E402
-from shared import config, http_client, provider, run_stops  # noqa: E402
+from shared import child_tickets, config, http_client, provider, run_stops  # noqa: E402
 
 from build_run import prepare_run, review_code, track_progress  # noqa: E402
 from build_run import run as run_module
@@ -98,15 +98,12 @@ class ModelFallback(unittest.TestCase):
             with self.assertRaises(run_stops.ProviderBlocked):
                 run.check_models()
 
-    def test_a_first_build_does_not_check_the_planner(self):
-        run, asked, fake = self.run_for({}, update=False)
-        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
-            run.check_models()
-        self.assertNotIn("p/plan", asked)
-        run, asked, fake = self.run_for({})  # an update does ask for the planner's model
-        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
-            run.check_models()
-        self.assertIn("p/plan", asked)
+    def test_the_planner_is_not_a_build_runs_model_the_planning_process_checks_its_own(self):
+        for update in (False, True):
+            run, asked, fake = self.run_for({}, update=update)
+            with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+                run.check_models()
+            self.assertNotIn("p/plan", asked)
 
     def test_the_status_of_a_model_is_read_from_the_answer(self):
         for answer, expected in (((200, {}), "ok"), ((404, "x"), "missing"), ((400, {"error": "model foo not found"}), "missing"),
@@ -133,9 +130,7 @@ class ChoosingFlagsToRetire(unittest.TestCase):
         self.assertEqual(self.run_for(self.flags), ["a", "b", "c"])
 
     def test_a_first_build_and_an_automatic_retry_retire_nothing(self):
-        self.assertEqual(self.run_for(self.flags, kind="first build"), [])
         self.assertEqual(self.run_for(self.flags, fix={"origin": 1, "attempt": 1}), [])
-        self.assertEqual(self.run_for(self.flags, update=False), [])
 
     def test_a_slug_gone_from_the_manifest_is_dropped_and_a_failed_lookup_does_not_stop_the_run(self):
         self.assertEqual(self.run_for(self.flags, manifest="b,c,d"), ["b", "c"])
@@ -278,6 +273,72 @@ class SuppressionsAndLintConfig(unittest.TestCase):
             run.apply_template_files({"update-app-intake"})
             run.stage_template_config({"update-app-intake"})
         self.assertEqual((run.app_dir / "eslint.config.mjs").read_text(), "// old\n")
+
+
+
+class LocatingThePlan(unittest.TestCase):
+    MARKER = {"parent": 7, "cs": "CS-1", "kind": "update", "flag": True, "size": "S"}
+
+    def run_for(self, marker, parent_state="open", has_parent=True, require=False, update=True):
+        from shared.fake_issues import FakeIssues
+        gh = FakeIssues()
+        gh.add(7, state=parent_state)
+        child = gh.add(12)
+        if has_parent:
+            gh.subs[7] = [child]
+        run = object.__new__(BuildRun)
+        run.update_intake, run.plan_meta, run.issue, run.factory_repo, run.factory_token = update, marker, str(child), "o/f", "tok"
+        run.lim = {"require_plan": require}
+        run.state = track_progress.State("/tmp/unused-state.json", "app", str(child), "u")
+        run.gh = lambda args, token=None, check=True: gh(args, token)
+        return run
+
+    def test_a_child_of_an_open_plan_reads_only_the_parents_number(self):
+        run = self.run_for(self.MARKER)
+        run.locate_plan()
+        self.assertEqual((run.parent, run.state.d["parent"]), (7, 7))
+
+    def test_a_child_with_a_marker_but_no_parent_is_refused(self):
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
+            self.run_for(self.MARKER, has_parent=False).locate_plan()
+        self.assertIn("not planned yet", str(cm.exception))
+        self.assertIn("not a sub-issue of any plan", str(cm.exception))
+
+    def test_a_child_whose_plan_has_since_closed_is_refused(self):
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
+            self.run_for(self.MARKER, parent_state="closed").locate_plan()
+        self.assertIn("is closed", str(cm.exception))
+
+    def test_a_marker_naming_another_plan_is_refused(self):
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
+            self.run_for(dict(self.MARKER, parent=9)).locate_plan()
+        self.assertIn("names #9 but it is a sub-issue of #7", str(cm.exception))
+
+    def test_an_unplanned_update_intake_is_refused(self):
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
+            self.run_for({}, has_parent=False).locate_plan()
+        self.assertIn("no plan marker", str(cm.exception))
+
+    def test_a_lookup_that_fails_is_loud(self):
+        run = self.run_for(self.MARKER)
+        run.gh = lambda args, token=None, check=True: mock.Mock(returncode=1, stdout="", stderr="HTTP 500")
+        with self.assertRaises(child_tickets.ChildTicketError):
+            run.locate_plan()
+
+    def test_a_staging_child_is_never_built(self):
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
+            self.run_for(dict(self.MARKER, kind="staging")).locate_plan()
+        self.assertIn("staging child", str(cm.exception))
+
+    def test_a_fix_child_names_the_failed_storys_flag_not_its_own(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = NamingTheFlag()
+            run = t.run_for(tmp)
+            run.plan_meta = dict(self.MARKER, flag_story=9)
+            run.name_the_flag()
+            self.assertIn("slug `issue-9`", run.task)
+            self.assertEqual(run.state.d["flags"], ["issue-9"])
+            self.assertTrue(run.gb.production_enabled("app.feature.issue-9") is False)
 
 
 if __name__ == "__main__":

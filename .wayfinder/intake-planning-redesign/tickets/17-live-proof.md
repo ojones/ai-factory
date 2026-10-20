@@ -3,7 +3,7 @@ title: Live proof
 type: task
 status: open
 assignee:
-blocked_by: [14-staging-domain.md, 15-try-fix-domain.md, 16-bugs-domain.md]
+blocked_by: [14-staging-domain.md, 14b-new-app-intakes-are-planned.md, 15-try-fix-domain.md, 16-bugs-domain.md]
 ---
 
 ## Question

@@ -53,7 +53,7 @@ class Verdicts(unittest.TestCase):
 
     def test_findings_reach_the_coder_with_whatever_detail_they_carry(self):
         raw = {"file": "backend/src/app.ts", "line": "12", "repro": "curl -i /x", "suggested_fix": "", "requirement": None}
-        view = review_code.finding_view("reviewer", "no kill switch", "app.use(r)", raw)
+        view = review_code.finding_view("reviewer", "no health route", "app.use(r)", raw)
         self.assertEqual(view["file"], "backend/src/app.ts")
         self.assertNotIn("suggested_fix", view)
         text = review_code.describe_finding(view)

@@ -31,7 +31,6 @@ from try_fix import fix_request
 from build_run import endings, gate_release, review_code, track_progress, verify_deployed_app
 from build_run.agent_calls import AgentCalls
 from build_run.gate_release import ReleaseStep
-from build_run.plan_change import PlanChange
 from build_run.prepare_run import PrepareRun
 from build_run.review_code import ReviewCode
 from build_run.ship_code import ShipCode
@@ -40,7 +39,7 @@ from build_run.verify_deployed_app import VerifyDeployedApp
 from build_run.write_code import WriteCode
 
 
-class BuildRun(PrepareRun, AgentCalls, PlanChange, WriteCode, ReviewCode, ShipCode, VerifyDeployedApp, ReleaseStep, TrackProgress):
+class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDeployedApp, ReleaseStep, TrackProgress):
     # Sequencing only: `run` calls each step in order. Each step's code is in the mixin named above (one file each), over this object's state.
     retiring = ()  # the flags this run retires in passing (set in setup)
     retry_state = {}  # the story's retry state from its issue (fix_request.retry_state)
@@ -80,7 +79,7 @@ class BuildRun(PrepareRun, AgentCalls, PlanChange, WriteCode, ReviewCode, ShipCo
         # and the runner can reach them; every Agent then runs as it.
         self.agent_user = e.get("AGENT_USER") or None
         self.preview = None
-        self.build_kind = "first build"  # becomes "update" in setup() when the base commit has history
+        self.build_kind = "update"  # every Build Run is a planned child of an existing app; staging is not a Build Run
         self.auth_header = "Authorization: Basic " + base64.b64encode(
             f"x-access-token:{self.pat}".encode()).decode()
         print(f"::add-mask::{self.auth_header.split()[-1]}", flush=True)
@@ -108,9 +107,6 @@ class BuildRun(PrepareRun, AgentCalls, PlanChange, WriteCode, ReviewCode, ShipCo
     def run(self):
         try:
             self.setup()
-            if self.update_intake and not self.plan_meta and self.lim.get("planner_enabled", True):
-                if self.plan_change():
-                    return
             base = self.state.d["base_sha"]
             findings_path = self.work / "findings-0.json"
             findings_path.write_text(json.dumps({"blocking": [], "minor": []}))
@@ -190,9 +186,7 @@ class BuildRun(PrepareRun, AgentCalls, PlanChange, WriteCode, ReviewCode, ShipCo
                             self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
                             self.watch_release()
                     else:
-                        self.state.d.update(outcome="nothing_to_release", message=(
-                            "First build deployed and live; it has no flags to release." if self.build_kind == "first build"
-                            else "Clean, but the update added no flag, so there was nothing to release."))
+                        self.state.d.update(outcome="nothing_to_release", message="Clean, but the change added no flag, so there was nothing to release.")
                     self.archive_retired_flags(base, head)
                     return
                 if verify_deployed_app.failed_checks(test_failures):

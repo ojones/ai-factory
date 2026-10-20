@@ -1,0 +1,77 @@
+name: Plan
+
+# Planning is its own process (STEP 2.1 to 2.5), before any code is written. Adding the label `update-app-intake` (or `new-app-intake`) to an
+# issue, which a form does when the issue is created, starts it: the planner Agent reads the request (and, for an update, the app's code), the
+# plan is checked, and one child ticket (a sub-issue with complete coding instructions and one flag) is filed per change set. The first child with
+# nothing to wait for is started with `proceed-with-change`; the Orchestrator starts the rest one at a time as each finishes.
+# orchestrator/planning/plan_run.py does the work. A stop (a question, a refusal, a missing secret) comments on the issue; to plan again, edit the
+# issue, remove the label and add it again. `limits.planner_enabled` in agents/profiles.yml is the switch.
+#
+# A child ticket carries the `update-app-intake` label too, so it is never planned: the job skips a body with the `factory-plan` marker. A benchmark
+# task issue is not planned either (the benchmark measures a Build Run, and has to be reworked to file planned children: see the ticket's resolution).
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: plan-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+env:
+  ISSUE_NUMBER: ${{ github.event.issue.number }}
+
+jobs:
+  plan:
+    # Job-level, so label events this job does not handle never queue behind a real one.
+    if: >-
+      (github.event.label.name == 'update-app-intake' || github.event.label.name == 'new-app-intake') &&
+      !contains(github.event.issue.body, 'factory-plan:') &&
+      !contains(github.event.issue.labels.*.name, 'benchmark')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: factory
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OpenHands and the orchestrator's dependencies
+        run: pip install "openhands==$(cat factory/agents/openhands-version.txt)" pyyaml
+
+      # limits.agent_isolation in agents/profiles.yml, as in build-run.yml: with `user`, the planner Agent runs as a separate unprivileged account.
+      - name: Working directories, and the Agent user if isolation is on
+        run: |
+          mode=$(python -c "import yaml; print(yaml.safe_load(open('factory/agents/profiles.yml'))['limits'].get('agent_isolation', 'off'))")
+          if [ "$mode" = user ]; then
+            sudo apt-get install -y -qq acl > /dev/null
+            sudo useradd -m -s /bin/bash agent
+            sudo mkdir -p /srv/agent
+            sudo chown agent:agent /srv/agent
+            sudo setfacl -R -m "u:$USER:rwx" /srv/agent
+            sudo setfacl -R -d -m "u:$USER:rwx" -m u:agent:rwx /srv/agent
+            git config --global --add safe.directory '*'
+            echo "AGENT_USER=agent" >> "$GITHUB_ENV"
+            echo "BUILD_RUN_DIR=/srv/agent/run" >> "$GITHUB_ENV"
+            echo "APP_DIR=/srv/agent/app" >> "$GITHUB_ENV"
+          else
+            echo "BUILD_RUN_DIR=$GITHUB_WORKSPACE/run" >> "$GITHUB_ENV"
+            echo "APP_DIR=$GITHUB_WORKSPACE/app" >> "$GITHUB_ENV"
+          fi
+
+      - name: Unit-test the orchestrator's deterministic logic
+        run: python -m unittest discover -p "*_test.py" factory/orchestrator
+
+      - name: Plan the Intake
+        env:
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+        run: PYTHONPATH=factory/orchestrator python -m planning.plan_run

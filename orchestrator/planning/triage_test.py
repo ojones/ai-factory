@@ -35,7 +35,7 @@ class Feasibility(unittest.TestCase):
         self.assertIn("payment provider", possible)
         text = t.refusal_text(category, reasons, possible)
         self.assertIn("Nothing was built", text)
-        self.assertIn("proceed-with-change", text)
+        self.assertIn("Nothing was built", text)
 
     def test_an_ok_missing_or_malformed_feasibility_is_not_a_refusal(self):
         for plan in ({}, {"feasibility": {"status": "ok"}}, {"feasibility": "blocked"}, None, {"feasibility": {"status": "BLOCKED"}}):

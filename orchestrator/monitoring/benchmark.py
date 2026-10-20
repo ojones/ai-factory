@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 from request import intake_labels, render_form
-from shared import config, github, http_client, preview_token
+from shared import config, github, http_client, outcomes, preview_token
 
 ROOT = config.FACTORY_DIR
 SUITE = ROOT / "agents" / "benchmark" / "suite.json"
@@ -333,7 +333,7 @@ def run_pass(label, overrides, task_names, execute):
             issue = file_task_issue(repo, app, pass_id, task)
             run_id = dispatch_and_wait(repo, app, branch, issue)
             report = read_report(repo, run_id) if run_id else None
-            oracle = run_oracle(app, task) if report and report.get("outcome") in ("released", "nothing_to_release") else []
+            oracle = run_oracle(app, task) if report and report.get("outcome") in outcomes.OK else []
             score = score_task(task, report, oracle)
             scores.append(score)
             print(f"{task['id']}: {'PASS' if score['passed'] else 'FAIL'} ({score['outcome']}, ${score['cost_usd']:.3f}, {score['rounds']} rounds)", flush=True)

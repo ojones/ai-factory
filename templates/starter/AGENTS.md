@@ -58,19 +58,14 @@ business logic plus one boot/health-check smoke test — see
 - `backend/src/feature-flags.ts` holds the single OpenFeature client,
   initialized once at startup (`index.ts`, before `app.listen()`) — never
   re-derived per request.
-- When flags apply: the first build of an app needs none (the kill switch
-  covers it, and it goes live on deploy). Every later update to an existing
-  app goes behind a flag of its own, to protect `main`. One flag covers the
-  whole change, not each route or screen. If the Intake names a flag, add it.
+- When flags apply: every change goes behind a flag of its own, to protect
+  `main`, unless the task says it needs none. One flag covers the whole
+  change, not each route or screen. The task gives the flag's slug.
 - Flag-key convention: `<app-slug>.feature.<slug>` (e.g. `my-app.feature.todos-crud`).
   The app slug is derived at runtime (`appSlug()`; Fly's `FLY_APP_NAME`, or
   `APP_SLUG` locally) — never hardcode it. Use `featureKey(slug)` /
-  `killSwitchKey()` and `isFeatureEnabled(res, slug)` from `feature-flags.ts`
-  at every call site, never raw key strings, so Preview works uniformly. The
-  mandatory global kill switch (`<app-slug>.global-kill-switch`) is already
-  wired into top-level middleware in `app.ts`, mounted after the health route
-  (so health checks keep working in maintenance mode) and before everything
-  else.
+  `isFeatureEnabled(res, slug)` from `feature-flags.ts` at every call site,
+  never raw key strings, so Preview works uniformly.
 - **Record every new flag in `flags.json`** (repo root, an array of
   `{"slug": "todos-crud", "description": "..."}`) in the same commit that
   adds it in code. The Orchestrator reads this to create and release flags

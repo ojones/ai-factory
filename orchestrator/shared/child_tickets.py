@@ -120,11 +120,18 @@ class ChildTickets:
                 pass  # best effort: the error being raised is the one that matters
 
 
-def parent_of(repo, number, token, run=None):
-    # The parent issue's number, or None for an issue with no parent (GitHub answers 404 "No parent issue found"). Any other failure raises.
+def parent_info(repo, number, token, run=None):
+    # {number, state} of the parent issue, or None for an issue with no parent (GitHub answers 404 "No parent issue found"). Any other failure raises.
     p = (run or github.run)(["api", f"repos/{repo}/issues/{number}/parent", "--method", "GET"], token)
     if p.returncode == 0:
-        return int(json.loads(p.stdout)["number"])
+        doc = json.loads(p.stdout)
+        return {"number": int(doc["number"]), "state": str(doc.get("state", "")).upper()}
     if "404" in (p.stderr or "") or "No parent issue" in (p.stdout or "") + (p.stderr or ""):
         return None
     raise ChildTicketError(f"GitHub refused the parent lookup for #{number}: {(p.stderr or '').strip()[:200]}")
+
+
+def parent_of(repo, number, token, run=None):
+    # The parent issue's number, or None.
+    info = parent_info(repo, number, token, run)
+    return info["number"] if info else None

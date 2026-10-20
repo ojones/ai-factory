@@ -163,15 +163,13 @@ class Invariants(unittest.TestCase):
                     "4\t0\ttemplates/starter/package.json", ""):
             self.assertFalse(learning_pr.auto_merge_eligible(bad), bad)
 
-    def test_inv16_the_starter_flags_fail_closed_and_the_kill_switch_is_placed_correctly(self):
+    def test_inv16_the_starter_flags_fail_closed_and_there_is_no_kill_switch(self):
         sources = {p: p.read_text() for p in (STARTER / "backend/src").rglob("*.ts") if "__tests__" not in p.parts}
         for path, text in sources.items():
             self.assertIsNone(re.search(r"getBooleanValue\([^)]*,\s*true\s*\)", text), f"{path} reads a flag with default true")
+        self.assertFalse([p.name for p, text in sources.items() if "kill" in text.lower()], "the Starter has no kill switch: a feature flag per change is the only switch")
         app = sources[STARTER / "backend/src/app.ts"]
-        self.assertIn("getBooleanValue(killSwitchKey(), false)", app)
-        health, kill, static = (app.index(x) for x in ("app.use(healthRouter)", "getBooleanValue(killSwitchKey()", "app.use(express.static"))
-        self.assertLess(health, kill)
-        self.assertLess(kill, static)
+        self.assertLess(app.index("app.use(healthRouter)"), app.index("app.use(express.static"))  # health answers before anything else is mounted
 
     def test_inv17_finalize_and_the_retrospective_always_run(self):
         wf = yaml.safe_load((ROOT / ".github/workflows/build-run.yml").read_text())
@@ -256,13 +254,13 @@ class Invariants(unittest.TestCase):
         self.assertIn("contains(github.event.issue.labels.*.name, 'update-app-intake')", cond)
         for module in (run_module, run_audit, app_state, dashboard, lesson_records):
             self.assertIs(module.outcomes, outcomes)  # one list of good endings, defined in shared/outcomes.py, not mirrored
-        self.assertIn("planned", outcomes.OK)
+        self.assertNotIn("planned", outcomes.OK)  # planning is its own process (plan.yml); a Build Run never ends by planning
 
     def test_inv25_nothing_is_reverted_in_git_and_only_a_regression_rolls_the_deploy_back_through_ci(self):
         import inspect
         d = {"commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
         self.assertTrue(rollback.rollback_decision(dict(d, outcome="regression"))[0])
-        for outcome in ("released", "nothing_to_release", "planned", "watchdog_disabled", "round_limit", "needs_human", "stuck",
+        for outcome in ("released", "nothing_to_release", "watchdog_disabled", "round_limit", "needs_human", "stuck",
                         "budget_exhausted", "time_limit", "crash", "provider_blocked"):
             self.assertFalse(rollback.rollback_decision(dict(d, outcome=outcome))[0], outcome)
         # the Orchestrator has no way to revert: no function, and the rollback runs the app's own workflow and touches no git
@@ -282,7 +280,7 @@ class Invariants(unittest.TestCase):
         from try_fix import fix_request as fr
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
             self.assertTrue(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
-        for outcome in ("released", "nothing_to_release", "planned"):
+        for outcome in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         self.assertEqual((fr.route("plan_gap"), fr.route("spec_ambiguity"), fr.route("infra"), fr.route(None)), ("factory", "app", "info", "info"))
         self.assertEqual(fr.route(fr.inferred_category(None, "watchdog_disabled")), "app")  # a release the watchdog switched off is the story's to fix
@@ -721,6 +719,56 @@ class Invariants(unittest.TestCase):
             self.assertEqual(file_children.file_children(*args, tickets=tickets), made)  # filed once
         self.assertEqual(len(gh.subs[7]), 2)
         self.assertEqual(len(gh.blocked), 1)
+
+    def test_inv55_a_build_run_starts_only_for_a_planned_child_of_an_open_plan(self):
+        from build_run import read_child
+        from shared import child_tickets
+        marker = {"parent": 7, "cs": "CS-1", "kind": "update"}
+        self.assertIsNone(read_child.planned_problem(marker, {"number": 7, "state": "OPEN"}))
+        for bad in (({}, {"number": 7, "state": "OPEN"}), (marker, None), (marker, {"number": 7, "state": "CLOSED"}), (marker, {"number": 8, "state": "OPEN"})):
+            self.assertTrue(read_child.planned_problem(*bad), bad)
+        self.assertTrue(read_child.planned_problem({"parent": 7, "kind": "staging"}, {"number": 7, "state": "OPEN"}))  # a staging child is never a Build Run
+        self.assertEqual(child_tickets.story_number({"flag_story": 9}, 12), 9)
+
+    def test_inv56_planning_is_its_own_process_that_files_a_child_and_can_always_be_retried(self):
+        from planning import plan_run
+        from shared import child_tickets as ct
+        from shared.fake_issues import FakeIssues
+        wf = yaml.safe_load((ROOT / ".github/workflows/plan.yml").read_text())
+        cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
+        self.assertIn("update-app-intake", cond)
+        self.assertIn("factory-plan", cond)  # never a child
+        self.assertIn("plan-", wf["concurrency"]["group"])
+        gh = FakeIssues()
+        gh.add(7)
+        comments = []
+        doc = {"feasibility": {"status": "ok"}, "requirements": [{"id": "REQ-1", "text": "t"}], "assumptions": [], "open_questions": [], "secrets": [],
+               "change_sets": [{"id": "CS-1", "title": "T", "requirements": ["REQ-1"], "depends_on": [], "criteria": ["AC-1: x"], "verification": ["v"],
+                                "size": "S", "flag": True, "internal_only": False, "out_of_scope": []}]}
+        intake = {"kind": "update", "app": "notes", "task": "t", "cap": 2.0, "cap_override": None, "declared": [], "label": "update-app-intake"}
+        tickets = ct.ChildTickets("o/f", 7, "pat", gh)
+        run = lambda d: plan_run.PlanRun(7, intake, {}, lambda task: (d, 0.0, None), comments.append, lambda: set(), tickets,
+                                         lambda parent, sets, order, secrets: [(c["id"], 100) for c in sets]).run()
+        self.assertEqual(len(run(doc)["children"]), 1)  # even one change set is a child
+        stopped = run(dict(doc, open_questions=[{"id": "Q-1", "text": "?", "blocking": True}]))
+        self.assertEqual(stopped["ending"], "needs_human")
+        self.assertIn("remove the `update-app-intake` label and add it again", comments[-1])
+        self.assertNotIn("planned", outcomes.OK)  # a Build Run never ends by planning
+        self.assertFalse(hasattr(BuildRun, "plan_change"))
+
+    def test_inv57_a_staging_child_is_verified_by_deterministic_checks_before_anything_is_built_on_it(self):
+        from shared import child_tickets
+        from staging import read_staging_child, verify_infrastructure
+        self.assertEqual(verify_infrastructure.CHECKS, ("ci_green", "deploy_healthy", "flag_service", "preview_token", "secrets_present", "smoke"))
+        wf = (ROOT / ".github/workflows/update-app-intake.yml").read_text()
+        self.assertIn("!contains(github.event.issue.body, '\"kind\":\"staging\"')", wf)
+        marker = child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "update"})
+        with self.assertRaises(read_staging_child.NotStageable):  # only a staging child is staged
+            read_staging_child.check_child({"body": marker + "\n\n### App name\n\nnotes\n"}, {"number": 7, "state": "OPEN"}, {"body": ""}, [], 0, 1, PROFILES["limits"])
+        self.assertEqual(read_staging_child.staging_children_in_flight([{"number": 3, "body": child_tickets.render_marker({"kind": "staging"})}], 4), [3])
+        script = (ROOT / "infra/app-staging/stage.sh").read_text()
+        self.assertIn("staging.verify_infrastructure", script)
+        self.assertLess(script.index("staging.verify_infrastructure"), script.index("retrospective.close_child close"))  # verified, then the next child starts
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

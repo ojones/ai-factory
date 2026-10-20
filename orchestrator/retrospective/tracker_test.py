@@ -9,7 +9,7 @@ from retrospective import tracker  # noqa: E402
 
 STATE = {"app": "demo", "outcome": "round_limit", "message": "4 review rounds used without a clean pass",
          "run_url": "http://run", "issue_number": "7", "spent_usd": 1.5, "commits": ["a"],
-         "blocking": [{"summary": "The kill switch is mounted after the new route"}],
+         "blocking": [{"summary": "The new route is mounted before the health route"}],
          "stages": [{"stage": "Coder", "round": "1", "verdict": "pushed", "cost_usd": 0.2, "usage": {"seconds": 120, "calls": 30}},
                     {"stage": "Release", "round": "-", "verdict": "x", "cost_usd": 0, "usage": None}]}
 

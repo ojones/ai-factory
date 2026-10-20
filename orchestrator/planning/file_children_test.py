@@ -40,7 +40,7 @@ class FilingChildren(unittest.TestCase):
                          (7, "CS-2", "update", True, "S"))
         self.assertIn("- AC-1" if False else "- a", second["body"])  # the criteria are in the body: the child needs nothing else to be built
         self.assertIn("### What should change?", second["body"])
-        self.assertIn("plan:7", {label["name"] for label in second["labels"]})
+        self.assertEqual({label["name"] for label in second["labels"]}, {"update-app-intake", "app:notes", "waiting-on-plan"})  # the parent link is the sub-issue, not a label
         starts = [c for c in self.gh.calls if isinstance(c, list) and c[:2] == ["issue", "edit"]]
         self.assertEqual([c[2] for c in starts], [str(numbers["CS-1"])])  # CS-3 has nothing to wait for either, but waits its turn
         self.assertIn(intake_labels.START, starts[0])

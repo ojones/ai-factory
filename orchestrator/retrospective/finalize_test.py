@@ -37,7 +37,7 @@ class Finalize(unittest.TestCase):
         state = {**repo.d, "app": "demo", "issue_number": "66", "run_url": "https://x/run/9", "outcome": outcome,
                  "message": "4 review rounds used without a clean pass", "cap_usd": 0.75, "spent_usd": 0.6, "review_passes": 4,
                  "stages": stages(), "blocking": [{"source": "reviewer", "summary": "still wrong"}], "build_kind": "update",
-                 "intake_kind": "update", **(extra or {})}
+                 **(extra or {})}
         (work / "state.json").write_text(json.dumps(state))
         calls = []
 
@@ -120,7 +120,7 @@ class Policy(unittest.TestCase):
     def test_every_bad_ending_gets_a_fix_request_and_good_ones_do_not(self):
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled", "regression"):
             self.assertTrue(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
-        for outcome in ("released", "nothing_to_release", "planned"):
+        for outcome in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         self.assertFalse(lesson_records.wants_fix_request({"outcome": "crash"}, {"fix_requests": False}))
 

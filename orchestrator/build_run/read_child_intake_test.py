@@ -24,15 +24,16 @@ class Identity(unittest.TestCase):
     def issue(self, title="notes", labels=(), body=""):
         return {"title": title, "body": body, "labels": [{"name": n} for n in labels]}
 
-    def test_a_new_app_intake_is_titled_with_the_app(self):
-        self.assertEqual(read_child.identify_intake(self.issue(labels=["new-app-intake"]), "notes", 5), (False, {}))
-        with self.assertRaises(run_stops.NeedsHuman):
-            read_child.identify_intake(self.issue(title="other"), "notes", 5)
+    def test_a_build_run_starts_for_a_child_ticket_only_never_an_intake(self):
+        for not_a_child in (self.issue(labels=["new-app-intake"]), self.issue(title="other"), self.issue(labels=[])):
+            with self.assertRaises(run_stops.NeedsHuman) as cm:
+                read_child.identify_intake(not_a_child, "notes", 5)
+            self.assertIn("planned child tickets only", str(cm.exception))
 
     def test_an_update_intake_needs_the_form_the_label_and_the_matching_app(self):
         body = FORM.format(app="notes", task="x", cap="")
         ok = self.issue(title="notes: add tags", labels=["update-app-intake", "app:notes"], body=body)
-        self.assertEqual(read_child.identify_intake(ok, "notes", 5), (True, {}))
+        self.assertEqual(read_child.identify_intake(ok, "notes", 5), {})
         for bad in (self.issue(labels=["update-app-intake"], body=body),  # no app: label
                     self.issue(labels=["update-app-intake", "app:todo"], body=body),
                     self.issue(labels=["update-app-intake", "app:todo"], body=FORM.format(app="todo", task="x", cap="")),
@@ -42,7 +43,7 @@ class Identity(unittest.TestCase):
 
     def test_a_child_issue_reports_its_plan_metadata(self):
         body = render_child.child_body("notes", "t", 7, {"id": "CS-2"})
-        _, meta = read_child.identify_intake(self.issue(labels=["update-app-intake", "app:notes"], body=body), "notes", 5)
+        meta = read_child.identify_intake(self.issue(labels=["update-app-intake", "app:notes"], body=body), "notes", 5)
         self.assertEqual(meta["parent"], 7)
 
 

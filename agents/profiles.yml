@@ -138,6 +138,8 @@ limits:
   # An Update App Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
   # for one Intake. Set planner_enabled false to run an Update App Intake's request straight through as one change.
   planner_enabled: true
+  # What the planning process may spend on one Intake, apart from the Build Runs of its children.
+  planner_cost_cap_usd: 0.50
   planner_max_change_sets: 8
   # More acceptance criteria than this in one change set means it is not one slice to release and revert together; the plan is rejected.
   planner_max_criteria: 6

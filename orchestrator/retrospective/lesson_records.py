@@ -62,7 +62,7 @@ def lessons_from(facts):
 
 
 def wants_fix_request(d, limits):
-    # A fix request is filed for every Build Run that did not end well (`planned` and the good endings do not).
+    # A fix request is filed for every Build Run that did not end well (the good endings do not).
     return bool(limits.get("fix_requests", True)) and d.get("outcome") not in outcomes.OK and d.get("outcome") not in outcomes.ANSWERED + (outcomes.PROVIDER_BLOCKED,)
 
 

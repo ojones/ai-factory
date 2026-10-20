@@ -31,9 +31,8 @@ class ReleaseStep:
         return http_client.request(method, f"{config.GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
 
     def link_flags_to_issue(self, slugs):
-        # The story names its flag (flag_lifecycle/story_link.py). Update App Intakes only: a first build's title must stay the bare app name.
-        # Best effort, never a reason to stop the run.
-        if not self.update_intake or not slugs:
+        # The story names its flag (flag_lifecycle/story_link.py). Best effort, never a reason to stop the run.
+        if not slugs:
             return
         try:
             self.issue_title = story_link.link(self.gh, github.ensure_label, self.factory_repo, self.factory_token, self.issue,

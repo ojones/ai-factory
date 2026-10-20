@@ -136,7 +136,7 @@ class AfterwardsOnlyOneAlert(unittest.TestCase):
         create = next(c for c in calls if c[:2] == ["issue", "create"])
         self.assertIn("provider-blocked", create[create.index("--label") + 1])
         body = create[create.index("--body") + 1]
-        for needle in ("no balance", "Add balance", "proceed-with-change", "ready-for-staging", "redeployed", "no fix request or retrospective"):
+        for needle in ("no balance", "Add balance", "proceed-with-change", "remove its label and add it again", "redeployed", "no fix request or retrospective"):
             self.assertIn(needle, body)
 
     def test_later_blocked_runs_comment_on_the_open_alert_instead_of_filing_more(self):

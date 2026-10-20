@@ -1,15 +1,10 @@
-# The gate that starts a Build Run for a child (STEP 4.1's trigger): a change request for a Managed App that already exists.
+# The gate that starts a Build Run for a child ticket (STEP 4.1's trigger). Planning (`planning/plan_run.py`) files each Intake's change sets as child tickets,
+# sub-issues of the Intake carrying a `factory-plan` marker, and puts `proceed-with-change` on the first child with nothing to wait for; the rest are
+# labelled `waiting-on-plan`, and `retrospective/close_child.py` gives `proceed-with-change` to the next one whose blockers are closed, one at a time, so an app
+# never has two pending Build Runs (GitHub keeps only one pending run per concurrency group). A staging child is staged by App Staging instead.
 #
-# An update Intake is a GitHub issue made from the "Update App Intake" form (label `update-app-intake`). Adding the label
-# `proceed-with-change` starts it at once: `.github/workflows/update-app-intake.yml` runs `start`, which checks the issue
-# and dispatches a Build Run. There is no App Staging; the app, its repo and its flags already exist.
-#
-# The Build Run then plans (agents/prompts/planner.md), and if the plan is one change set it codes, tests, reviews and
-# releases that change. If the plan has several change sets, the Build Run files one child issue per change set
-# (planning/file_children.py: sub-issues of the Intake, blocked by their dependencies; labels `update-app-intake`, `app:<slug>`, `plan:<parent>`) and ends. The first child with nothing to wait for gets
-# `proceed-with-change` straight away; the others get `waiting-on-plan`. When a child's Build Run succeeds, `retrospective/close_child.py`
-# gives `proceed-with-change` to the next sibling whose blockers are all closed (one at a time). So the children run one after
-# another, never two pending runs of one app at once (GitHub keeps only one pending run per concurrency group).
+# `.github/workflows/update-app-intake.yml` runs `start`, which refuses (comments, removes the label) anything that is not a planned child of an open plan,
+# or whose app is not one this Factory built, and otherwise labels it app:<slug> and dispatches the Build Run.
 #
 # The label is added with the PAT, not the Actions token: events made by the Actions token do not start workflows.
 #
@@ -22,7 +17,9 @@ import os
 import sys
 
 from request import check_target_app, intake_labels, read_form
-from shared import github
+from shared import child_tickets, github
+
+from build_run import read_child
 
 
 def start():
@@ -48,11 +45,18 @@ def start():
         return refuse(f"`{owner}/{app}` does not exist. An update Intake changes an app the Factory already built; a new app starts with an Intake.")
     if not check_target_app.is_factory_repo(json.loads(info.stdout).get("description"), repo):
         return refuse(f"`{owner}/{app}` was not created by this Factory (its description is not an `Intake: {repo}#<n>` marker), so the Factory will not change it.")
+    # Only a planned child starts a run: a sub-issue of an open plan whose body carries the `factory-plan` marker naming that plan.
+    try:
+        problem = read_child.planned_problem(child_tickets.read_marker(body), child_tickets.parent_info(repo, number, pat))
+    except child_tickets.ChildTicketError as e:
+        problem = f"the plan could not be looked up ({e})"
+    if problem:
+        return refuse(f"this is not a planned child: {problem}.")
     github.ensure_label(repo, f"app:{app}", pat, "1d76db", f"Issues about the Managed App {app}")
     github.run(["issue", "edit", number, "--repo", repo, "--add-label", f"app:{app}"], pat, check=True)
     github.run(["workflow", "run", "build-run.yml", "--repo", repo, "-f", f"issue_number={number}", "-f", f"app_name={app}"], pat, check=True)
     github.run(["issue", "comment", number, "--repo", repo, "--body",
-        f"**Update App Intake accepted.** A Build Run for `{app}` has been dispatched: it plans the change, then codes, tests and reviews it, "
+        f"**Update App Intake accepted.** A Build Run for `{app}` has been dispatched: it codes, tests and reviews the change, "
         f"and releases it behind its flag only when everything passes. ([run]({run_url}))"], token)
     return 0
 

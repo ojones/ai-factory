@@ -15,7 +15,7 @@ def write_findings(work, n, summaries):
 
 STATE = {"app": "demo", "outcome": "round_limit", "message": "4 review rounds used without a clean pass",
          "run_url": "http://run", "issue_number": "7", "spent_usd": 1.5, "commits": ["a"],
-         "blocking": [{"summary": "The kill switch is mounted after the new route"}],
+         "blocking": [{"summary": "The new route is mounted before the health route"}],
          "stages": [{"stage": "Coder", "round": "1", "verdict": "pushed", "cost_usd": 0.2, "usage": {"seconds": 120, "calls": 30}},
                     {"stage": "Release", "round": "-", "verdict": "x", "cost_usd": 0, "usage": None}]}
 
@@ -23,8 +23,8 @@ STATE = {"app": "demo", "outcome": "round_limit", "message": "4 review rounds us
 class Facts(unittest.TestCase):
     def test_recurring_findings_survive_rewording_and_drive_the_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:
-            write_findings(tmp, 1, ["Kill switch is mounted after the new route", "Missing flag"])
-            write_findings(tmp, 2, ["The kill switch mounted after new route!"])
+            write_findings(tmp, 1, ["New route is mounted before the health route", "Missing flag"])
+            write_findings(tmp, 2, ["The new route mounted before health route!"])
             facts = run_facts.collect_facts(tmp, STATE)
         self.assertEqual(len(facts["rounds"]), 2)
         self.assertEqual(len(facts["recurring_findings"]), 1)
@@ -41,7 +41,7 @@ class Facts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             facts = run_facts.collect_facts(tmp, STATE)
         self.assertEqual(facts["rounds"], [])
-        self.assertEqual(facts["final_blocking"], ["The kill switch is mounted after the new route"])
+        self.assertEqual(facts["final_blocking"], ["The new route is mounted before the health route"])
         self.assertEqual(len(run_facts.fingerprint(facts)), 8)
 
 

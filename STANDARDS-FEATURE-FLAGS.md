@@ -6,7 +6,7 @@ Part of [STANDARDS.md](STANDARDS.md). See [GLOSSARY.md](GLOSSARY.md) for termino
 
 A flag protects `main`. All work lands directly on a single `main` with no branches ([STANDARDS-CODING.md](STANDARDS-CODING.md#git-workflow)), so a flag is what keeps a change that is not yet proven from reaching users. The policy follows from that:
 
-- **A Managed App's first build needs no flags.** There is nothing yet to break, and the mandatory kill switch below still covers the whole app. The first build goes live on deploy and has no flags: the Factory creates a flag only for an update (see Release and retirement), so a flag the coder adds on a first build has nothing to switch it on and the run ends as a failure. The reviewer never treats a missing flag as a finding.
+- **Staging needs no flag; every change set after it does.** Staging a new app (repository, deploy, flag service, secrets) is verified by deterministic checks and has no business logic to protect. Every change set built on it goes behind a flag of its own, from the first one, so a new app is built the way an existing app is changed.
 - **Every later update to an existing app that changes behaviour a user can see or reach is protected by a flag.** Changes with no user-visible effect (internal refactors, dependency bumps, a bug fix that only restores documented behaviour without altering what a user can reach) may ship unflagged; see [Release and retirement](#release-and-retirement). If in doubt, flag it: a flag is cheap and the rollback lever is the point. An update ships dark behind a flag of its own, and is released only after review and tests pass. Each update gets its own flag, separate from earlier updates', so one can be turned off without touching the others.
 - **A flag covers the change, not each route or screen.** One flag around everything the change encompasses is enough. Neither the coder nor the reviewer needs a flag per endpoint or UI piece, though finer flags are allowed where they help.
 - **What the Intake asks for stands.** If it names a flag, the flag is a requirement like any other.
@@ -14,14 +14,9 @@ A flag protects `main`. All work lands directly on a single `main` with no branc
 This is the production safety net, and also the review gate, compensating for the direct-push-to-main, no-branch git workflow.
 → [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md)
 
-## Mandatory kill switch
-
-Every Managed App ships, baked into the Starter Template, one global kill-switch flag, checked once in top-level middleware, returning a maintenance response when off — identical in *shape and placement* across every Managed App, but not a literal identical key (see Code wiring): all Managed Apps share one GrowthBook project, so an app-scoped key is what keeps one app's kill switch from flipping another app's.
-→ [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [#22](https://github.com/ojones/ai-factory/issues/22)
-
 ## Code wiring
 
-All Managed Apps share one GrowthBook project (see [ARCHITECTURE.md](ARCHITECTURE.md#feature-flag-infrastructure) — the free self-hosted tier caps at 1 project), with no GrowthBook-level boundary between apps. The flag-key naming convention carries the only isolation that exists, and so is app-scoped: **`<app-slug>.feature.<slug>`** for per-feature flags, **`<app-slug>.global-kill-switch`** for the mandatory kill switch. The app slug is derived live by the Managed App's own code (e.g. from its repo name, the same env/derivation already used for the Fly app name per [#21](https://github.com/ojones/ai-factory/issues/21)) — never injected or persisted by App Staging, keeping the Starter Template's flag-handling code unmodified per app.
+All Managed Apps share one GrowthBook project (see [ARCHITECTURE.md](ARCHITECTURE.md#feature-flag-infrastructure) — the free self-hosted tier caps at 1 project), with no GrowthBook-level boundary between apps. The flag-key naming convention carries the only isolation that exists, and so is app-scoped: **`<app-slug>.feature.<slug>`** for per-feature flags. The app slug is derived live by the Managed App's own code (e.g. from its repo name, the same env/derivation already used for the Fly app name per [#21](https://github.com/ojones/ai-factory/issues/21)) — never injected or persisted by App Staging, keeping the Starter Template's flag-handling code unmodified per app.
 
 A single OpenFeature client is initialized once at app startup from the SDK connection key env var — not re-derived per feature. The client polls for live flag updates (`pollingInterval`) rather than using SSE streaming, which GrowthBook's own docs confirm is cloud/proxy-only, not available to a bare self-hosted instance.
 → [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [build ticket #14](https://github.com/ojones/ai-factory/issues/14), [#22](https://github.com/ojones/ai-factory/issues/22)

@@ -1,42 +1,40 @@
 #!/usr/bin/env bash
-# App Staging (ARCHITECTURE.md → Deployment provisioning): stages one new
-# Managed App from an Intake issue. Run by .github/workflows/app-staging.yml.
+# App Staging (ARCHITECTURE.md → Deployment provisioning; STEP 3.1, 3.2): stages one new Managed App from a planned `kind: staging` child ticket.
+# Run by .github/workflows/app-staging.yml when `proceed-with-change` is added to such a child (the first child of a planned New App Intake).
 #
-# Every step is check-then-act, so re-adding the `ready-for-staging` label
-# after a partial failure is safe. Any non-success exit comments on the Intake
-# issue and removes that label, since re-adding a label that is still present
-# would not fire the workflow.
+# The app, its request and its cost cap come from the child and its parent Intake (orchestrator/staging/read_staging_child.py). After the seed push,
+# orchestrator/staging/verify_infrastructure.py proves the app works; only then is the child closed, which starts the first business child.
 #
-# Env (see the workflow): GH_TOKEN (Actions token, for ai-factory issue ops),
-# FACTORY_PAT, FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT, PREVIEW_MASTER_SECRET,
-# ISSUE_NUMBER, ISSUE_TITLE, ISSUE_BODY, FACTORY_REPO, RUN_URL.
+# Every step is check-then-act, so re-adding `proceed-with-change` to the child after a partial failure is safe. Any non-success exit comments on the
+# child and removes that label, since re-adding a label that is still present would not fire the workflow.
+# STAGING_DRY_RUN=1 reads and checks the child, prints what it would stage and changes nothing.
+#
+# Env (see the workflow): GH_TOKEN (Actions token, for ai-factory issue ops), FACTORY_PAT, FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT, PREVIEW_MASTER_SECRET,
+# ISSUE_NUMBER (the staging child), FACTORY_REPO, RUN_URL.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 GROWTHBOOK_API="${GROWTHBOOK_API_HOST:-https://ai-factory-growthbook.fly.dev:3100}/api/v1"
 OWNER="${FACTORY_REPO%%/*}"
-SLUG="$(printf %s "$ISSUE_TITLE" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-MARKER="Intake: ${FACTORY_REPO}#${ISSUE_NUMBER}"
-ISSUE_URL="https://github.com/${FACTORY_REPO}/issues/${ISSUE_NUMBER}"
 
 # --- helpers ----------------------------------------------------------------
 
-# gh as the PAT: repo creation, secrets, seeding, and the Build Run dispatch.
+# gh as the PAT: repo creation, secrets, seeding, and starting the next child.
 pat() { GH_TOKEN="$FACTORY_PAT" "$@"; }
 
 gb() { curl -sS --fail-with-body --max-time 30 \
   -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" -H 'Content-Type: application/json' "$@"; }
 
 comment() { gh issue comment "$ISSUE_NUMBER" --repo "$FACTORY_REPO" --body "$1" >/dev/null; }
-unlabel() { gh issue edit "$ISSUE_NUMBER" --repo "$FACTORY_REPO" --remove-label ready-for-staging >/dev/null || true; }
+unlabel() { gh issue edit "$ISSUE_NUMBER" --repo "$FACTORY_REPO" --remove-label proceed-with-change >/dev/null || true; }
 
 HANDLED=0
-# Stop with an explanation on the issue. Used for refusals and hard stops.
+# Stop with an explanation on the child. Used for refusals and hard stops.
 refuse() {
   HANDLED=1
   comment "**App Staging stopped:** $1
 
-Fix this, then re-add the \`ready-for-staging\` label to try again. ([run]($RUN_URL))"
+Fix this, then re-add the \`proceed-with-change\` label to try again. ([run]($RUN_URL))"
   echo "::error::$1"
   exit 1
 }
@@ -45,78 +43,26 @@ on_exit() {
   local status=$?
   [ "$status" -eq 0 ] && return 0
   if [ "$HANDLED" != 1 ]; then
-    comment "**App Staging failed** partway through. Every step is safe to repeat, so re-add the \`ready-for-staging\` label to retry. See the [run log]($RUN_URL)." || true
+    comment "**App Staging failed** partway through. Every step is safe to repeat, so re-add the \`proceed-with-change\` label to retry. See the [run log]($RUN_URL)." || true
   fi
   unlabel
 }
 trap on_exit EXIT
 
-# Text under "### <heading>" in an Issue Form body, surrounding blanks trimmed.
-section() {
-  printf %s "$ISSUE_BODY" | tr -d '\r' | awk -v h="### $1" '
-    $0 == h { on = 1; next }
-    /^### / { on = 0 }
-    on { lines[++n] = $0 }
-    END {
-      s = 1; while (s <= n && lines[s] == "") s++
-      e = n; while (e >= s && lines[e] == "") e--
-      for (i = s; i <= e; i++) print lines[i]
-    }'
-}
+# --- 1. read the staging child ----------------------------------------------------------
 
-# --- 1. validate the Intake ---------------------------------------------------
-
-[[ "$SLUG" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ && ${#SLUG} -le 30 ]] ||
-  refuse "The issue title \`$SLUG\` is not a valid Managed App name. Use lowercase letters, digits and single hyphens, starting with a letter, at most 30 characters (e.g. \`recipe-box\`)."
-
-DESCRIPTION="$(section 'What should be built?')"
-{ [ -n "$DESCRIPTION" ] && [ "$DESCRIPTION" != "_No response_" ]; } ||
-  refuse "The \"What should be built?\" field is empty."
-
-DEFAULT_CAP="$(sed -n 's/^ *cost_cap_usd_default: *//p' agents/profiles.yml)"
-CEILING="$(sed -n 's/^ *cost_cap_usd_ceiling: *//p' agents/profiles.yml)"
-CAP_INPUT="$(section 'Cost cap override (USD)' | sed 's/^\$//')"
-if [ -z "$CAP_INPUT" ] || [ "$CAP_INPUT" = "_No response_" ]; then
-  COST_CAP="$DEFAULT_CAP"; CAP_SOURCE="default"
-else
-  [[ "$CAP_INPUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
-    refuse "The cost cap override \`$CAP_INPUT\` is not a number of dollars."
-  awk -v c="$CAP_INPUT" -v m="$CEILING" 'BEGIN { exit !(c > 0 && c <= m) }' ||
-    refuse "The cost cap override \$$CAP_INPUT must be greater than 0 and at most the \$$CEILING ceiling."
-  COST_CAP="$CAP_INPUT"; CAP_SOURCE="override"
+err="$(mktemp)"
+child_out="$(PYTHONPATH=orchestrator python3 -m staging.read_staging_child 2>"$err")" || refuse "$(cat "$err")"
+eval "$child_out"   # SLUG PARENT DESCRIPTION COST_CAP CAP_SOURCE, shell-quoted by the script
+MARKER="Intake: ${FACTORY_REPO}#${PARENT}"
+ISSUE_URL="https://github.com/${FACTORY_REPO}/issues/${PARENT}"
+if [ -n "${STAGING_DRY_RUN:-}" ]; then
+  HANDLED=1
+  echo "dry run: would stage app $SLUG for Intake #$PARENT (child #$ISSUE_NUMBER), repo marker '$MARKER', cost cap \$$COST_CAP ($CAP_SOURCE)"
+  exit 0
 fi
-
-# --- 2. how many Managed Apps at a time ---------------------------------------------
-# `max_simultaneous_build_runs` in agents/profiles.yml (default and fallback 1: one app through
-# Intake -> App Staging -> Build Run at a time). Raising it lets that many apps be in flight, as long as
-# no two Intakes ask for the same app.
-
-MAX_APPS="$(sed -n 's/^ *max_simultaneous_build_runs: *//p' agents/profiles.yml | head -1)"
-[[ "$MAX_APPS" =~ ^[0-9]+$ ]] && [ "$MAX_APPS" -ge 1 ] || MAX_APPS=1
-
-same="$(gh issue list --repo "$FACTORY_REPO" --state open --label new-app-intake --label ready-for-staging --search "\"$SLUG\" in:title" \
-  --json number,title --jq "[.[] | select(.number != $ISSUE_NUMBER and .title == \"$SLUG\") | \"#\\(.number)\"] | join(\", \")")"
-[ -z "$same" ] || refuse "Intake issue(s) $same for the same app are already past \`ready-for-staging\`."
-
-others_n="$(gh issue list --repo "$FACTORY_REPO" --state open --label new-app-intake --label ready-for-staging \
-  --json number --jq "[.[] | select(.number != $ISSUE_NUMBER)] | length")"
-if [ "$others_n" -ge "$MAX_APPS" ]; then
-  others="$(gh issue list --repo "$FACTORY_REPO" --state open --label new-app-intake --label ready-for-staging \
-    --json number --jq "[.[].number | select(. != $ISSUE_NUMBER)] | map(\"#\\(.)\") | join(\", \")")"
-  refuse "Intake issue(s) $others are already past \`ready-for-staging\`; the limit is $MAX_APPS Managed App(s) through Intake → App Staging → Build Run at a time (\`max_simultaneous_build_runs\` in agents/profiles.yml)."
-fi
-
-running_n=0
-for status in queued in_progress; do
-  n="$(gh run list --repo "$FACTORY_REPO" --workflow build-run.yml --status "$status" --json url --jq 'length')"
-  running_n=$((running_n + n))
-done
-[ "$running_n" -lt "$MAX_APPS" ] ||
-  refuse "$running_n Build Run(s) are in flight; the limit is $MAX_APPS at a time (\`max_simultaneous_build_runs\` in agents/profiles.yml)."
-
-# Label the Intake so every issue about this app can be found: app:<slug>.
 gh label create "app:$SLUG" --repo "$FACTORY_REPO" --color 1d76db --description "Issues about the Managed App $SLUG" >/dev/null 2>&1 || true
-gh issue edit "$ISSUE_NUMBER" --repo "$FACTORY_REPO" --add-label "app:$SLUG" >/dev/null || true
+gh issue edit "$PARENT" --repo "$FACTORY_REPO" --add-label "app:$SLUG" >/dev/null || true
 
 # --- 3. the Fly app name: Fly app names are global across all of Fly -----------------
 # 200 = ours (a rerun or a Managed App already deployed), 404 = free, 403 = taken by
@@ -151,7 +97,7 @@ echo '{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_s
   pat gh api -X PATCH "repos/$OWNER/$SLUG" --input - >/dev/null 2>&1 ||
   echo "::warning::could not enable secret scanning with push protection on $OWNER/$SLUG"
 
-# --- 5. GrowthBook: fresh app-scoped SDK key, and the kill switch -------------------
+# --- 5. GrowthBook: fresh app-scoped SDK key -----------------------------------------
 
 project_json="$(gb "$GROWTHBOOK_API/projects?limit=100")"
 [ "$(jq '.total' <<<"$project_json")" = 1 ] ||
@@ -167,21 +113,6 @@ GROWTHBOOK_CLIENT_KEY="$(gb -X POST "$GROWTHBOOK_API/sdk-connections" \
   -d "$(jq -n --arg n "$SLUG" --arg p "$PROJECT_ID" '{name: $n, language: "nodejs", environment: "production", projects: [$p]}')" |
   jq -r '.sdkConnection.key')"
 echo "::add-mask::$GROWTHBOOK_CLIENT_KEY"
-
-# The kill switch fails closed, so it must exist and be on or the app only ever
-# serves its maintenance response. Never touch an existing one: an owner's
-# manual "off" must stick.
-KILL_KEY="$SLUG.global-kill-switch"
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-  -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" "$GROWTHBOOK_API/features/$KILL_KEY")"
-if [ "$code" = 200 ]; then
-  echo "Kill switch $KILL_KEY exists — leaving it alone."
-else
-  echo "Creating kill switch $KILL_KEY (on)"
-  gb -X POST "$GROWTHBOOK_API/features" -d "$(jq -n --arg id "$KILL_KEY" --arg p "$PROJECT_ID" '{
-    id: $id, owner: "ai-factory", valueType: "boolean", defaultValue: "true", project: $p,
-    environments: {production: {enabled: true, rules: []}}}')" >/dev/null
-fi
 
 # --- 6. secrets (before the seed push, whose Test Gate → Build → Deploy chain needs them)
 
@@ -219,17 +150,20 @@ else
   git -C "$work" init -q -b main
   git -C "$work" add -A
   git -C "$work" -c user.name=ai-factory -c user.email=ai-factory@users.noreply.github.com \
-    commit -q -m "Seed from Starter Template for Intake #$ISSUE_NUMBER"
+    commit -q -m "Seed from Starter Template for Intake #$PARENT"
   pgit -C "$work" push -q "$REMOTE" main
   echo "Seeded $OWNER/$SLUG"
 fi
 
-# --- 8. hand off: dispatch the Build Run, then close the Intake -----------------------
+# --- 8. verify, then hand on ------------------------------------------------------------
+# Prove the seeded app works, tell the Intake, and close the child so the first business child starts.
 
-pat gh workflow run build-run.yml --repo "$FACTORY_REPO" \
-  -f issue_number="$ISSUE_NUMBER" -f app_name="$SLUG"
+SEED_SHA="$(pgit ls-remote "$REMOTE" refs/heads/main | cut -f1)"
+if ! APP_NAME="$SLUG" SEED_SHA="$SEED_SHA" PYTHONPATH=orchestrator python3 -m staging.verify_infrastructure; then
+  HANDLED=1
+  exit 1   # verify_infrastructure commented the failed checks on the child; on_exit takes the start label off so adding it again retries
+fi
+gh issue comment "$PARENT" --repo "$FACTORY_REPO" --body "**App Staging complete.** Managed App repo: https://github.com/$OWNER/$SLUG
 
-comment "**App Staging complete.** Managed App repo: https://github.com/$OWNER/$SLUG
-
-Cost cap for its first Build Run: \$$COST_CAP ($CAP_SOURCE). The Build Run has been dispatched. ([run]($RUN_URL))"
-gh issue close "$ISSUE_NUMBER" --repo "$FACTORY_REPO" --reason completed >/dev/null
+Cost cap for its Build Runs: \$$COST_CAP ($CAP_SOURCE). The app is built, deployed and verified; its first change set starts next. ([run]($RUN_URL))" >/dev/null
+FACTORY_PAT="$FACTORY_PAT" PYTHONPATH=orchestrator python3 -m retrospective.close_child close "$FACTORY_REPO" "$ISSUE_NUMBER"

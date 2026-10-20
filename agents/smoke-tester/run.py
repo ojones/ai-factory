@@ -7,7 +7,7 @@
 # how often the tester notices.
 #
 # The app under test is the Starter Template with a notes API behind the flag `notes-api`. A local stub stands in for
-# GrowthBook (kill switch on), so nothing touches production. The tester gets the spec, a git checkout with a "previous
+# GrowthBook (no flags set), so nothing touches production. The tester gets the spec, a git checkout with a "previous
 # release" commit and a head commit (so `git log -p flags.json` shows the new flag), the app's URL and a Preview Token.
 #
 # Scoring, per run: the tester's report is read the way the Orchestrator reads it (`derive_test`, which also downgrades a
@@ -129,15 +129,12 @@ def free_port():
 
 
 class GrowthBookStub:
-    # Serves the SDK payload GrowthBook would: the kill switch on, no other flags (a feature flag that is not in the payload
-    # reads as off, which is how a dark feature behaves).
+    # Serves the SDK payload GrowthBook would: no flags (a feature flag that is not in the payload reads as off, which is how a dark feature behaves).
 
     def __init__(self):
-        slug = SLUG
-
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                body = json.dumps({"status": 200, "features": {f"{slug}.global-kill-switch": {"defaultValue": True}},
+                body = json.dumps({"status": 200, "features": {},
                                    "dateUpdated": "2026-01-01T00:00:00Z"}).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json")

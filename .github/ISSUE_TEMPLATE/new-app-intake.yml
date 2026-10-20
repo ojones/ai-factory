@@ -8,12 +8,12 @@ body:
       value: |
         **The issue title is the Managed App's name**, kebab-cased (lowercase letters, digits and hyphens, at most 30 characters). It becomes the repo and Fly app name. Fly app names are unique across all of Fly, so a common name (like `notes-app`) may already be taken; if App Staging reports a collision, rename this issue to something more distinctive.
 
-        Edit this issue freely until it's ready. When it is, add the `ready-for-staging` label to start App Staging.
+        Submitting this form starts planning at once. A planner reads your request and splits it into change sets: the first stages the app (repository, deploy, flag service, secrets, all verified), and each later one is built behind its own feature flag, one at a time. If something needs your answer or cannot be built, the planner comments here: edit this issue, remove the **`new-app-intake`** label and add it again to plan again.
   - type: textarea
     id: description
     attributes:
       label: What should be built?
-      description: The Intake Spec — scope and constraints for the first Build Run.
+      description: The Intake Spec: what the app should do, its scope and its constraints.
     validations:
       required: true
   - type: input

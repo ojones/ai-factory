@@ -6,12 +6,8 @@ import { isFeatureEnabled } from "../feature-flags";
 
 const TOKEN = "s3cret-preview-token";
 
-function flags(killSwitchOn: boolean, demoOn: boolean) {
+function flags(demoOn: boolean) {
   return new TypedInMemoryProvider({
-    "test-app.global-kill-switch": {
-      variants: { on: true, off: false },
-      defaultVariant: killSwitchOn ? "on" : "off",
-    },
     "test-app.feature.demo": {
       variants: { on: true, off: false },
       defaultVariant: demoOn ? "on" : "off",
@@ -30,7 +26,7 @@ function appWithProbe() {
 describe("Preview Token", () => {
   beforeEach(() => {
     process.env.PREVIEW_TOKEN = TOKEN;
-    OpenFeature.setProvider(flags(true, false));
+    OpenFeature.setProvider(flags(false));
   });
   afterEach(() => {
     delete process.env.PREVIEW_TOKEN;
@@ -68,14 +64,8 @@ describe("Preview Token", () => {
     expect(res.body).toEqual({ enabled: false });
   });
 
-  it("does not bypass the kill switch", async () => {
-    OpenFeature.setProvider(flags(false, false));
-    const res = await request(appWithProbe()).get("/api/_probe").set("X-Preview-Token", TOKEN);
-    expect(res.status).toBe(503);
-  });
-
   it("shows a released feature to everyone without a token", async () => {
-    OpenFeature.setProvider(flags(true, true));
+    OpenFeature.setProvider(flags(true));
     const res = await request(appWithProbe()).get("/api/_probe");
     expect(res.body).toEqual({ enabled: true });
   });

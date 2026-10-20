@@ -71,21 +71,21 @@ def diff_secrets(patch):
     return [k for k in find_secrets(added) if k in DIFF_SECRET_KINDS]
 
 
-def secrets_request(secrets, app_repo):
+def secrets_request(secrets, app_repo, retry="add `proceed-with-change` again"):
     # The Intake comment that asks the owner for the values: each name and purpose and the exact command, never a value.
     lines = ["This request needs a third-party secret, which no Agent may hold and the public repositories cannot store. Nothing was built.", "",
              "Set each one as a GitHub Actions secret on the app's repository (the command prompts for the value, so it never appears in an issue, a log or a commit):", ""]
     for x in secrets:
         lines += [f"- **{x['name']}**: {x['purpose']}", f"  `gh secret set {x['name']} -R {app_repo}`"]
-    lines += ["", "Use a restricted key with a spending limit at the provider if it offers one. When they are set, add `proceed-with-change` again; the build "
+    lines += ["", "Use a restricted key with a spending limit at the provider if it offers one. When they are set, " + retry + "; the build "
               "starts only once every name exists, and the deploy copies them to the running app."]
     return "\n".join(lines)
 
 
 def secret_refusal(kinds):
     return ("The request contains " + " and ".join(kinds) + ". Intake issues and the app's repository are public, so it is already visible: "
-            "rotate or revoke it now. Nothing was built. Edit the request to remove the value (describe what it is for instead), then add "
-            "`proceed-with-change` again.")
+            "rotate or revoke it now. Nothing was built. Edit the request to remove the value (describe what it is for instead), then remove "
+            "the Intake's label and add it again.")
 
 
 def feasibility(plan):
@@ -102,6 +102,5 @@ def feasibility(plan):
 def refusal_text(category, reasons, possible_if):
     lines = [f"The Factory cannot build this as asked ({category.replace('_', ' ')})."]
     lines += [f"- {r}" for r in reasons]
-    lines += ["", possible_if, "", "Nothing was built and nothing was retried. Change the request (for example to the part that needs none of this) and add "
-              "`proceed-with-change` again."]
+    lines += ["", possible_if, "", "Nothing was built and nothing was retried. Change the request (for example to the part that needs none of this)."]
     return "\n".join(lines)

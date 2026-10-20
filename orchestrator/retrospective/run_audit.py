@@ -60,7 +60,7 @@ def audit_report(d, overshoot=COST_OVERSHOOT_USD):
         bad("A-04 a finished run has no open blocking findings", f"{len(d['blocking'])} still open at the end")
 
     commits = d.get("commits") or []
-    if outcome in outcomes.OK and outcome != "planned" and d.get("build_kind") == "update" and not commits:
+    if outcome in outcomes.OK and d.get("build_kind") == "update" and not commits:
         bad("A-05 an update changes something", "an update finished OK with no coder commit")
 
     if outcome == "regression" and d.get("commits"):
@@ -73,8 +73,6 @@ def audit_report(d, overshoot=COST_OVERSHOOT_USD):
     if d.get("revert"):
         bad("A-08 nothing is reverted in git", "the Report records a git revert; code is fixed forward and only the deploy is rolled back")
 
-    if outcome == "planned" and len(((d.get("plan") or {}).get("change_sets")) or []) < 2:
-        bad("A-06 a planned run has a plan to hand on", "outcome `planned` without two or more change sets in the plan")
 
     return problems
 

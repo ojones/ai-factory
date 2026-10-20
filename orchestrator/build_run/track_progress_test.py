@@ -34,7 +34,7 @@ class Scoreboard(unittest.TestCase):
         self.assertEqual(e["blocking"], ["missing flag"])
 
     def test_identical_open_items_for_n_rounds_is_stalled(self):
-        same = [self.entry(i, {"x": "failed", "y": "passed"}, ["no kill switch"]) for i in (1, 2, 3)]
+        same = [self.entry(i, {"x": "failed", "y": "passed"}, ["no health route"]) for i in (1, 2, 3)]
         self.assertTrue(track_progress.stalled(same, 3))
         self.assertFalse(track_progress.stalled(same[:2], 3))
 

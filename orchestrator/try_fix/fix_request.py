@@ -303,8 +303,8 @@ def provider_alert_body(facts):
             f"- Run: {facts.get('run_url')}\n- Request: #{facts.get('issue_number')}\n\n"
             "## What was done automatically\n\n" + rollback_line(facts.get("rollback")) + "\n\n"
             "## What to do\n\n1. Add balance in the provider's dashboard (or turn on auto top-up).\n"
-            "2. For an Update App Intake that stopped, add `proceed-with-change` again (the Orchestrator removed it, so the label fires again). "
-            "For a new app's Intake, add `ready-for-staging` again.\n\n"
+            "2. For a child ticket that stopped, add `proceed-with-change` again (the Orchestrator removed it, so the label fires again). "
+            "For an Intake that was not planned, remove its label and add it again.\n\n"
             "Every Build Run fails until this is done. Nothing was retried automatically, and no fix request or retrospective was started, "
             "because they would fail the same way.\n")
 

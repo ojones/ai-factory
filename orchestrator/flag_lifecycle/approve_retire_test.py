@@ -26,7 +26,7 @@ class Approval(unittest.TestCase):
             self.assertEqual(approve_retire.approve("o/f", "pat", 12), 0)
         create = next(c for c in calls if c[:3] == ["gh", "issue", "create"])
         self.assertIn("### App name\n\nnotes", create[create.index("--body") + 1])
-        self.assertTrue(any(c[:3] == ["gh", "issue", "edit"] and c[3] == "90" and "proceed-with-change" in c for c in calls))
+        self.assertFalse(any(c[:3] == ["gh", "issue", "edit"] and c[3] == "90" for c in calls))  # planned like any Update App Intake: the label at creation starts planning
         self.assertTrue(any(c[:3] == ["gh", "issue", "close"] and c[3] == "12" for c in calls))
 
     def test_a_refused_approval_says_why_and_starts_nothing(self):

@@ -53,6 +53,10 @@ Decided by tickets:
 - [Planning domain: the plan and the child contract](tickets/09-planning-plan-contract.md): `planning/` holds the plan gate (size S or M, at most 6 criteria, staging first for a new app, declared dependencies), the child bodies and idempotent all-or-nothing sub-issue filing; `shared/child_tickets.py` holds the marker and `ChildTickets`; native blockers are the source of truth for order.
 - [Retrospective domain](tickets/10-retrospective-domain.md): `retrospective/` holds finalize, the retrospective split by step, advance by blockers (a stalled child holds its siblings), the parent closing with its last child and the named cause; rollback, spend ledger and prompts moved to `shared/`, `fixrequest` to `try_fix/`.
 - [Build Run domain: split](tickets/11-build-run-split.md): `build_run.py` is the `build_run/` folder (one file per step, `run.py` sequencing, `start_build.py` the gate); `BuildRun` is mixins over shared state, so deeper decoupling is still open; tests split to the code they check.
+- [Build Run on a sub-issue](tickets/12-build-run-on-a-sub-issue.md): a run finds its plan through the sub-issues API, reads only the parent's number and state, and refuses an unplanned child (no marker, no parent, other or closed plan) at the gate and in the run, behind `limits.require_plan` (off until plan.yml); a fix child names the failed story's flag.
+- [Planning becomes its own process](tickets/13-planning-process.md): `plan.yml` + `planning/plan_run.py` plan an Update App Intake into at least one child ticket (endings planned, refused, awaiting_secret, needs_human, skipped); `plan_change`, the `planned` outcome and `require_plan` are gone; automated sources plan like any Intake; New App Intakes wait for `plan_new_apps` (ticket 14); the benchmark needs reworking.
+- [Staging domain](tickets/14-staging-domain.md): `staging/` reads a `kind: staging` child and verifies the seeded app with six deterministic checks (no Agent, no Build Run for the staging child); `stage.sh` has a child mode and a dry run beside the legacy path; the legacy path, the form text and `plan_new_apps` moved to the new ticket 14b.
+- [New App Intakes are planned](tickets/14b-new-app-intakes-are-planned.md): New App Intakes are always planned, the legacy `ready-for-staging` path, the first-build Build Run path, the `plan:<parent>` label and the app-wide kill switch are removed; the staging check is now the flag-service connection; the first-build wording in prompts and eval harnesses waits for ticket 18b.
 - [Apply the intake renames](tickets/05c-apply-the-renames.md): `new-app-intake` and `update-app-intake` in code, forms, workflows and docs, ready in the working tree; the two GitHub labels must be renamed (not before the owner agrees) just before the push.
 
 ## Not yet specified
@@ -61,7 +65,7 @@ Decided by tickets:
 - Exact function-by-function moves for `build_run.py` and `retrospective.py` (tickets 10 and 11, tests first).
 - A codemod that retires a flag mechanically (today the coder edits, a verifier rejects leftovers).
 - What happens to open Intakes that predate the change (they have no children and must be re-labelled; whether to sweep them automatically).
-- Whether the planner for a new app needs its own benchmark fixtures beyond the three new cases in ticket 09.
+- Whether the planner for a new app needs its own benchmark fixtures beyond the three new cases in ticket 09 (see [Benchmark files planned children](tickets/13b-benchmark-files-planned-children.md)).
 - Retiring `limits.planner_enabled` once ticket 13 is proven live (ticket 17).
 
 ## Out of scope

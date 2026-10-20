@@ -3,6 +3,7 @@
 # parent's sub-issues, and what a waiting child waits for is its GitHub blockers: it is ready when every blocker is closed. The last child to
 # close closes the parent.
 import os
+import sys
 
 from request import intake_labels
 from shared import child_tickets
@@ -54,3 +55,16 @@ def finish_update_intake(ok, repo, number, pat):
             sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", intake_labels.START], env=env, check=False)
     except Exception as e:  # noqa: BLE001
         print(f"could not finish the Update App Intake: {type(e).__name__}", flush=True)
+
+
+def main(argv):
+    # python -m retrospective.close_child close <repo> <issue>: a child that is done is closed and the next one started (the staging workflow ends so).
+    if len(argv) == 4 and argv[1] == "close":
+        finish_update_intake(True, argv[2], argv[3], os.environ["FACTORY_PAT"])
+        return 0
+    print("usage: python -m retrospective.close_child close <repo> <issue number>", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

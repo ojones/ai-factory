@@ -1,9 +1,8 @@
 import { OpenFeature, TypedInMemoryProvider } from "@openfeature/server-sdk";
-import { featureKey, killSwitchKey } from "../feature-flags";
+import { featureKey } from "../feature-flags";
 
 function provider(slug: string, on: boolean) {
   return new TypedInMemoryProvider({
-    [killSwitchKey()]: { variants: { on: true, off: false }, defaultVariant: "on" },
     [featureKey(slug)]: { variants: { on: true, off: false }, defaultVariant: on ? "on" : "off" },
   });
 }

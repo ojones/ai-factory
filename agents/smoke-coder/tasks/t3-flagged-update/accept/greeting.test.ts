@@ -7,9 +7,8 @@ import { createApp } from "../../app";
 
 const TOKEN = "accept-preview-token";
 
-function flags(killSwitchOn: boolean, greetingOn: boolean) {
+function flags(greetingOn: boolean) {
   return new TypedInMemoryProvider({
-    "test-app.global-kill-switch": { variants: { on: true, off: false }, defaultVariant: killSwitchOn ? "on" : "off" },
     "test-app.feature.greeting": { variants: { on: true, off: false }, defaultVariant: greetingOn ? "on" : "off" },
   });
 }
@@ -29,22 +28,18 @@ describe("greeting behind its flag", () => {
     expect(String(entry.description).length).toBeGreaterThan(0);
   });
   it("is dark while the flag is off", async () => {
-    OpenFeature.setProvider(flags(true, false));
+    OpenFeature.setProvider(flags(false));
     expect((await request(createApp()).get("/api/greeting")).status).toBe(404);
   });
   it("answers when the flag is on", async () => {
-    OpenFeature.setProvider(flags(true, true));
+    OpenFeature.setProvider(flags(true));
     const res = await request(createApp()).get("/api/greeting");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: "hello" });
   });
   it("answers a preview-token request while the flag is off", async () => {
-    OpenFeature.setProvider(flags(true, false));
+    OpenFeature.setProvider(flags(false));
     const res = await request(createApp()).get("/api/greeting").set("X-Preview-Token", TOKEN);
     expect(res.status).toBe(200);
-  });
-  it("is behind the kill switch", async () => {
-    OpenFeature.setProvider(flags(false, true));
-    expect((await request(createApp()).get("/api/greeting")).status).toBe(503);
   });
 });

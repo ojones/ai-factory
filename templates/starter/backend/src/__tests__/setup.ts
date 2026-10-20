@@ -4,19 +4,7 @@ import { OpenFeature, TypedInMemoryProvider } from "@openfeature/server-sdk";
 process.env.APP_SLUG = "test-app";
 
 // Tests never call initFeatureFlags() (that would hit the real shared
-// GrowthBook instance) — without a provider, OpenFeature's default no-op
-// provider returns whatever default each call site passes, which is
-// `false` (see app.ts for why it must be `false`, not `true`). That would
-// make every gated route 503 in tests. This in-memory provider defaults
-// the kill switch "on" so existing functional tests exercise normal
-// behavior; a test that specifically needs the "off" case can call
-// `OpenFeature.getProvider().putConfiguration(...)` to flip it. Extend
-// this with new flags as this Managed App adds them.
-OpenFeature.setProvider(
-  new TypedInMemoryProvider({
-    "test-app.global-kill-switch": {
-      variants: { on: true, off: false },
-      defaultVariant: "on",
-    },
-  }),
-);
+// GrowthBook instance). This in-memory provider starts empty, so every
+// feature flag reads off; a test that needs a flag on or off uses
+// `withFlag(slug, on, fn)` from ./with-flag.
+OpenFeature.setProvider(new TypedInMemoryProvider({}));

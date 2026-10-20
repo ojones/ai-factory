@@ -70,7 +70,6 @@
     "verdict": "changes_requested",
     "blocking": [
      "POST /api/notes returns 500 (not the required 400) when the request body is missing or not JSON, because req.body is destructured without a guard.",
-     "The notes API is mounted before the mandatory global kill switch, so every /api/notes request bypasses it.",
      "The user-facing frontend Delete button and its handler are not gated by any feature flag, so the delete UI ships live despite the spec requiring it dark behind notes-delete.",
      "No test covers a missing or non-JSON POST body, so the 500 bug is not caught."
     ],
@@ -82,7 +81,6 @@
     ]
    },
    "expect": [
-    "kill switch",
     "delete button",
     "req\\.body|500|malformed"
    ],

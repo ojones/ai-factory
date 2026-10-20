@@ -1,6 +1,5 @@
 A finding is **blocking** when it is any of:
 - a correctness bug: wrong logic, off-by-one, unhandled error, missing validation of input the code trusts (a missing or malformed body: Express leaves `req.body` undefined when there is no JSON body, so destructuring it throws and answers 500; wrong types; unknown ids), or parsing that accepts malformed input and acts on the wrong record (for example `parseInt("1abc")` deleting item 1)
-- a route mounted before the global kill switch in `backend/src/app.ts` (only the health route may be), because the kill switch then does not cover it
 - a security problem: injection, path traversal, secrets in code, unsafe handling of user input
 - a third-party secret (one named in `secrets.json`) used anywhere but the call to its service: logged, returned in a response, put in an error message or sent to any other place
 - a requirement in the spec (`INTAKE.md` for a first build, the change request for an update) that the change does not meet, including any flag it names

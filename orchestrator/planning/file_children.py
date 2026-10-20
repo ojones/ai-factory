@@ -15,8 +15,7 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None,
         return [(c["marker"].get("cs"), c["number"]) for c in existing]
     for name, color, desc in ((intake_labels.UPDATE_APP_INTAKE, "1d76db", "A change request for an existing Managed App"),
                               (child_tickets.WAIT, "fbca04", "Waiting for an earlier change set of the same plan"),
-                              (intake_labels.START, "0e8a16", "Start this change now"), (f"app:{app}", "1d76db", f"Issues about the Managed App {app}"),
-                              (f"plan:{parent}", "ededed", f"Change sets planned in #{parent}")):
+                              (intake_labels.START, "0e8a16", "Start this change now"), (f"app:{app}", "1d76db", f"Issues about the Managed App {app}")):
         github.ensure_label(repo, name, pat, color, desc)
     by_id = {cs["id"]: cs for cs in change_sets}
     numbers, made = {}, []
@@ -27,7 +26,7 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None,
             task = render_change_set_task(cs, parent=parent)
             body = child_body(app, task, parent, cs, cap, secrets, cs.get("kind") or "update")
             numbers[cs_id] = tickets.file(f"{app}: {one_line(cs['title'])}", body,
-                                          [intake_labels.UPDATE_APP_INTAKE, f"app:{app}", f"plan:{parent}", child_tickets.WAIT])
+                                          [intake_labels.UPDATE_APP_INTAKE, f"app:{app}", child_tickets.WAIT])
             made.append((cs_id, numbers[cs_id]))
             for dep in deps:
                 tickets.block(numbers[cs_id], dep)

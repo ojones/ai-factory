@@ -18,7 +18,8 @@ jobs:
     # Job-level so label events this job skips never queue behind a real one.
     if: >-
       github.event.label.name == 'proceed-with-change' &&
-      contains(github.event.issue.labels.*.name, 'update-app-intake')
+      contains(github.event.issue.labels.*.name, 'update-app-intake') &&
+      !contains(github.event.issue.body, '"kind":"staging"')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

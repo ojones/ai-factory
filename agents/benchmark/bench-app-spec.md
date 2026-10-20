@@ -3,7 +3,7 @@
 The whole-run benchmark needs one disposable Managed App, `factory-bench`, frozen at a known commit. Create it through the normal Factory path so it
 has a real repo, Fly app, GrowthBook connection and deploy pipeline. It costs about $0.20 once.
 
-1. **File a New App Intake** (the New App Intake form) titled `factory-bench` with this spec, and add `ready-for-staging`:
+1. **File a New App Intake** (the New App Intake form) titled `factory-bench` with this spec; submitting it starts planning, and the app is staged and built from the plan:
 
    > A small todo list API. POST /api/todos with {"text": string} creates a todo and answers 201 with {id, text, done: false}; text is trimmed, blank
    > text answers 400 {"error": "text is required"}. GET /api/todos lists todos in creation order. GET /api/todos/:id answers one or 404

@@ -1,8 +1,7 @@
 name: App Staging
 
-# Adding `ready-for-staging` to a `new-app-intake` issue stages a new Managed App
-# (ARCHITECTURE.md → Intake, Deployment provisioning). The work is in
-# infra/app-staging/stage.sh.
+# Stages a new Managed App (ARCHITECTURE.md → Intake, Deployment provisioning; STEP 3.1): `proceed-with-change` on a planned `kind: staging` child, which is the
+# first child of a planned New App Intake. The work is in infra/app-staging/stage.sh.
 on:
   issues:
     types: [labeled]
@@ -14,16 +13,16 @@ permissions:
 
 jobs:
   stage:
-    # Job-level (not workflow-level) so that label events this job skips, like
-    # `new-app-intake` itself being added, never enter the group and cancel a real run
-    # waiting behind another. One Managed App through Intake → App Staging →
-    # Build Run at a time.
+    # Job-level (not workflow-level) so that label events this job skips never
+    # enter the group and cancel a real run waiting behind another. One Managed
+    # App through staging at a time.
     concurrency:
       group: app-staging
       cancel-in-progress: false
     if: >-
-      github.event.label.name == 'ready-for-staging' &&
-      contains(github.event.issue.labels.*.name, 'new-app-intake')
+      github.event.label.name == 'proceed-with-change' &&
+      contains(github.event.issue.labels.*.name, 'update-app-intake') &&
+      contains(github.event.issue.body, '"kind":"staging"')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +37,6 @@ jobs:
           GROWTHBOOK_ADMIN_PAT: ${{ secrets.GROWTHBOOK_ADMIN_PAT }}
           PREVIEW_MASTER_SECRET: ${{ secrets.PREVIEW_MASTER_SECRET }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
           FACTORY_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: infra/app-staging/stage.sh

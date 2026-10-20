@@ -8,7 +8,7 @@ body:
       value: |
         This changes an app the Factory already built. For a new app, use the New App Intake form instead.
 
-        Edit this issue freely until it is ready. When it is, add the **`proceed-with-change`** label. A Build Run starts immediately: it plans the change, then codes, tests and reviews it, and releases it behind a feature flag only when everything passes. If the plan has several parts, each becomes its own issue and runs in order. If something needs your answer or fails, the run comments here and removes the label; fix the issue and add the label again.
+        Submitting this form starts planning at once. A planner reads your request and the app's code, and splits it into change sets: each becomes its own child ticket, with its own feature flag, and they run one at a time. Each is coded, tested and reviewed, and released behind its flag only when everything passes. If something needs your answer or cannot be built, the planner comments here: edit this issue, remove the **`update-app-intake`** label and add it again to plan again.
   - type: input
     id: app
     attributes:

@@ -49,3 +49,14 @@ def record_spend_in_ledger(d, repo, run_id, token):
                 ledger_line(time.strftime("%Y-%m-%d", time.gmtime()), d["app"], d["spent_usd"], run_id)], env=env, check=False)
     except Exception as e:  # noqa: BLE001
         print(f"could not record spend in the ledger: {type(e).__name__}", flush=True)
+
+
+def todays_spend(run, repo, token, day=None):
+    # USD the ledger records for `day` (default today, UTC), or None before any run has made the ledger issue. `run(args, token)` runs `gh`.
+    day = day or time.strftime("%Y-%m-%d", time.gmtime())
+    found = json.loads(run(["issue", "list", "--repo", repo, "--label", LEDGER_LABEL, "--state", "open", "--json", "number"], token).stdout or "[]")
+    if not found:
+        return None
+    out = run(["api", f"repos/{repo}/issues/{found[0]['number']}/comments?per_page=100&since={day}T00:00:00Z", "--paginate", "--jq", ".[].body"],
+              token).stdout
+    return ledger_total((out or "").split("\n"), day)

@@ -9,7 +9,7 @@ from retrospective import lesson_records, run_facts  # noqa: E402
 
 STATE = {"app": "demo", "outcome": "round_limit", "message": "4 review rounds used without a clean pass",
          "run_url": "http://run", "issue_number": "7", "spent_usd": 1.5, "commits": ["a"],
-         "blocking": [{"summary": "The kill switch is mounted after the new route"}],
+         "blocking": [{"summary": "The new route is mounted before the health route"}],
          "stages": [{"stage": "Coder", "round": "1", "verdict": "pushed", "cost_usd": 0.2, "usage": {"seconds": 120, "calls": 30}},
                     {"stage": "Release", "round": "-", "verdict": "x", "cost_usd": 0, "usage": None}]}
 
@@ -37,7 +37,7 @@ class Lessons(unittest.TestCase):
         self.assertEqual({x["kind"] for x in both}, {"many_rounds", "budget_high"})
 
     def test_many_rounds_only_when_the_run_finished_ok(self):
-        rounds = [{"round": i, "blocking": [f"kill switch missing {i}"], "tester_blocking": []} for i in (1, 2, 3)]
+        rounds = [{"round": i, "blocking": [f"health route missing {i}"], "tester_blocking": []} for i in (1, 2, 3)]
         self.assertEqual(self.kinds(review_passes=3, rounds=rounds), ["many_rounds"])
         self.assertEqual(self.kinds(review_passes=3, rounds=rounds, outcome="round_limit"), [])
         self.assertEqual(self.kinds(review_passes=2, rounds=rounds), [])
@@ -72,7 +72,7 @@ class OneEventOneRecord(unittest.TestCase):
         self.assertFalse(lesson_records.records_stuck_issue("watchdog_disabled"))
         for stuck in ("round_limit", "stuck", "needs_human", "crash", "budget_exhausted", "time_limit"):
             self.assertTrue(lesson_records.records_stuck_issue(stuck), stuck)
-        for ok in ("released", "nothing_to_release", "planned"):
+        for ok in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.records_stuck_issue(ok), ok)
 
 

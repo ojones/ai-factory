@@ -23,7 +23,7 @@ from pathlib import Path
 
 from shared import outcomes
 
-ACCEPTED = ("released", "nothing_to_release")  # a change that shipped, or a build that needed no release
+ACCEPTED = outcomes.OK  # a change that shipped, or a build that needed no release
 RECENT_RUNS = 10  # the trailing window the payoff numbers are also shown over, to judge a change to the pipeline against what came before
 WORKFLOW = "build-run.yml"
 MAX_RUNS_PER_PASS = 100

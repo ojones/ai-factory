@@ -17,9 +17,6 @@ export function appSlug(): string {
   return slug;
 }
 
-/** Pinned flag-key naming convention: `<app-slug>.global-kill-switch`. */
-export const killSwitchKey = (): string => `${appSlug()}.global-kill-switch`;
-
 /** Pinned flag-key naming convention: `<app-slug>.feature.<slug>`. */
 export const featureKey = (slug: string): string => `${appSlug()}.feature.${slug}`;
 
@@ -83,8 +80,7 @@ function readCookie(header: string | undefined, name: string): string | undefine
  * carrying the token — `X-Preview-Token` header, `?preview=<token>` (which
  * also sets an HttpOnly cookie for browser sessions), or that cookie — sees
  * every `feature.*` flag as on, so a dark feature can be exercised in the
- * real deployment. It never affects the kill switch, which is checked
- * separately in app.ts, and needs no GrowthBook. With PREVIEW_TOKEN unset,
+ * real deployment. It needs no GrowthBook. With PREVIEW_TOKEN unset,
  * preview is disabled entirely.
  */
 export function previewMiddleware(): RequestHandler {

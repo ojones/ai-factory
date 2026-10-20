@@ -2,7 +2,7 @@
 
 This is the official specification of how a request becomes a running, recorded change. Every step has a stable ID (`group.step`, for example `STEP 4.9`, Test the deployed app) so that docs, tickets, tests and verification runs can cite it. [ARCHITECTURE.md](../ARCHITECTURE.md) explains the parts; where it disagrees with this page, this page is the intended behaviour and ARCHITECTURE.md is brought into line. This is the only flow diagram kept in the repo; the older ones were deleted, and a new one is drawn only when it is needed.
 
-**Status.** This is the target workflow. The code does not yet match all of it: planning still runs inside the Build Run, new apps are staged from the Intake text with no plan, and a failed child is retried unchanged. The plan, order of work and the tickets that close each gap are in `.wayfinder/intake-planning-redesign/`. The "Implemented by" and "Verified by" columns are filled as each group is built and then checked in the last ticket.
+**Status.** This is the workflow the code implements, except that a failed child is still retried unchanged instead of getting a fix child first (ticket 15). The plan, order of work and the tickets that close each gap are in `.wayfinder/intake-planning-redesign/`. The "Implemented by" and "Verified by" columns are filled as each group is built and then checked in the last ticket.
 
 **Domains.** Each numbered group is a domain with its own folder under `orchestrator/` (see [orchestrator-map.md](orchestrator-map.md)): 1 Request (`request`), 2 Planning (`planning`), 3 Staging (`staging`), 4 Build Run (`build_run`), 5 Flag Lifecycle (`flag_lifecycle`), 6 Retrospective (`retrospective`, record and advance included), 7 Try Fix (`try_fix`), 8 Bugs (`bugs`). Maintenance and Monitoring have no steps.
 
@@ -43,7 +43,7 @@ flowchart TD
 
     subgraph g3["3. Staging (new app only, child 1)"]
         S3_1["<b>3.1 Stage the app</b><br/>stage.sh: repo from Starter, Fly app,<br/>flag service, Intake marker"]
-        S3_2["<b>3.2 Verify infrastructure</b><br/>CI green, deploy healthy, flag round trip,<br/>preview token, secrets, smoke test<br/>no business logic, no flag<br/>TESTER Agent exercises the live app against the spec<br/>(first build, no flags: live on deploy)"]
+        S3_2["<b>3.2 Verify infrastructure</b><br/>CI green, deploy healthy, flag round trip,<br/>preview token, secrets, smoke test<br/>deterministic checks, no Agent<br/>no business logic, no flag<br/>then the staging child closes and the first business child starts"]
         S3_1 --> S3_2
     end
 
@@ -173,14 +173,14 @@ flowchart TD
 | 1.1 | New App Intake submitted | owner | `ISSUE_TEMPLATE/new-app-intake.yml` |  |  |
 | 1.2 | Update App Intake submitted | owner | `ISSUE_TEMPLATE/update-app-intake.yml` |  |  |
 | 1.3 | Automated change request | production_feedback, maintenance, template_sync, flag_lifecycle | each module's `file_*` |  |  |
-| 2.1 | Plan | Planner Agent | new `plan_run.py` (from `plan_change`), `planning/validate_plan.py` |  |  |
+| 2.1 | Plan | Planner Agent | `planning/plan_run.py` (`plan.yml`), `planning/validate_plan.py` |  |  |
 | 2.2 | Refuse | Orchestrator | `planning/triage.feasibility`, `Refused` |  |  |
 | 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` |  |  |
 | 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` |  |  |
 | 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` |  |  |
 | 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` |  |  |
-| 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh` |  |  |
-| 3.2 | Verify infrastructure | Orchestrator, Tester | Starter smoke test, tester |  |  |
+| 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh`, `staging/read_staging_child.py` |  |  |
+| 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` |  |  |
 | 4.1 | Prepare the run | Orchestrator | `build_run/prepare_run.py`, `flag_lifecycle/flag_slug.ensure_feature` |  |  |
 | 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_lifecycle.retirement_selection.piggyback_slugs` |  |  |
 | 4.3 | Code | Coder Agent | `agents/prompts/coder.md` |  |  |

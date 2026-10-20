@@ -31,33 +31,31 @@ class FileUpdateAppIntake(unittest.TestCase):
         self.assertEqual(args[args.index("--label") + 1], "update-app-intake,app:notes,production-feedback")
         body = args[args.index("--body") + 1]
         self.assertEqual((read_form.app_name(body), read_form.read_request(body, 2.0, 10.0)[0]), ("notes", "Add tags"))
-        self.assertEqual(create[1], "actions-token")
+        self.assertEqual(create[1], "the-pat")  # created by the PAT user, so its label event starts planning
 
-    def test_the_start_label_is_added_with_the_pat_so_it_starts_the_run(self):
+    def test_planning_is_started_by_the_label_at_creation_not_by_a_start_label(self):
         r = Recorder()
         r.file()
-        edit = next(c for c in r.calls if c[0][:2] == ["issue", "edit"])
-        self.assertEqual((edit[0][2], "proceed-with-change" in edit[0], edit[1]), ("90", True, "the-pat"))
+        self.assertFalse(any(c[0][:2] == ["issue", "edit"] for c in r.calls))
+        self.assertNotIn("proceed-with-change", [n for n, _ in r.labels])
 
     def test_the_labels_are_made_first_and_a_note_is_posted_only_when_given(self):
         r = Recorder()
         r.file(source_label="maintenance", started_note="Started.")
-        self.assertEqual([n for n, _ in r.labels], ["update-app-intake", "app:notes", "maintenance", "proceed-with-change"])
+        self.assertEqual([n for n, _ in r.labels], ["update-app-intake", "app:notes", "maintenance"])
         self.assertTrue(any(c[0][:2] == ["issue", "comment"] and c[0][-1] == "Started." for c in r.calls))
         quiet = Recorder()
         quiet.file()
         self.assertFalse(any(c[0][:2] == ["issue", "comment"] for c in quiet.calls))
         self.assertNotIn("maintenance", [n for n, _ in quiet.labels])
 
-    def test_when_github_returns_no_issue_number_nothing_is_started(self):
-        r = Recorder(created="")
-        self.assertIsNone(r.file())
-        self.assertFalse(any(c[0][:2] == ["issue", "edit"] for c in r.calls))
+    def test_when_github_returns_no_issue_number_nothing_is_returned(self):
+        self.assertIsNone(Recorder(created="").file())
 
     def test_check_makes_a_failed_call_raise(self):
         r = Recorder()
         r.file(check=True)
-        self.assertTrue(all(c[2] for c in r.calls if c[0][:2] in (["issue", "create"], ["issue", "edit"])))
+        self.assertTrue(all(c[2] for c in r.calls if c[0][:2] == ["issue", "create"]))
 
 
 if __name__ == "__main__":

@@ -85,7 +85,7 @@ def describe_finding(f):
 
 
 # The two files every route passes through: the reviewer must see them even when unchanged,
-# to judge kill-switch ordering and how flags fail closed.
+# to judge how routes are mounted and how flags fail closed.
 REVIEW_CONTEXT_FILES = ("backend/src/app.ts", "backend/src/feature-flags.ts")
 
 
@@ -258,7 +258,7 @@ class ReviewCode:
         role = self.cfg["roles"]["reviewer"]
         context = build_review_context(lambda *a: self.git(*a, check=False).stdout, base, head,
                                        self.lim.get("review_context_max_chars", 200000),
-                                       spec=self.spec if getattr(self, "update_intake", False) else None)
+                                       spec=self.spec)
         system = prompts.render(prompts.load_prompt(role["fast_prompt"]), {"app_name": self.app, "build_kind": self.build_kind, "base_sha": base[:8], "head_sha": head[:8]})
         jwt = self.meter.mint(role["model"])
         start = time.time()
