@@ -45,6 +45,12 @@ class ReadingTheIntake(unittest.TestCase):
         got = plan_run.read_intake(issue(("new-app-intake",), body, "notes"), "o/f", info(), LIMITS)
         self.assertEqual((got["kind"], got["app"]), ("new", "notes"))
 
+    def test_a_bug_intake_carries_its_fix_for_marker_and_an_ordinary_one_does_not(self):
+        marker = child_tickets.render_fix_for(12, 12, 5, True, 1)
+        got = plan_run.read_intake(issue(("update-app-intake", "bug"), marker + "\n\n" + FORM.format(cap="_No response_")), "o/f", info(), LIMITS)
+        self.assertEqual(got["fix_for"], {"fix_for": 12, "flag_story": 12, "origin_parent": 5, "flag": True, "attempt": 1})
+        self.assertIsNone(plan_run.read_intake(issue(), "o/f", info(), LIMITS)["fix_for"])
+
     def test_a_child_ticket_or_another_issue_is_skipped(self):
         child = child_tickets.render_marker({"parent": 7, "cs": "CS-1"}) + "\n\n" + FORM.format(cap="")
         for bad in (issue(body=child), issue(labels=("bug",))):
@@ -73,26 +79,46 @@ class Run(unittest.TestCase):
         self.tickets = child_tickets.ChildTickets("o/f", 7, "pat", self.gh)
         self.comments, self.asked, self.filed = [], [], []
 
-    def go(self, doc=None, ask_error=None, have=(), declared=(), limits=None, kind="update"):
+    def go(self, doc=None, ask_error=None, have=(), declared=(), limits=None, kind="update", fix=None):
         def ask(task):
             self.asked.append(task)
             if ask_error:
                 raise ask_error
             return doc, 0.07, None
 
-        def file(parent, sets, order, secrets):
-            self.filed.append((parent, order, secrets))
+        def file(parent, sets, order, secrets, fix=None):
+            self.filed.append((parent, order, secrets, fix))
             return [(c["id"], 100 + i) for i, c in enumerate(sets)]
 
-        intake = {"kind": kind, "app": "notes", "task": "Add tags", "cap": 2.0, "cap_override": None, "declared": list(declared), "label": "update-app-intake"}
+        intake = {"kind": kind, "app": "notes", "task": "Add tags", "cap": 2.0, "cap_override": None, "declared": list(declared), "label": "update-app-intake",
+                  "fix_for": fix}
         return plan_run.PlanRun(7, intake, limits or {}, ask, self.comments.append, lambda: set(have), self.tickets, file).run()
 
     def test_a_valid_plan_files_a_child_per_change_set_and_comments_the_plan(self):
         got = self.go(plan(2))
         self.assertEqual((got["ending"], len(got["children"]), got["cost"]), ("planned", 2, 0.07))
         self.assertEqual(self.filed[0][:2], (7, ["CS-1", "CS-2"]))
+        self.assertIsNone(self.filed[0][3])
         self.assertIn("Plan: 2 change sets", self.comments[-1])
         self.assertIn("CS-2 (#101)", self.comments[-1])
+
+    FIX = {"fix_for": 12, "flag_story": 12, "origin_parent": 5, "flag": True, "attempt": 1}
+
+    def test_a_bug_intake_that_fixes_a_child_is_told_to_plan_one_change_set_and_files_it_with_the_fix(self):
+        got = self.go(plan(1), fix=self.FIX)
+        self.assertEqual(got["ending"], "planned")
+        self.assertIn("Plan exactly ONE change set", self.asked[0])
+        self.assertTrue(self.asked[0].endswith("Add tags"))
+        self.assertEqual(self.filed[0][3], self.FIX)
+
+    def test_a_fix_of_more_than_one_change_set_is_refused_and_nothing_is_filed(self):
+        got = self.go(plan(2), fix=self.FIX)
+        self.assertEqual(got["ending"], "needs_human")
+        self.assertEqual(self.filed, [])
+        self.assertIn("rejected", got["message"])
+
+    def test_the_same_plan_for_an_ordinary_intake_may_have_several(self):
+        self.assertEqual(self.go(plan(2))["ending"], "planned")
 
     def test_a_single_change_set_is_still_a_child(self):
         got = self.go(plan(1))

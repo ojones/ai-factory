@@ -23,7 +23,7 @@ class RoundLoop(unittest.TestCase):
     def make(self, reviews, tests, pipeline_fix=False):
         run = object.__new__(BuildRun)
         run.app, run.build_kind, run.update_intake, run.plan_meta = "demo", "update", False, None
-        run.task, run.retiring, run.reuse_flags, run.retry_state = "do it", (), [], {}
+        run.task, run.retiring, run.fix_for = "do it", (), None
         run.lim = {"review_rounds": 3, "stuck_rounds": 0}
         run.work = Path(__import__("tempfile").mkdtemp(prefix="loop-test-"))
         run.art = run.work
@@ -201,7 +201,6 @@ class ReviewBeforePushThenTest(unittest.TestCase):
         run.app, run.preview = "demo", "tok"
         run.cfg = {"roles": {"reviewer": {"mode": "agent"}}}
         run.lim = {}
-        run.reuse_flags = []
         run.work = Path(__import__("tempfile").mkdtemp(prefix="work-test-"))
         run.state = track_progress.State(run.work / "state.json", "demo", "1", "url")
         run.state.save = lambda: None

@@ -14,7 +14,7 @@ from shared import (
     shell,  # noqa: E402
 )
 from shared import rollback as rollback_step  # noqa: E402
-from try_fix import fix_request  # noqa: E402
+from try_fix import failure_text  # noqa: E402
 
 from retrospective import close_child, lesson_records, run_facts  # noqa: E402
 from retrospective import finalize as fin
@@ -111,7 +111,7 @@ class Finalize(unittest.TestCase):
         self.assertEqual(report["rollback"]["status"], "failed")
         self.assertTrue(any(a["rule"].startswith("A-07") for a in report["audit"]))
         facts = run_facts.collect_facts(tempfile.mkdtemp(), saved)
-        self.assertIn("rollback failed", fix_request.requirements(facts, None, saved["rollback"])[0])
+        self.assertIn("rollback failed", failure_text.requirements(facts, None, saved["rollback"])[0])
         lessons = lesson_records.lessons_from(facts)
         self.assertEqual(lessons[0]["kind"], "audit_violation")  # reachable now that state.json carries the audit
 

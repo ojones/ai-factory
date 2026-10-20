@@ -61,7 +61,7 @@ class ReleaseStep:
         # Switch on the story's own flag(s). A flag that does not exist is never created here (flag_lifecycle/missing_flag.py): if the code reads it
         # the change is dark with nothing to turn it on, which fails the run; if the code does not read it the change is already live, which is
         # noted and left alone.
-        to_switch, kept, missing = release_features.check_flags(self.gb, self.app, flags, list(self.story_flags) + list(self.reuse_flags))
+        to_switch, kept, missing = release_features.check_flags(self.gb, self.app, flags, list(self.story_flags))
         if missing:
             named = self.state.d.get("named_flag")
             dark, live = missing_flag.split(missing, lambda slug: bool(flag_usage.code_reads(lambda *a: self.git(*a, check=False).stdout, head, slug)))

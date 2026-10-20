@@ -79,5 +79,20 @@ class Children(unittest.TestCase):
             ct.parent_of("o/f", n, "pat", self.gh)
 
 
+class FixFor(unittest.TestCase):
+    def test_the_fix_for_marker_round_trips_and_any_other_body_has_none(self):
+        marker = ct.render_fix_for(12, 7, 5, True, 2)
+        self.assertEqual(ct.read_fix_for(f"{marker}\n\n### App name\n\ndemo"),
+                         {"fix_for": 12, "flag_story": 7, "origin_parent": 5, "flag": True, "attempt": 2})
+        for body in ("", None, "no marker", "<!-- fix-for:not json -->", '<!-- fix-for:{"x":1} -->', "<!-- fix-for:[1] -->"):
+            self.assertEqual(ct.read_fix_for(body), {})
+
+    def test_a_child_marker_records_which_fix_attempt_it_is_only_when_it_is_one(self):
+        cs = {"id": "CS-1", "flag": True, "size": "S"}
+        self.assertNotIn("fix_attempt", ct.marker_for(cs, 7))
+        meta = ct.marker_for(cs, 7, "update", None, 12, 12, 2)
+        self.assertEqual((meta["flag_story"], meta["fix_for"], meta["fix_attempt"]), (12, 12, 2))
+
+
 if __name__ == "__main__":
     unittest.main()

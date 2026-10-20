@@ -8,7 +8,6 @@ import subprocess
 import time
 
 from flag_lifecycle import (
-    flag_manifest,
     flag_slug,
     retirement_selection,
 )
@@ -28,7 +27,6 @@ from shared import (
 )
 from shared.console import log
 from shared.shell import sh
-from try_fix import fix_request
 
 from build_run import endings, read_child, verify_deployed_app
 
@@ -56,20 +54,12 @@ class PrepareRun:
         issue = json.loads(out)
         self.plan_meta = read_child.identify_intake(issue, self.app, self.issue)
         self.locate_plan()
-        self.fix_meta = fix_request.fix_meta(issue["body"] or "")  # an older-style retry carried its state in the body
-        # A story that failed before carries its retry state in a comment on this same issue: the attempt, its flag, what the earlier attempts
-        # found and the guidance for this one. The same issue and the same flag run again.
-        retry = fix_request.retry_state([c.get("body", "") for c in issue.get("comments") or []])
-        self.retry_state = retry
-        self.reuse_flags = [f for f in retry.get("flags", []) if isinstance(f, str) and flag_manifest.SLUG_RE.fullmatch(f)]
-        if retry:
-            self.fix_meta = {"origin": self.issue, "attempt": int(retry.get("attempt", 0)), "history": retry.get("history", [])}
-        if self.fix_meta:
-            self.state.d["fix"] = self.fix_meta
+        # A fix child (STEP 7.1) carries `fix_for` in its marker: the child it fixes. Its flag is the failed story's (`flag_story`).
+        self.fix_for = self.plan_meta.get("fix_for")
+        if self.fix_for:
+            self.state.d["fix_for"] = self.fix_for
         self.task, self.cap = read_child.parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
                                            self.lim["cost_cap_usd_ceiling"])
-        if retry.get("guidance"):
-            self.task += "\n\n" + str(retry["guidance"])
         secrets = triage.find_secrets(issue["body"] or "")
         if secrets:
             raise endings.Refused(triage.secret_refusal(secrets))
@@ -206,7 +196,7 @@ class PrepareRun:
     def choose_flags_to_retire(self):
         # The proven flags that ride along with this run (flag_lifecycle/retirement_selection.py).
         picked, issues = retirement_selection.choose(
-            not self.fix_meta and self.build_kind == "update", self.task, self.app_repo.split("/")[0], self.app,
+            not self.fix_for and self.build_kind == "update", self.task, self.app_repo.split("/")[0], self.app,
             self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout,
             time.strftime("%Y-%m-%d", time.gmtime()))
         if issues:
@@ -329,13 +319,13 @@ class PrepareRun:
             time.sleep(60)
 
     def name_the_flag(self):
-        # A flagged change set's task carries a placeholder for the flag's slug (flag_lifecycle/flag_slug.py). Fill it with the story's flag: a
-        # retried story keeps the flag it had, any other is `issue-<n>` of this issue. Create the GrowthBook feature (production off) and record
+        # A flagged change set's task carries a placeholder for the flag's slug (flag_lifecycle/flag_slug.py). Fill it with the story's flag: `issue-<n>` of this
+        # issue, or of the failed story for a fix child. Create the GrowthBook feature (production off) and record
         # the flag in `flags.json` before the coder starts, so the coder only wraps code; the flag exists while it and the tester work.
         if flag_slug.SLOT not in (self.task or ""):
             return
         # A fix child names the failed story's flag (`flag_story` in its marker); any other child, its own number.
-        slug = self.reuse_flags[0] if self.reuse_flags else flag_slug.for_story(child_tickets.story_number(getattr(self, "plan_meta", None) or {}, self.issue))
+        slug = flag_slug.for_story(child_tickets.story_number(getattr(self, "plan_meta", None) or {}, self.issue))
         self.task = flag_slug.name_in(self.task, slug)
         if getattr(self, "spec", None):
             self.spec = flag_slug.name_in(self.spec, slug)

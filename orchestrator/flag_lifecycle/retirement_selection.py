@@ -16,7 +16,7 @@
 # The newest release therefore always keeps its flag, and a run that ended `nothing_to_release` retires nothing.
 #
 # A *dark* feature is the other case: a flagged change that never got through its checks. It stays dark, behind its flag, and is fixed forward
-# by the story's automatic retries (`fix_request_max_attempts`). Only after those are used up (the story is labelled `needs-human` and
+# by the story's automatic retries (`fix_attempts_max`). Only after those are used up (the story is labelled `needs-human` and
 # `dark-broken`) and a person adds the label `approve-retire` to the story is it removed: `approve` files an Update App Intake that deletes the
 # flag's check, the code it guarded, its tests and its line in `flags.json`, and starts it. Nothing removes a dark feature on its own.
 #

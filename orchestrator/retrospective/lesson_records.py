@@ -5,6 +5,7 @@ import json
 import re
 
 from shared import outcomes
+from try_fix import collect_events
 
 from retrospective import run_facts, tracker
 
@@ -62,8 +63,9 @@ def lessons_from(facts):
 
 
 def wants_fix_request(d, limits):
-    # A fix request is filed for every Build Run that did not end well (the good endings do not).
-    return bool(limits.get("fix_requests", True)) and d.get("outcome") not in outcomes.OK and d.get("outcome") not in outcomes.ANSWERED + (outcomes.PROVIDER_BLOCKED,)
+    # A run's own ending is a failure event, and a failure is always fixed (event_verdicts), so a fix is wanted for every Build Run that did not
+    # end well (the good endings, the answers and a provider with no balance do not).
+    return bool(limits.get("fix_requests", True)) and collect_events.run_failure(d)
 
 
 def records_stuck_issue(outcome):

@@ -8,6 +8,7 @@ from pathlib import Path
 from shared import agent_output, config, github
 from shared.console import log
 from shared.shell import sh
+from try_fix import factory_fix_request, route
 
 from retrospective import agent_run, tracker
 
@@ -96,7 +97,7 @@ def rejected_proposal(factory, paths):
     return bad_fixture_reason(texts)
 
 
-def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
+def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3, failed_child=None):
     # Validate what the Agent changed, test it, and open a PR. Returns the PR URL or None.
     # The PR is labelled `auto-merge-candidate` only for an additive lint/formatter change; the PR checks
     # workflow recomputes that and merges after its checks pass. Everything else waits for a human.
@@ -144,6 +145,8 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
             f"**Regression fixture**: {'included' if fixture else ('the lint rule is itself the check' if auto else ('none: ' + reason if reason else 'NONE, and no reason given'))}\n\n"
             + ("**Auto-merge candidate**: an additive lint or formatter change. It merges itself once the PR checks pass.\n\n" if auto
                else "Review before merging: this edits shared prompts, the Starter Template, the orchestrator or the Standards.\n\n"))
+    if failed_child:  # merging this fixes the Factory cause of a failed child, which then starts again (try_fix/resume_after_merge.py)
+        body += factory_fix_request.failed_child_marker(failed_child) + "\n"
     label = []
     if auto:  # the label must exist, and be on the PR from the start: the checks workflow reads it from the opened event
         tracker.gh(["label", "create", "auto-merge-candidate", "--repo", repo, "--color", "0e8a16", "--description", "Merges itself after the PR checks pass"], pat)
@@ -153,7 +156,7 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3):
     return out or None
 
 
-def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path, targets, run_id):
+def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path, targets, run_id, failed=None):
     # Run the Agent once for these lesson issues, comment its analysis on each, and open the PR.
     key, budget = agent_run.mint_agent(cfg, parent_key)
     if not key:
@@ -168,7 +171,10 @@ def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path,
         for n in targets:
             tracker.gh(["issue", "comment", str(n), "--repo", repo, "--body", "The retrospective Agent produced no usable analysis."], token)
         return None
-    pr = open_pr(factory, repo, pat, targets[0], result, run_id, int(cfg["limits"].get("max_open_learning_prs", 3)))
+    # `failed`: {child, outcome, has_bugs} of the run that failed; when its cause is the Factory's, the PR says which child its merge resumes.
+    cause = route.inferred_category(result.get("category"), failed["outcome"], failed["has_bugs"]) if failed else None
+    resumes = failed["child"] if failed and route.route(cause) == "factory" else None
+    pr = open_pr(factory, repo, pat, targets[0], result, run_id, int(cfg["limits"].get("max_open_learning_prs", 3)), resumes)
     for n in targets:
         tracker.gh(["issue", "comment", str(n), "--repo", repo, "--body",
             f"**Retrospective** ({result['category']}): {result.get('root_cause', '')}\n\n"

@@ -27,9 +27,9 @@ def render_change_set_task(cs, request=None, parent=None):
     return "\n".join(lines).strip()
 
 
-def child_body(app, task, parent, cs, cap=None, secrets=None, kind="update"):
+def child_body(app, task, parent, cs, cap=None, secrets=None, kind="update", flag_story=None, fix_for=None, fix_attempt=None):
     # A child issue's body: the marker, then the Update App Intake form fields, so the child reads like any Update App Intake.
     # The marker goes first: text after the last "### " heading would be read as part of that field.
-    meta = child_tickets.marker_for(cs, parent, kind, secrets)
+    meta = child_tickets.marker_for(cs, parent, kind, secrets, flag_story, fix_for, fix_attempt)
     return (f"{child_tickets.render_marker(meta)}\n\n"
             f"### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n{cap if cap else '_No response_'}\n")

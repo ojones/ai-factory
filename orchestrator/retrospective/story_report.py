@@ -25,7 +25,7 @@ def bug_notes(facts):
 def note_bugs_on_story(repo, token, number, facts, carried):
     # The bugs belong to the Managed App's own story, so they go on the Update App Intake that started the run, not into a new issue: the
     # story gets the `bug` label and, unless the retry comment already carries them (`carried`), a comment listing them. The retry (the
-    # start label added again) is the fix request's job and is bounded by `fix_request_max_attempts`. Once per run.
+    # start label added again) is the bug Intake's job and is bounded by `fix_attempts_max`. Once per run.
     if not facts.get("bugs"):
         return False
     tracker.gh(["label", "create", BUG_LABEL, "--repo", repo, "--color", "d73a4a", "--description", "Something is not working"], token)
@@ -39,7 +39,7 @@ def note_bugs_on_story(repo, token, number, facts, carried):
     return True
 
 
-def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None):
+def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None, verdicts=()):
     # The short summary commented on the issue that started the run.
     notes = []
     if facts.get("dark_broken"):
@@ -52,7 +52,7 @@ def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None
     if facts["recurring_findings"]:
         notes.append("Findings that came back across rounds: " + "; ".join(facts["recurring_findings"][:3]))
     if facts["final_minor"]:
-        notes.append(f"{len(facts['final_minor'])} minor finding(s) shipped open and became suggestions.")
+        notes.append(f"{len(facts['final_minor'])} minor finding(s) shipped open and were recorded.")
     for x in filed:
         notes.append(f"Improvement for the {'app' if x['target'] == 'managed_app' else 'Factory'}: {x['summary']}" + (f" ({x['url']})" if x["url"] else ""))
     for x in lessons:
@@ -61,6 +61,9 @@ def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None
         notes.append(f"Cause named ({result.get('category')}): {result['root_cause'][:200]}")
     if cause and cause["category"] and facts["outcome"] not in outcomes.OK:
         notes.append(f"Cause: `{cause['category']}`, handled as: {ROUTES[cause['route']]}.")
+    for v in verdicts:
+        if v["event"]["severity"] == "warning" or v["verdict"] == "fix":
+            notes.append(f"Event {v['verdict']} ({v['event']['severity']}): {v['event']['summary'][:100]}. {v['reason']}")
     if not notes:
         notes.append("Nothing to improve was found.")
     head = [f"## Retrospective: `{facts['outcome']}`", "", f"{facts['message'] or ''} ([run]({facts['run_url']}))", "",

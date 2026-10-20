@@ -71,16 +71,17 @@ class Bugs(unittest.TestCase):
         env = {"BUILD_RUN_DIR": str(work), "GITHUB_REPOSITORY": "o/f", "GITHUB_RUN_ID": "9", "FACTORY_PAT": "pat", "FACTORY_GH_TOKEN": "tok"}
         with mock.patch.dict(__import__("os").environ, env), mock.patch.object(tracker, "gh", self.fake_gh(calls)), \
                 mock.patch.object(config, "load", return_value={"roles": {}, "limits": {}}), \
-                mock.patch.object(run_retrospective.fix_request, "file_fix_request", return_value={"target": target, "started": target == "app", "url": "u", "attempt": 1}):
+                mock.patch.object(run_retrospective.file_failure, "file_failures", return_value=[{"key": "k", "source": "build_run", "severity": "failure", "target": target,
+                                                                                 "action": "bug_intake" if target == "app" else "fix_request", "url": "u"}]):
             run_retrospective.main()
         return calls
 
-    def test_a_failed_run_notes_its_bugs_on_the_story_when_the_fix_request_is_not_the_stories_retry(self):
+    def test_a_failed_run_notes_its_bugs_on_the_story_unless_a_bug_intake_already_carries_them(self):
         state = dict(STATE, outcome="round_limit", bugs=self.BUGS, issue_number="7", flags=["pin"])
         calls = self.run_main(state, "factory")
         story = [c for c in calls if c[:2] == ["issue", "comment"] and c[2] == "7" and "Bugs the tester saw" in c[c.index("--body") + 1]]
         self.assertEqual(len(story), 1)
-        calls = self.run_main(state, "app")  # the retry comment carries them already
+        calls = self.run_main(state, "app")  # the bug Intake's requirements carry them already
         self.assertFalse([c for c in calls if c[:2] == ["issue", "comment"] and "Bugs the tester saw" in c[c.index("--body") + 1]])
         self.assertTrue(any(c[:3] == ["issue", "edit", "7"] and "bug" in c for c in calls))
 

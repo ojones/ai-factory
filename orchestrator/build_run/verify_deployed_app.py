@@ -187,6 +187,12 @@ def failed_checks(failures):
     return [r for r in failures if isinstance(r, dict) and check_state(r) == "failed"]
 
 
+def unverified_checks(failures):
+    # The checks that were blocked or not run, as notes for the retrospective: [{check, state}].
+    return [{"check": " ".join(str(r.get("check") or "?").split())[:200], "state": check_state(r)}
+            for r in failures if isinstance(r, dict) and check_state(r) in ("blocked", "not_run")][:MAX_BUGS]
+
+
 def unverified_message(failures):
     states = {}
     for r in failures:

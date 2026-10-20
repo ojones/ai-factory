@@ -53,6 +53,13 @@ roles:
     model: openai/gpt-oss-120b
     fallback_model: Qwen/Qwen3.8-Flash
     prompt: prompts/planner.md
+  # Writes the bug ticket for an event the retrospective judged worth fixing (orchestrator/try_fix/write_bug.py): how it was found, the cause, what it takes to resolve and
+  # checkable requirements, from the bug template. One model call, no tools; the Orchestrator validates the answer and writes the ticket itself when it is unusable. The model is
+  # unmeasured (the planner's, for the same reason: a writer needs no code-tuned model); watch the validation failures on the first real runs.
+  try_fix:
+    model: openai/gpt-oss-120b
+    fallback_model: Qwen/Qwen3.8-Flash
+    prompt: prompts/try_fix.md
   # After every Build Run, released or not: reads what the run found and how it ended, files the improvements and proposes a fix as a PR (orchestrator/retrospective.py).
   retrospective:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
@@ -115,8 +122,8 @@ limits:
   # Fly apps that are Factory infrastructure rather than Managed Apps (besides ai-factory-growthbook); the daily Fly audit
   # (orchestrator/monitoring/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
   fly_infra_apps: []
-  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become Update App Intakes that start themselves
-  # (orchestrator/production_feedback.py, scheduled by production-feedback.yml). min_occurrences: times one error must appear in a scan.
+  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become failure events (orchestrator/bugs/scan_production.py, scheduled by production-feedback.yml);
+  # the Retrospective judges them and Try Fix files a bug Intake for each one worth fixing, which starts itself. min_occurrences: times one error must appear in a scan.
   # Daily: Dependabot's open pull requests for each app (npm packages, Docker base image) become one self-starting Update App Intake
   # (orchestrator/maintenance/dependency_updates.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
   maintenance:
@@ -149,13 +156,17 @@ limits:
   # fixed by a later run.
   rollback_regressions: true
   rollback_timeout_minutes: 15
-  # File a fix request issue for every run that ends badly: what happened, what was done, and numbered requirements, routed
-  # to the Factory (a prompt, planner, template or orchestrator cause) or to the app (an Update App Intake for you to start).
+  # Handle every child that ends badly (STEP 7): a cause in the app gets a bug Intake (planned into one fix child behind the same flag; the failed child waits for it), a cause in the Factory gets
+  # a learning PR that starts the child again when it merges, anything else waits for a person. An unchanged child is never started again.
   fix_requests: true
-  # A fix request routed to the app (the request was ambiguous or too big) is an Update App Intake that starts itself: no person
-  # reviews it. A chain stops after this many automatic retries of one Intake and waits for a person.
-  fix_request_autostart: true
-  fix_request_max_attempts: 2
+  # How many fix attempts (bug Intakes along the `fix_for` chain) one story gets before it is left for a person (`needs-human`). Two: the first fix often meets a second problem the failure
+  # hid; a third attempt at the same story is the model repeating itself.
+  fix_attempts_max: 2
+  # Warnings (a dark-only test failure, a check that could not be run, a minor finding) the Retrospective may send to a fix per app per day. A failure is never
+  # limited by it. Counted from the app's `bug` tickets filed today (retrospective/fix_budget.py).
+  fix_events_per_app_per_day: 3
+  # What writing one bug ticket may spend (a scoped credential, so the Agent never holds the parent key).
+  try_fix_cost_cap_usd: 0.25
   # Stop early when this many rounds in a row leave exactly the same checks failing and the same
   # findings open (the fix attempts are changing nothing the checks can see). 0 disables it.
   stuck_rounds: 3

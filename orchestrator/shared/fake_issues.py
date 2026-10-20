@@ -7,6 +7,7 @@ from types import SimpleNamespace
 class FakeIssues:
     def __init__(self, fail=None):
         self.issues, self.subs, self.blocked, self.calls, self.fail = {}, {}, {}, [], fail or {}
+        self.comments = {}  # issue number -> [comment bodies]
         self.next = 100
 
     def add(self, number=None, state="open", body="", labels=()):
@@ -18,6 +19,28 @@ class FakeIssues:
     def __call__(self, args, token, check=False):
         if args[0] != "api":
             self.calls.append(args)
+            if args[:2] == ["issue", "create"]:
+                made = self.add(body=args[args.index("--body") + 1], labels=args[args.index("--label") + 1].split(",") if "--label" in args else [])
+                self.issues[made]["title"] = args[args.index("--title") + 1]
+                return SimpleNamespace(stdout=f"https://github.com/o/f/issues/{made}", stderr="", returncode=0)
+            if args[:2] == ["issue", "list"]:
+                term = args[args.index("--search") + 1].replace(" in:title", "") if "--search" in args else ""
+                need = [args[i + 1] for i, a in enumerate(args) if a == "--label"]
+                found = [i for i in self.issues.values() if i["state"] == "open" and term in i.get("title", "") and set(need) <= {x["name"] for x in i["labels"]}]
+                return self.ok([{"number": i["number"], "title": i.get("title", ""), "url": f"https://github.com/o/f/issues/{i['number']}"} for i in found])
+            if args[:2] == ["issue", "comment"] and int(args[2]) in self.issues:
+                self.comments.setdefault(int(args[2]), []).append(args[args.index("--body") + 1])
+            if args[:2] == ["issue", "view"] and int(args[2]) in self.issues:
+                issue = self.issues[int(args[2])]
+                return self.ok({"number": issue["number"], "title": issue.get("title", ""), "body": issue["body"], "state": issue["state"], "labels": issue["labels"],
+                                "comments": [{"body": b} for b in self.comments.get(issue["number"], [])]})
+            if args[:2] == ["issue", "edit"] and int(args[2]) in self.issues:
+                labels = self.issues[int(args[2])]["labels"]
+                for flag, value in zip(args, args[1:]):
+                    if flag == "--add-label" and value not in [x["name"] for x in labels]:
+                        labels.append({"name": value})
+                    if flag == "--remove-label":
+                        labels[:] = [x for x in labels if x["name"] != value]
             return SimpleNamespace(stdout="", stderr="", returncode=0)
         path = args[1].split("/", 3)[3]  # after repos/<owner>/<repo>/
         method = args[args.index("--method") + 1]

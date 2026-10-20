@@ -281,7 +281,7 @@ class ReviewCode:
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
         flags = flag_manifest.new_flag_slugs(base_flags, head_flags)
-        flags += [s for s in self.reuse_flags if s in flag_manifest.manifest_slugs(head_flags) and s not in flags]
+        flags += [s for s in self.story_flags if s in flag_manifest.manifest_slugs(head_flags) and s not in flags]
         self.state.d["flags"] = list(flags)
         return flags
 

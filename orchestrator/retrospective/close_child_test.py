@@ -133,5 +133,45 @@ class Finishing(unittest.TestCase):
             close_child.finish_update_intake(True, "o/f", "9", "pat")
 
 
+class SettleFix(unittest.TestCase):
+    # Plan 5 has the failed child 12 (waiting, blocked by the bug Intake 50) and a sibling 13; the bug Intake 50 has its one fix child 51.
+    def setUp(self):
+        self.gh = FakeIssues()
+        self.gh.add(5)
+        self.gh.add(12, labels=["update-app-intake", W])
+        self.gh.add(13, labels=["update-app-intake", W])
+        self.gh.subs[5] = [12, 13]
+        self.gh.add(50, body=child_tickets.render_fix_for(12, 12, 5, True, 1) + "\n\n### App name\n\ndemo\n")
+        self.gh.add(51, labels=["update-app-intake", S])
+        self.gh.subs[50] = [51]
+        self.gh.blocked[12] = [50]
+        self.gh.blocked[13] = [12]
+
+    def close_fix(self):
+        self.gh.issues[51]["state"] = "closed"
+        with mock.patch.object(close_child, "sh") as sh, mock.patch.object(close_child.github, "run", self.gh):
+            result = close_child.advance("o/f", "pat", 51, child_tickets.ChildTickets("o/f", 50, "pat", self.gh))
+        return result, [c.args[0] for c in sh.call_args_list]
+
+    def test_when_the_bug_intake_closes_the_story_hears_it_and_the_failed_child_starts_again_not_its_sibling(self):
+        result, edits = self.close_fix()
+        self.assertTrue(result["parent_closed"])  # the fix child was the Intake's last child
+        self.assertEqual(self.gh.issues[50]["state"], "closed")
+        self.assertEqual(result["started"], [12])
+        self.assertTrue(any("The fix for this change set is done" in c for c in self.gh.comments[12]))
+        self.assertEqual([e[3] for e in edits], ["12"])  # only the failed child starts, never the sibling behind it
+
+    def test_a_plan_that_is_not_a_bug_intake_settles_nothing(self):
+        self.assertEqual(close_child.settle_fix("o/f", "pat", 5, self.gh), [])
+        self.assertNotIn(12, self.gh.comments)
+
+    def test_the_failed_child_waits_while_its_bug_intake_is_open(self):
+        self.gh.issues[50]["state"] = "open"
+        with mock.patch.object(close_child, "sh") as sh:
+            result = close_child.advance_plan("o/f", "pat", 5, child_tickets.ChildTickets("o/f", 5, "pat", self.gh))
+        self.assertEqual(result["started"], [])
+        sh.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

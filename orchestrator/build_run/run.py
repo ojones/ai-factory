@@ -20,13 +20,14 @@ from flag_lifecycle import (
     retirement_selection,
 )
 from shared import (
+    child_tickets,
     config,
     outcomes,
     run_stops,
 )
 from shared.console import log
 from shared.shell import sh
-from try_fix import fix_request
+from try_fix import fix_note
 
 from build_run import endings, gate_release, review_code, track_progress, verify_deployed_app
 from build_run.agent_calls import AgentCalls
@@ -42,8 +43,7 @@ from build_run.write_code import WriteCode
 class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDeployedApp, ReleaseStep, TrackProgress):
     # Sequencing only: `run` calls each step in order. Each step's code is in the mixin named above (one file each), over this object's state.
     retiring = ()  # the flags this run retires in passing (set in setup)
-    retry_state = {}  # the story's retry state from its issue (fix_request.retry_state)
-    reuse_flags = []  # the flag(s) a retried story keeps through every attempt
+    fix_for = None  # the failed child this child fixes (its marker's `fix_for`), set in setup
     story_flags = ()  # the flag this run named for the story (flag_slug.py); it is switched on at release whether or not this run created it
     flag_issues = {}  # slug -> number of the story each released flag came from (from the State issue)
     declared_secrets = ()  # the secrets recorded on the Intake, checked at the start of the run (`setup`)
@@ -113,7 +113,8 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
             self.name_the_flag()
             task = self.task + retirement_selection.retirement_block(self.retiring)
             self.spec = (getattr(self, "spec", None) or self.task) + retirement_selection.retirement_note(self.retiring)
-            self.spec += fix_request.retry_note(self.reuse_flags, self.retry_state.get("attempt"))
+            if self.fix_for:
+                self.spec += fix_note.fix_note(child_tickets.story_number(self.plan_meta, self.issue), self.fix_for)
             if self.retiring:
                 log("retiring in passing: " + ", ".join(self.retiring))
                 self.state.d["retiring"] = list(self.retiring)
@@ -160,6 +161,7 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
                         # Nothing failed, but checks were blocked or not run. The coder cannot fix that, so it gets no round for it: the
                         # tester looks again at the same deployed commit, and a run that still cannot verify it stops for a person.
                         if retests <= 0:
+                            self.state.d["unverified"] = verify_deployed_app.unverified_checks(test_failures)
                             raise run_stops.NeedsHuman("other", verify_deployed_app.unverified_message(test_failures))
                         retests -= 1
                         log(f"{len(test_failures)} check(s) could not be verified; testing the same deployed commit again")

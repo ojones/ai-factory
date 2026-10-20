@@ -37,7 +37,7 @@ A GitHub issue (label `new-app-intake`) proposing a new Managed App, carrying it
 _Avoid_: first intake, Managed App Intake
 
 **Update App Intake**:
-A GitHub issue (label `update-app-intake`) asking the Factory to change a Managed App it already built. The owner files it with the form; template sync, maintenance, production feedback and flag retirement file it with the PAT. Applying the label starts planning. (Today `proceed-with-change` starts a Build Run that plans first.)
+A GitHub issue (label `update-app-intake`) asking the Factory to change a Managed App it already built. The owner files it with the form; template sync, maintenance, flag retirement and the Try Fix Agent's bug tickets file it with the PAT. Applying the label starts planning. (Today `proceed-with-change` starts a Build Run that plans first.)
 _Avoid_: Update Intake (former term), ticket, change ticket
 
 **Planning**:
@@ -52,9 +52,17 @@ _Avoid_: sub-task, change ticket, child Update App Intake (former term)
 The first child ticket of a New App Intake (`kind: staging`): stages the app and verifies the infrastructure and connections before any business logic, with no flag.
 _Avoid_: setup ticket
 
-**Fix child**:
-A child ticket planning files under the same parent, ahead of a failed child, when the failure's cause is in the app. It uses the failed child's flag. The failed child is started again only after the fix child closes; an unchanged child is never retried.
+**Bug Intake**:
+An `update-app-intake` labelled `bug`, written by the Try Fix Agent from the bug template and planned like any Intake. For a story whose flag is dark (never released, off, or switched off by the watchdog) it carries `fix_for` (the failed child) and `flag_story`: its plan is exactly one child, behind the same flag, and the failed child waits for it. After a release that is still on it is a regression with a fresh flag. (Built, ticket 15d. The one child it plans is called a **fix child**; it is filed under the bug Intake, not under the failed child's parent.)
 _Avoid_: retry, hotfix
+
+**Failure event**:
+One thing that went wrong or looks wrong, with its source, severity (`failure` or `warning`), app, story, fingerprint and evidence. The Retrospective gives every event a verdict, `fix` or `record`. (Target, ticket 15b.)
+_Avoid_: alert, incident
+
+**Try Fix Agent**:
+The Agent with one job: write a good bug ticket from the bug template for each `fix` verdict (how it was found, root cause, what it takes to resolve, checkable requirements). It does not decide the cause or target and does not plan. One model call with its own capped credential; the Orchestrator validates the answer and writes the ticket itself if it is unusable. (Built, ticket 15c; filing the ticket is ticket 15d.)
+_Avoid_: fixer
 
 **Domain**:
 One named part of the Factory's flow that owns a set of steps in the flow spec, with its own code, tests and documentation, so it can be changed or extended without touching the others. The domains are Request, Planning, Staging, Build Run, Flag Lifecycle, Retrospective (record and advance included), Try Fix and Bugs, plus Maintenance and Monitoring for work outside the request flow.
@@ -105,7 +113,7 @@ The hard gate in a Managed App's deployment pipeline: install, type-check and un
 _Avoid_: CI (when this specific gate is meant)
 
 **Flag slug**:
-The `<slug>` part of a flag's GrowthBook key `<app>.feature.<slug>`. `issue-<n>`, `<n>` the number of the story it belongs to (a retried story keeps its flag; a fix child will use the failed story's number). The Orchestrator names it; older flags keep the slug their planner chose.
+The `<slug>` part of a flag's GrowthBook key `<app>.feature.<slug>`. `issue-<n>`, `<n>` the number of the story it belongs to (a retried story keeps its flag; a fix child uses the failed story's number). The Orchestrator names it; older flags keep the slug their planner chose.
 _Avoid_: flag name, flag id
 
 **Flag manifest**:

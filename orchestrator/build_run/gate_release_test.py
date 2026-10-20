@@ -77,7 +77,7 @@ class ReleasingTheStorysFlag(unittest.TestCase):
     def release_run(self, features=None, own=("todo-ui",), reuse=(), code=""):
         run = object.__new__(BuildRun)
         run.app, run.issue, run.run_id, run.run_url, run.app_repo = "app", "94", "7", "u", "o/app"
-        run.story_flags, run.reuse_flags = list(own), list(reuse)
+        run.story_flags = list(own)
         run.state = track_progress.State(Path("/tmp/x-state.json"), "app", "94", "u")
         run.state.save = lambda: None
         run.state.d["named_flag"] = "todo-ui"
@@ -92,10 +92,10 @@ class ReleasingTheStorysFlag(unittest.TestCase):
         self.assertTrue(run.gb.production_enabled("app.feature.todo-ui"))
         self.assertEqual(run.state.d["release"], {"released": ["app.feature.todo-ui"], "kept": []})
 
-    def test_a_retried_stories_flag_the_watchdog_switched_off_is_released_again(self):
-        run = self.release_run({"app.feature.old-slug": self.OFF}, own=(), reuse=["old-slug"])
-        run.release(["old-slug"], "sha")
-        self.assertTrue(run.gb.production_enabled("app.feature.old-slug"))
+    def test_a_fix_childs_flag_is_the_failed_storys_and_the_watchdog_switched_it_off_so_it_is_released_again(self):
+        run = self.release_run({"app.feature.issue-12": self.OFF}, own=("issue-12",))
+        run.release(["issue-12"], "sha")
+        self.assertTrue(run.gb.production_enabled("app.feature.issue-12"))
 
     def test_any_other_existing_flag_is_left_exactly_as_it_is(self):
         run = self.release_run({"app.feature.other": self.OFF}, own=("todo-ui",))

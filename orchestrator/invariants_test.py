@@ -36,6 +36,7 @@ from shared import (  # noqa: E402
     spend_budget,
     starter_template,
 )
+from shared.fake_issues import FakeIssues  # noqa: E402
 
 ROOT = config.FACTORY_DIR
 PROFILES = yaml.safe_load((ROOT / "agents/profiles.yml").read_text())
@@ -275,44 +276,59 @@ class Invariants(unittest.TestCase):
         self.assertTrue(run_audit.audit_report(dict(d, outcome="regression", stages=[], blocking=[], rollback={"status": "failed", "reason": "x"})))
         self.assertTrue(run_audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
 
-    def test_inv26_a_bad_ending_is_handled_on_the_stories_own_issue_or_as_one_fix_request(self):
+    def test_inv26_a_child_that_ends_badly_and_every_other_failure_event_is_judged_and_handled_once(self):
         from retrospective import lesson_records
-        from try_fix import fix_request as fr
+        from try_fix import event, factory_fix_request, file_bug, route
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
             self.assertTrue(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
-        self.assertEqual((fr.route("plan_gap"), fr.route("spec_ambiguity"), fr.route("infra"), fr.route(None)), ("factory", "app", "info", "info"))
-        self.assertEqual(fr.route(fr.inferred_category(None, "watchdog_disabled")), "app")  # a release the watchdog switched off is the story's to fix
-        self.assertEqual(fr.fingerprint("a", "1", "factory"), fr.fingerprint("a", "1", "factory"))
-        self.assertNotEqual(fr.fingerprint("a", "1", "factory"), fr.fingerprint("a", "2", "factory"))
-        state = {"attempt": 1, "last_run": "r1"}
-        self.assertEqual(fr.retry_decision(state, {"run_url": "r1"}, {})[0], True)  # the same failure twice is one attempt
+        self.assertEqual((route.route("plan_gap"), route.route("spec_ambiguity"), route.route("infra"), route.route(None)), ("factory", "app", "info", "info"))
+        self.assertEqual(route.route(route.inferred_category(None, "watchdog_disabled")), "app")  # a release the watchdog switched off is the story's to fix
+        self.assertEqual(factory_fix_request.fingerprint("a", "1", "factory"), factory_fix_request.fingerprint("a", "1", "factory"))
+        self.assertNotEqual(factory_fix_request.fingerprint("a", "1", "factory"), factory_fix_request.fingerprint("a", "2", "factory"))
+        gh = FakeIssues()
+        ev = event.make("production_feedback", "failure", "demo", "TypeError in /api/todos", "fp")
+        verdict = {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": None, "reason": "r", "event": ev}
+        doc = {"how_found": "a", "root_cause": "b", "what_it_takes": ["c"], "requirements": ["POST /api/todos answers 400 for blank text"], "source": "agent"}
+        with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
+            first = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
+            second = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
+        self.assertEqual((first["action"], second["action"], second["number"]), ("bug_intake", "again", first["number"]))  # the same event reported twice is one
 
-    def test_inv27_self_correction_runs_on_the_same_issue_and_flag_and_is_bounded(self):
-        from try_fix import fix_request as fr
-        lim = {"fix_request_max_attempts": 2}
-        self.assertEqual([fr.should_autostart("app", n, lim) for n in (1, 2, 3, 4)], [True, True, False, False])
-        self.assertFalse(fr.should_autostart("factory", 1, lim))  # a Factory fix is a PR a person merges
-        self.assertEqual(PROFILES["limits"]["fix_request_max_attempts"], 2)
-        self.assertTrue(PROFILES["limits"]["fix_request_autostart"])
-        hidden = fr.with_retry_state({"attempt": 2, "flags": ["f"], "history": ["--x--"], "last_run": "r"})
-        self.assertEqual(fr.retry_state(["no state here", "note " + hidden]), {"attempt": 2, "flags": ["f"], "history": ["--x--"], "last_run": "r"})
-        self.assertEqual(fr.retry_decision({"attempt": 2, "last_run": "r"}, {"run_url": "r2"}, lim), (False, 3, False))  # out of tries: stays for a person
-        calls = []
+    def test_inv27_fix_first_never_retry_the_unchanged_child_and_bounded(self):
+        from retrospective import close_child
+        from shared import child_tickets
+        from try_fix import event, file_bug, resume_after_merge
+        self.assertEqual(PROFILES["limits"]["fix_attempts_max"], 2)
+        form = "### App name\n\ndemo\n\n### What should change?\n\nChange set CS-1: T\n"
+        gh = FakeIssues()
+        gh.add(7)
+        gh.add(12, body=child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "update", "flag": True}) + "\n\n" + form)
+        gh.issues[12]["title"] = "demo: T"
+        gh.subs[7] = [12]
+        doc = {"how_found": "a", "root_cause": "b", "what_it_takes": ["c"], "requirements": ["POST /api/todos answers 400 for blank text"], "source": "agent"}
 
-        def fake(args, token, check=False):
-            calls.append((args, token))
-            if args[:2] == ["issue", "view"]:
-                return mock.Mock(stdout='{"body": "x", "url": "https://github.com/o/f/issues/7", "comments": []}')
-            return mock.Mock(stdout="[]")
+        def verdict(story, fp):
+            ev = event.make("build_run", "failure", "demo", "round limit", fp, story=story)
+            return {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": "spec_ambiguity", "reason": "r", "event": ev}
 
-        facts = {"app": "demo", "outcome": "round_limit", "message": "m", "run_url": "u", "issue_number": "7", "flags": ["demo-flag"]}
-        with mock.patch.object(github, "run", fake):
-            out = fr.file_fix_request("o/f", "actions", "the-pat", facts, {"category": "spec_ambiguity"}, None, lim)
-        self.assertTrue(out["started"])
-        self.assertFalse([a for a, _ in calls if a[:2] == ["issue", "create"]])  # the same issue, never a new one
-        self.assertEqual([t for a, t in calls if a[:2] == ["issue", "edit"] and intake_labels.START in a], ["the-pat"])  # the PAT, so the label event starts the workflow
+        def fix_child(number, bug, attempt, of):
+            marker = {"parent": bug, "cs": "CS-1", "kind": "update", "flag": True, "flag_story": 12, "fix_for": of, "fix_attempt": attempt}
+            gh.add(number, body=child_tickets.render_marker(marker) + "\n\n" + form, labels=["update-app-intake"])
+            gh.issues[number]["title"] = "demo: fix"
+            gh.subs[bug] = [number]
+        with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
+            first = file_bug.file_bug("o/f", "t", "pat", verdict(12, "a"), doc, None, 2)
+            fix_child(40, first["number"], 1, 12)
+            second = file_bug.file_bug("o/f", "t", "pat", verdict(40, "b"), doc, None, 2)
+            fix_child(41, second["number"], 2, 40)
+            third = file_bug.file_bug("o/f", "t", "pat", verdict(41, "c"), doc, None, 2)
+        self.assertEqual((first["action"], second["action"], third["action"]), ("bug_intake", "bug_intake", "needs_human"))  # bounded along the fix_for chain
+        started = [c[2] for c in gh.calls if isinstance(c, list) and c[:2] == ["issue", "edit"] and "proceed-with-change" in c]
+        self.assertNotIn("12", started)  # the failed child itself is never started again as it was
+        self.assertEqual(gh.blocked[12], [first["number"]])  # it waits for its bug Intake, which closes only with its last child
+        self.assertTrue(hasattr(resume_after_merge, "resume") and hasattr(close_child, "settle_fix"))  # a Factory fix resumes it on merge; a bug Intake closing resumes it
 
     def test_inv28_a_check_that_admits_it_was_not_observed_does_not_pass(self):
         real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
@@ -346,17 +362,19 @@ class Invariants(unittest.TestCase):
         self.assertEqual(verify_deployed_app.check_state(left_out["results"][-1]), "failed")
         self.assertIsNotNone(ac.validate([{"id": "a", "request": {"path": "https://other.example/"}, "expect": {"status": 200}}])[1])
 
-    def test_inv31_production_feedback_is_rate_limited_and_owner_only(self):
-        import production_feedback as pf
+    def test_inv31_production_feedback_is_an_event_source_that_is_rate_limited_and_owner_only(self):
+        from bugs import escaped_defects, flood_limits, scan_production
         cfg = {"min_occurrences": 3, "max_per_app_per_day": 2}
         groups = {"a" * 8: {"count": 9, "message": "m", "frame": ""}, "b" * 8: {"count": 8, "message": "n", "frame": ""},
                   "c" * 8: {"count": 1, "message": "o", "frame": ""}}
-        self.assertEqual(pf.decide(groups, {}, 0, 0, cfg)[0], ["a" * 8])  # one at a time, below-threshold ignored
-        self.assertEqual(pf.decide(groups, {}, 1, 0, cfg)[0], [])         # one already open for the app
-        self.assertEqual(pf.decide(groups, {}, 0, 2, cfg)[0], [])         # the daily limit
-        self.assertEqual(pf.decide(groups, {"a" * 8: 5}, 1, 0, cfg), ([], ["a" * 8]))  # a repeat comments
-        import inspect
-        self.assertIn('!= owner', inspect.getsource(pf.scan_defect_labels))  # a defect label by anyone but the owner is skipped
+        self.assertEqual(flood_limits.decide(groups, {}, 0, 0, cfg)[0], ["a" * 8])  # one at a time, below-threshold ignored
+        self.assertEqual(flood_limits.decide(groups, {}, 1, 0, cfg)[0], [])         # one already open for the app
+        self.assertEqual(flood_limits.decide(groups, {}, 0, 2, cfg)[0], [])         # the daily limit
+        self.assertEqual(flood_limits.decide(groups, {"a" * 8: 5}, 1, 0, cfg), ([], ["a" * 8]))  # a repeat comments
+        issues = [{"number": 1, "title": "mine", "body": "", "author": {"login": "o"}}, {"number": 2, "title": "theirs", "body": "", "author": {"login": "someone"}}]
+        with mock.patch.object(github, "run", lambda *a, **k: mock.Mock(stdout=json.dumps(issues))):
+            self.assertEqual([i["number"] for i in escaped_defects.owner_defects("o/ai-factory", "pat", "demo")], [1])  # a report by anyone but the owner is skipped
+        self.assertFalse(hasattr(scan_production, "file_update_app_intake"))  # the scan reports events; Try Fix files the bug
 
     def test_inv32_a_silent_agent_is_killed_long_before_the_overall_timeout(self):
         import tempfile
@@ -441,14 +459,14 @@ class Invariants(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_inv39_a_story_and_its_flag_live_and_die_together(self):
-        from planning import validate_plan as pl
-        from try_fix import fix_request as fr
-        plan = {"requirements": [{"id": "REQ-1", "text": "t"}], "assumptions": [], "open_questions": [],
-                "change_sets": [{"id": "CS-1", "title": "T", "requirements": ["REQ-1"], "depends_on": [], "criteria": ["AC-1: x"], "verification": ["v"], "size": "S",
-                                 "flag": "other", "internal_only": False, "out_of_scope": []}]}
-        self.assertTrue(pl.validate_plan(plan, "update", 8, ["story-flag"])[0])  # a retry may not invent another flag
-        self.assertIn("story-flag", fr.retry_note(["story-flag"], 2))
-        self.assertEqual(fr.retry_state([fr.with_retry_state({"flags": ["story-flag"]})])["flags"], ["story-flag"])
+        from planning import fix_for
+        from shared import child_tickets
+        from try_fix import fix_note
+        self.assertEqual(child_tickets.story_number({"flag_story": 12, "fix_for": 20}, 31), 12)  # a fix child's flag is the failed story's
+        self.assertIn("`issue-12`", fix_note.fix_note(12, 20))
+        self.assertEqual(fix_for.max_change_sets({"fix_for": 20}, 8), 1)  # a bug Intake that fixes a child plans exactly one change set
+        self.assertEqual(fix_for.max_change_sets(None, 8), 8)
+        self.assertFalse(fix_for.apply({"flag": True}, {"flag": False})["flag"])  # and keeps the failed child's flag setting, not the planner's
         for fn in ("release", "disable_flags"):
             self.assertTrue(hasattr(BuildRun, fn))
 
@@ -769,6 +787,62 @@ class Invariants(unittest.TestCase):
         script = (ROOT / "infra/app-staging/stage.sh").read_text()
         self.assertIn("staging.verify_infrastructure", script)
         self.assertLess(script.index("staging.verify_infrastructure"), script.index("retrospective.close_child close"))  # verified, then the next child starts
+    def test_inv58_every_failure_event_gets_a_verdict_a_failure_is_never_downgraded_and_a_warning_needs_a_reason(self):
+        from retrospective import event_verdicts
+        from try_fix import collect_events, event
+        failure = event.make("build_run", "failure", "demo", "round limit", "f")
+        warning = event.make("tester", "warning", "demo", "a dark check failed", "w")
+        entries = {failure["key"]: {"key": failure["key"], "verdict": "record", "reason": "skip"}, warning["key"]: {"key": warning["key"], "verdict": "fix"}}
+        got = {v["key"]: v for v in event_verdicts.decide([failure, warning], entries)}
+        self.assertEqual(set(got), {failure["key"], warning["key"]})  # one verdict for every event
+        self.assertEqual(got[failure["key"]]["verdict"], "fix")  # the Agent cannot downgrade a failure
+        self.assertEqual(got[warning["key"]]["verdict"], "record")  # "fix" without a reason is not a fix
+        self.assertEqual(event_verdicts.decide([warning], {warning["key"]: {"key": warning["key"], "verdict": "fix", "reason": "users wait"}})[0]["verdict"], "fix")
+        facts = {"app": "demo", "outcome": "stuck", "message": "m", "issue_number": "1", "flags": [], "final_minor": [{"summary": "s"}]}
+        self.assertEqual([e["severity"] for e in collect_events.from_run(facts, "fp")], ["failure", "warning"])
+        self.assertTrue(lesson_records.wants_fix_request({"outcome": "stuck"}, {}))
+
+    def test_inv59_the_try_fix_agent_only_writes_the_ticket_text_and_its_answer_is_validated_or_replaced(self):
+        from try_fix import event, render_bug, validate_bug, write_bug
+        ev = event.make("tester", "failure", "demo", "blank text accepted", "fp")
+        verdict = {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": "spec_ambiguity", "reason": "r", "event": ev}
+        cfg = {**PROFILES, "limits": {**PROFILES["limits"], "planner_max_criteria": 6}}
+        prompt = (ROOT / "agents" / PROFILES["roles"]["try_fix"]["prompt"]).read_text()
+        self.assertIn("You do not decide the cause or the target, and you do not plan", prompt)
+        good = {"how_found": "The tester saw it.", "root_cause": "No trimming.", "what_it_takes": ["Blank text is rejected"],
+                "requirements": ["POST /api/todos with blank text answers 400"], "target": "factory", "children": ["a", "b"]}
+        got = write_bug.write(verdict, None, None, cfg, "k", lambda *a, **k: good)
+        self.assertEqual(set(got), {"how_found", "root_cause", "what_it_takes", "requirements", "source"})  # it never carries a target or a plan
+        for vague in ({"how_found": "x"}, {**good, "requirements": ["Improve validation of todos"]}, {**good, "root_cause": "key ghp_" + "a1" * 15}):
+            self.assertEqual(write_bug.write(verdict, None, None, cfg, "k", lambda *a, _v=vague, **k: _v)["source"], "fallback")  # replaced, never filed as is
+        self.assertEqual(validate_bug.check(write_bug.fallback(verdict, None, None), 6)[1], [])
+        self.assertTrue(render_bug.intake_body("demo", got, verdict).startswith(render_bug.marker(ev["key"])))
+        form = yaml.safe_load((ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text())
+        self.assertEqual(form["labels"], ["bug", "update-app-intake"])  # a bug is planned like any Update App Intake
+
+
+    def test_inv60_a_bug_is_dark_or_released_by_the_flags_state_and_only_a_dark_story_keeps_its_flag(self):
+        from bugs import route_bug
+        from shared import child_tickets
+        from try_fix import event, file_bug
+        state = {"flags": [{"key": "demo.feature.issue-12", "state": "released"}, {"key": "demo.feature.issue-20", "state": "switched off by the watchdog"}]}
+        states = route_bug.flag_states(state)
+        self.assertEqual((states[12], states[20]), ("released", "dark"))  # a flag the watchdog switched off is dark (STEP 5.5)
+        form = "### App name\n\ndemo\n\n### What should change?\n\nChange set CS-1: T\n"
+        doc = {"how_found": "a", "root_cause": "b", "what_it_takes": ["c"], "requirements": ["POST /api/todos answers 400 for blank text"], "source": "agent"}
+        for released, keeps_flag in ((False, True), (True, False)):
+            gh = FakeIssues()
+            gh.add(7)
+            gh.add(20, body=child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "update", "flag": True}) + "\n\n" + form)
+            gh.issues[20]["title"] = "demo: T"
+            gh.subs[7] = [20]
+            ev = event.make("production_feedback", "failure", "demo", "TypeError", "fp", story=20, released=released)
+            verdict = {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": None, "reason": "r", "event": ev}
+            with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
+                got = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
+            self.assertEqual(bool(child_tickets.read_fix_for(gh.issues[got["number"]]["body"])), keeps_flag)  # dark: fix_for and the same flag; released: a fresh flag
+            self.assertEqual(bool(gh.blocked), keeps_flag)
+
 
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):

@@ -21,7 +21,7 @@ from shared import (  # noqa: E402
     run_stops,
     spend_budget,
 )
-from try_fix import fix_request as fr  # noqa: E402
+from try_fix import provider_alert  # noqa: E402
 
 # The event OpenHands printed, taken from the real log.
 REAL_EVENT = ('{"id": "af67", "timestamp": "2026-10-12T14:10:40", "source": "environment", "code": "LLMBadRequestError", '
@@ -131,7 +131,7 @@ class AfterwardsOnlyOneAlert(unittest.TestCase):
     def test_the_first_blocked_run_files_one_alert_that_says_what_to_do(self):
         run, calls = self.fake([])
         with mock.patch.object(github, "run", lambda a, t, check=False: run(a, t)):
-            url = fr.file_provider_alert("o/f", "tok", self.FACTS)
+            url = provider_alert.file_provider_alert("o/f", "tok", self.FACTS)
         self.assertEqual(url, "https://github.com/o/f/issues/90")
         create = next(c for c in calls if c[:2] == ["issue", "create"])
         self.assertIn("provider-blocked", create[create.index("--label") + 1])
@@ -142,7 +142,7 @@ class AfterwardsOnlyOneAlert(unittest.TestCase):
     def test_later_blocked_runs_comment_on_the_open_alert_instead_of_filing_more(self):
         run, calls = self.fake([{"number": 90, "url": "https://github.com/o/f/issues/90"}])
         with mock.patch.object(github, "run", lambda a, t, check=False: run(a, t)):
-            url = fr.file_provider_alert("o/f", "tok", dict(self.FACTS, app="other"))
+            url = provider_alert.file_provider_alert("o/f", "tok", dict(self.FACTS, app="other"))
         self.assertEqual(url, "https://github.com/o/f/issues/90")
         self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]])
         self.assertTrue(any(c[:2] == ["issue", "comment"] and "Blocked again" in c[c.index("--body") + 1] for c in calls))

@@ -1,0 +1,33 @@
+name: Bug — something a Managed App does wrong
+description: Report a bug in a Managed App the Factory built. The Factory plans and fixes it like any change.
+title: "my-app-name: what is wrong"
+labels: ["bug", "update-app-intake"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This reports a bug in an app the Factory already built. Submitting it starts planning at once, exactly like an Update App Intake: a planner reads this and the app's code, files the fix as a child ticket, and it is coded, tested and released behind a feature flag. Most bugs are written for you by the Factory itself (from a failed run, a failed check or a production error); use this form when you found one yourself.
+
+        If something needs your answer or cannot be built, the planner comments here: edit this issue, remove the **`update-app-intake`** label and add it again to plan again.
+  - type: input
+    id: app
+    attributes:
+      label: App name
+      description: The Managed App with the bug, exactly as its repo is named (for example `recipe-box`).
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What should change?
+      description: "Use these headings. #### What happened (what you saw and what you expected). #### How it was found (where and when). #### What it would take to resolve (what should be true once fixed, in terms of behaviour). #### Requirements (numbered, each one something that can be checked on the running app). This issue is public: never paste a key, token or password."
+    validations:
+      required: true
+  - type: input
+    id: cost_cap
+    attributes:
+      label: Cost cap override (USD)
+      description: Optional. Leave blank for the standard per-Build-Run cap. May not exceed the configured ceiling.
+      placeholder: "2.00"
+    validations:
+      required: false

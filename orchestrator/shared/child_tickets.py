@@ -8,6 +8,7 @@ from shared import github
 FLAG_SLOT = "{{flag_slug}}"  # where a plan's task text leaves the flag's slug; the Build Run fills in `issue-<n>` (flag_lifecycle/flag_slug.py)
 WAIT = "waiting-on-plan"
 META_RE = re.compile(r"<!-- factory-plan:(.*?) -->", re.S)
+FIX_RE = re.compile(r"<!-- fix-for:(.*?) -->", re.S)
 
 
 def read_marker(body):
@@ -26,9 +27,27 @@ def render_marker(meta):
     return f"<!-- factory-plan:{json.dumps(meta, separators=(',', ':'))} -->"
 
 
+def read_fix_for(body):
+    # The fix a bug Intake carries ({} for any other issue): `fix_for` (the failed child), `flag_story` (the story whose flag the fix reuses), `origin_parent`
+    # (the plan the failed child belongs to), `flag` (whether that child is behind a flag) and `attempt` (1 for the first fix of a story, 2 for a fix of that fix).
+    m = FIX_RE.search(body or "")
+    if not m:
+        return {}
+    try:
+        meta = json.loads(m.group(1))
+    except ValueError:
+        return {}
+    return meta if isinstance(meta, dict) and meta.get("fix_for") else {}
+
+
+def render_fix_for(fix_for, flag_story, origin_parent, flag, attempt):
+    meta = {"fix_for": int(fix_for), "flag_story": int(flag_story), "origin_parent": int(origin_parent), "flag": bool(flag), "attempt": int(attempt)}
+    return f"<!-- fix-for:{json.dumps(meta, separators=(',', ':'))} -->"
+
+
 # The marker's fields. `parent`: the Intake issue's number. `cs`: the change set's id in the plan. `kind`: "staging" (stage the app and verify its
 # infrastructure; only the first child of a new app) or "update". `flag`: whether the child's change is behind a flag (the slug is `issue-<n>`).
-# `flag_story`: set only on a fix child, the number of the failed story whose flag it reuses. `internal_only`, `size` ("S" or "M"),
+# `flag_story`: set only on a fix child, the number of the failed story whose flag it reuses; `fix_for`: the child it fixes; `fix_attempt`: which fix of that story it is (1, 2, ...). `internal_only`, `size` ("S" or "M"),
 # `requirements`: what the planner decided. `secrets`: [{name, purpose}] the request declared. Order is not in the marker:
 # a child's GitHub blockers are the source of truth (`ChildTickets.blockers`), because the UI shows them and readiness is judged from their state.
 KINDS = ("staging", "update")
@@ -43,10 +62,16 @@ def story_number(marker, issue_number):
     return int(marker.get("flag_story") or issue_number)
 
 
-def marker_for(cs, parent, kind="update", secrets=None):
+def marker_for(cs, parent, kind="update", secrets=None, flag_story=None, fix_for=None, fix_attempt=None):
     # The marker for one change set of a plan, in a fixed field order.
     meta = {"parent": parent, "cs": cs["id"], "kind": kind, "flag": bool(cs.get("flag")), "internal_only": bool(cs.get("internal_only")),
             "size": cs.get("size"), "requirements": list(cs.get("requirements") or [])}
+    if flag_story:
+        meta["flag_story"] = int(flag_story)
+    if fix_for:
+        meta["fix_for"] = int(fix_for)
+    if fix_attempt:
+        meta["fix_attempt"] = int(fix_attempt)
     if secrets:
         meta["secrets"] = [{"name": x["name"], "purpose": x.get("purpose", "")} for x in secrets]
     return meta

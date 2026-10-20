@@ -1,8 +1,9 @@
 name: Production feedback
 
-# Every six hours (and on demand): read each Managed App's recent production logs and the owner's `escaped-defect` issues, and
-# turn what repeats into an Update App Intake that starts itself. Fly keeps only a short log buffer, so a daily scan would miss most
-# of it. orchestrator/production_feedback.py does the work; `limits.production_feedback` in agents/profiles.yml is the switch.
+# Every six hours (and on demand): read each Managed App's recent production logs and the owner's `escaped-defect` issues, and turn what repeats into failure
+# events (orchestrator/bugs/). The Retrospective judges them in one batch (STEP 6.7) and Try Fix writes and files a bug Intake for each one worth fixing (STEP 7), so
+# the planner and the Build Run take it from there. Fly keeps only a short log buffer, so a daily scan would miss most of it. `limits.production_feedback` in
+# agents/profiles.yml is the switch.
 on:
   schedule:
     - cron: "11 */6 * * *"
@@ -34,4 +35,18 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           FACTORY_GH_TOKEN: ${{ github.token }}
-        run: python orchestrator/production_feedback.py
+          PYTHONPATH: orchestrator
+        run: python -m bugs.scan_production "$RUNNER_TEMP/events.json"
+      - name: Judge the events
+        env:
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: orchestrator
+        run: python -m retrospective.judge_events "$RUNNER_TEMP/events.json" "$RUNNER_TEMP/verdicts.json"
+      - name: File the bugs
+        env:
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: orchestrator
+        run: python -m try_fix.file_events "$RUNNER_TEMP/verdicts.json"

@@ -54,11 +54,10 @@ class Improvements(unittest.TestCase):
                 return mock.Mock(stdout=f"https://github.com/x/y/issues/{40 + len(created)}")
             return mock.Mock(stdout="[]")
         with mock.patch.object(tracker, "gh", fake_gh), mock.patch.object(tracker, "already_proposed", return_value=False):
-            for_agent, filed = improvement_issues.record_improvements("o/ai-factory", "tok", "o/demo", "pat", self.facts())
-        self.assertEqual([r for r, _ in created], ["o/ai-factory", "o/demo"])
+            for_agent, filed = improvement_issues.record_improvements("o/ai-factory", "tok", self.facts())
+        self.assertEqual([r for r, _ in created], ["o/ai-factory"])  # nothing is filed in the app's repo: the Retrospective judges that event
         self.assertTrue(created[0][1].startswith("Improvement ["))
-        self.assertTrue(created[1][1].startswith("Suggestion: "))
-        self.assertEqual(len(for_agent), 1)  # the app's own suggestion is not a Factory change
+        self.assertEqual(len(for_agent), 1)
         self.assertEqual([f["target"] for f in filed], ["factory", "managed_app"])
 
     def test_the_same_improvement_twice_is_one_issue_and_the_number_per_run_is_capped(self):
@@ -67,9 +66,9 @@ class Improvements(unittest.TestCase):
         with mock.patch.object(tracker, "gh", lambda args, token, check=False: (created.append(args) if args[:2] == ["issue", "create"] else None) or mock.Mock(stdout="[]")):
             with tempfile.TemporaryDirectory() as tmp:
                 facts = run_facts.collect_facts(tmp, dict(STATE, outcome="released", improvements=many))
-            _, filed = improvement_issues.record_improvements("o/ai-factory", "tok", "o/demo", "pat", facts)
+            _, filed = improvement_issues.record_improvements("o/ai-factory", "tok", facts)
         self.assertEqual(len(filed), minor_findings.MAX_MINORS)
-        self.assertEqual(len(created), minor_findings.MAX_MINORS)
+        self.assertEqual(len(created), 0)  # app improvements file nothing here
 
     def test_a_clean_release_is_still_examined_and_reported_on_the_story(self):
         calls = self.run_main(dict(STATE, outcome="released", message="Released 1 flag(s).", improvements=self.IMPS, issue_number="7"))
@@ -112,7 +111,7 @@ class Duplicates(unittest.TestCase):
             self.assertIsNone(tracker.similar_open_issue("o/f", "t", "The Starter Template lacks a health route"))
             self.assertIsNone(tracker.similar_open_issue("o/f", "t", "the of and"))
 
-    def test_an_improvement_that_matches_an_open_issue_adds_context_and_opens_nothing(self):
+    def test_a_factory_improvement_that_matches_an_open_issue_adds_context_and_opens_nothing(self):
         calls = []
 
         def gh(args, token, check=False):
@@ -126,11 +125,11 @@ class Duplicates(unittest.TestCase):
         facts["improvements"] = [dict(facts["improvements"][0], summary="Coder prompt does not say to trim the input"),
                                  dict(facts["improvements"][1], summary="Add a test for empty text values")]
         with mock.patch.object(tracker, "gh", gh), mock.patch.object(tracker, "already_proposed", return_value=True):
-            for_agent, filed = improvement_issues.record_improvements("o/f", "tok", "o/demo", "pat", facts)
-        self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]], "both were already open")
-        commented = {c[2] for c in calls if c[:2] == ["issue", "comment"]}
-        self.assertEqual(commented, {"31", "32"})
-        self.assertTrue(filed[0]["url"].endswith("/issues/31") and filed[1]["url"].endswith("/issues/32"))
+            for_agent, filed = improvement_issues.record_improvements("o/f", "tok", facts)
+        self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]], "it was already open")
+        self.assertEqual({c[2] for c in calls if c[:2] == ["issue", "comment"]}, {"31"})
+        self.assertTrue(filed[0]["url"].endswith("/issues/31"))
+        self.assertEqual(filed[1], {"target": "managed_app", "summary": "Add a test for empty text values", "url": ""})
 
 
 if __name__ == "__main__":

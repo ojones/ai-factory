@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from flag_lifecycle import flag_manifest, flag_slug, retirement_selection  # noqa: E402
+from flag_lifecycle import flag_slug, retirement_selection  # noqa: E402
 from flag_lifecycle.fake_growthbook import FakeGrowthBook  # noqa: E402
 from shared import child_tickets, config, http_client, provider, run_stops  # noqa: E402
 
@@ -117,7 +117,7 @@ class ChoosingFlagsToRetire(unittest.TestCase):
 
     def run_for(self, flags, *, update=True, fix=None, kind="update", task="Add a button", manifest="a,b,c,d", boom=False):
         run = object.__new__(BuildRun)
-        run.update_intake, run.fix_meta, run.build_kind, run.task = update, fix or {}, kind, task
+        run.fix_for, run.build_kind, run.task = (fix or {}).get("origin"), kind, task
         run.app, run.app_repo, run.pat, run.lim = "app", "o/app", "pat", {"flag_retirement": {"min_age_days": 1, "piggyback_max": 5}}
         run.git = lambda *a, check=True: type("R", (), {"stdout": json.dumps([{"slug": s} for s in manifest.split(",")])})()
         patched = mock.patch.object(retirement_selection, "app_flags", side_effect=RuntimeError("down") if boom else None, return_value=(flags, set(manifest.split(","))))
@@ -143,9 +143,9 @@ class ChoosingFlagsToRetire(unittest.TestCase):
 class NamingTheFlag(unittest.TestCase):
     TASK = "Change set CS-1: T\n\nPut the whole change behind one feature flag with the slug `" + flag_slug.SLOT + "`."
 
-    def run_for(self, tmp, task=None, reuse=(), flags_json=None):
+    def run_for(self, tmp, task=None, flags_json=None):
         run = object.__new__(BuildRun)
-        run.task, run.reuse_flags, run.issue, run.factory_repo, run.app = task or self.TASK, list(reuse), "12", "o/f", "app"
+        run.task, run.issue, run.factory_repo, run.app = task or self.TASK, "12", "o/f", "app"
         run.issue_url, run.issue_title = "https://github.com/o/f/issues/12", "app: add a page"
         run.gb, run.app_dir, run.story_flags = FakeGrowthBook(), Path(tmp), ()
         run.share_with_agent = lambda path: None
@@ -176,31 +176,11 @@ class NamingTheFlag(unittest.TestCase):
             run.name_the_flag()
             self.assertIn("issue-12", run.spec)
 
-    def test_a_retried_story_keeps_the_flag_it_had_and_nothing_new_is_created_or_committed(self):
-        on = {"environments": {"production": {"enabled": False, "rules": []}}}
-        with tempfile.TemporaryDirectory() as tmp:
-            run = self.run_for(tmp, reuse=["todo-ui"], flags_json='[{"slug": "todo-ui", "description": "o/f#12: x"}]')
-            run.gb = FakeGrowthBook({"app.feature.todo-ui": on})
-            run.name_the_flag()
-            self.assertIn("slug `todo-ui`", run.task)
-            self.assertEqual((run.git_calls, "created_flag" in run.state.d), ([], False))
-            self.assertEqual(run.story_flags, ["todo-ui"])
-            self.assertEqual([c[0] for c in run.gb.calls], ["GET"])
-
     def test_a_task_with_no_placeholder_changes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = self.run_for(tmp, task="Fix a typo. It needs no flag.")
             run.name_the_flag()
             self.assertEqual((run.task, run.gb.calls, run.git_calls, run.state.d["flags"] if "flags" in run.state.d else None), ("Fix a typo. It needs no flag.", [], [], None))
-
-
-class RetryState(unittest.TestCase):
-    def test_setup_reads_the_retry_state_from_the_issue_comments(self):
-        from try_fix import fix_request as fr
-        hidden = fr.with_retry_state({"attempt": 1, "flags": ["todo-ui"], "history": ["h"], "guidance": "Fix the regression.", "cap": 1.5})
-        retry = fr.retry_state([c for c in ["note", hidden]])
-        self.assertEqual(retry["flags"], ["todo-ui"])
-        self.assertTrue(all(flag_manifest.SLUG_RE.fullmatch(f) for f in retry["flags"]))
 
 
 class SuppressionsAndLintConfig(unittest.TestCase):

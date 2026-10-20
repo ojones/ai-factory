@@ -85,7 +85,6 @@ class Plan(unittest.TestCase):
         plan["change_sets"][1]["flag"] = None  # no flag and not internal is still a problem
         self.assertTrue(any("no flag" in x for x in check(plan)[0]))
         plan["change_sets"][1]["flag"] = True
-        self.assertEqual(p.validate_plan(plan, "update", 8, ["story-flag"])[0], [])  # a retry keeps its flag whatever the plan says
 
     def test_too_many_change_sets_is_a_problem(self):
         plan = good()
@@ -176,7 +175,7 @@ class RollbackSized(unittest.TestCase):
         self.assertTrue(any("7 acceptance criteria, more than 6" in x for x in check(plan)[0]))
         plan["change_sets"][0]["criteria"] = plan["change_sets"][0]["criteria"][:6]
         self.assertEqual(check(plan)[0], [])
-        self.assertEqual(len(p.validate_plan(plan, "update", 8, (), 5)[0]), 1)  # the limit is configurable (planner_max_criteria)
+        self.assertEqual(len(p.validate_plan(plan, "update", 8, 5)[0]), 1)  # the limit is configurable (planner_max_criteria)
 
     def test_a_change_set_that_names_another_must_depend_on_it(self):
         plan = good()
@@ -216,20 +215,6 @@ class RollbackSized(unittest.TestCase):
         plan = self.new_app()
         plan["change_sets"][1]["kind"] = "odd"
         self.assertTrue(any("unknown kind" in x for x in check(plan, "first build")[0]))
-
-
-class RetriedStory(unittest.TestCase):
-    def one_set(self, flag):
-        plan = good()
-        plan["change_sets"] = [dict(plan["change_sets"][0], flag=flag)]
-        plan["requirements"] = plan["requirements"][:1]
-        return plan
-
-    def test_a_retried_story_keeps_its_flag(self):
-        self.assertEqual(p.validate_plan(self.one_set("todo-ui"), "update", 8, ["todo-ui"]), ([], []))
-        problems = p.validate_plan(self.one_set("another"), "update", 8, ["todo-ui"])[0]
-        self.assertTrue(any("keeps its flag" in x and "todo-ui" in x for x in problems))
-        self.assertEqual(p.validate_plan(self.one_set("another"), "update", 8, [])[0], [])  # no retry, no constraint
 
 
 if __name__ == "__main__":

@@ -1,0 +1,30 @@
+name: Resume a failed child
+
+# STEP 7.4. A learning PR that fixes a Factory cause names the child that failed because of it (a `failed-child` marker in its body). When the PR merges, that
+# child is started again, with the PAT so the label starts its Build Run. An auto-merged PR is merged with the PAT (factory-checks.yml) so that this runs.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  resume:
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.body, 'failed-child:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Start the failed child again
+        env:
+          FACTORY_GH_TOKEN: ${{ github.token }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: PYTHONPATH=orchestrator python -m try_fix.resume_after_merge

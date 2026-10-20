@@ -34,7 +34,7 @@ def collect_facts(work, d):
             "rounds": rounds, "recurring_findings": recurring, "stages": stages,
             "final_minor": [{k: f.get(k, "") for k in ("summary", "evidence", "file", "line")} for f in final_minor],
             "improvements": [i for i in d.get("improvements") or [] if isinstance(i, dict) and i.get("summary")],
-            "dark_broken": dark_feature.is_dark_broken(d), "flag_notes": d.get("flag_notes") or [], "bugs": [x for x in d.get("bugs") or [] if isinstance(x, dict) and x.get("check")]}
+            "dark_broken": dark_feature.is_dark_broken(d), "flag_notes": d.get("flag_notes") or [], "unverified": [u for u in d.get("unverified") or [] if isinstance(u, dict) and u.get("check")], "bugs": [x for x in d.get("bugs") or [] if isinstance(x, dict) and x.get("check")]}
 
 
 def fingerprint(facts):

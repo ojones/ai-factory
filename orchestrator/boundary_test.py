@@ -10,12 +10,12 @@ DOMAINS = ("request", "planning", "staging", "build_run", "flag_lifecycle", "ret
 ALLOWED = {
     "request": set(),
     "planning": {"request"},
-    "staging": {"request"},
+    "staging": {"request", "try_fix"},
     "build_run": {"request", "flag_lifecycle", "planning", "try_fix"},  # until the planning process takes plan_change out of the Build Run (ticket 13)
     "flag_lifecycle": {"request"},
     "retrospective": {"try_fix", "request", "flag_lifecycle"},
     "try_fix": {"request", "planning"},
-    "bugs": {"request"},
+    "bugs": {"request", "try_fix"},
     "maintenance": {"request"},
     "monitoring": {"request"},
 }

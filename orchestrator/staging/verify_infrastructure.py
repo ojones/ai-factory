@@ -11,15 +11,18 @@
 #   smoke            the deployed app serves its front page
 #
 # Usage: python -m staging.verify_infrastructure   (env: FACTORY_REPO, ISSUE_NUMBER, APP_NAME, SEED_SHA, FACTORY_PAT, GROWTHBOOK_ADMIN_PAT,
-# PREVIEW_MASTER_SECRET, GITHUB_STEP_SUMMARY); exit 0 when every check passes.
+# PREVIEW_MASTER_SECRET, GITHUB_STEP_SUMMARY, optional FAILURE_EVENTS_FILE); exit 0 when every check passes. When a check fails, one failure event per failed check is
+# written to FAILURE_EVENTS_FILE for the Retrospective to judge (STEP 6.7).
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from shared import child_tickets, github, preview_token
+from try_fix import event
 
 CHECKS = ("ci_green", "deploy_healthy", "flag_service", "preview_token", "secrets_present", "smoke")
 PIPELINE = ("Test Gate", "Build", "Deploy to Fly")  # the names of the workflows the Starter's seed push runs, in order
@@ -127,6 +130,12 @@ def verify(deps, app, sha, token, declared=(), timeouts=None):
     return out
 
 
+def failure_events(app, number, results):
+    # One failure event per failed check (STEP 3.2 to 6.7): a failed staging check is a failure of the staging child.
+    return [event.make("staging", "failure", app, f"staging check {r['check']} failed: {r['detail']}", r["check"], story=number)
+            for r in results if not r["ok"]]
+
+
 def report(results):
     lines = ["**Infrastructure verified.**" if all(r["ok"] for r in results) else "**Infrastructure check failed.**", ""]
     lines += [f"- {'passed' if r['ok'] else 'FAILED'} `{r['check']}`: {r['detail']}" for r in results]
@@ -178,6 +187,8 @@ def main():
     with open(e.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
         f.write(text + "\n")
     github.run(["issue", "comment", number, "--repo", repo, "--body", text], e.get("GH_TOKEN", pat))
+    if e.get("FAILURE_EVENTS_FILE"):
+        event.dump(failure_events(app, number, results), Path(e["FAILURE_EVENTS_FILE"]))
     return 0 if all(r["ok"] for r in results) else 1
 
 

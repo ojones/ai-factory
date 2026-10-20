@@ -31,7 +31,7 @@ from shared import (
 from shared.console import log
 from shared.shell import sh
 
-from planning import file_children, plan_comment, secrets_check, secrets_marker, triage, validate_plan
+from planning import file_children, fix_for, plan_comment, secrets_check, secrets_marker, triage, validate_plan
 
 PLANNED, REFUSED, AWAITING_SECRET, NEEDS_HUMAN, SKIPPED = "planned", "refused", "awaiting_secret", "needs_human", "skipped"
 ANSWERED = (PLANNED, SKIPPED, REFUSED, AWAITING_SECRET)  # a workflow that ends this way succeeded; only needs_human is red
@@ -72,7 +72,7 @@ def read_intake(issue, repo, repo_info, limits):
         if not check_target_app.is_factory_repo(json.loads(info.stdout).get("description"), repo):
             raise Stop(NEEDS_HUMAN, f"`{app}` was not created by this Factory (its description is not an `Intake: {repo}#<n>` marker), so the Factory will not change it.")
     raw_cap = read_form.form_section(body, "Cost cap override (USD)").lstrip("$")
-    return {"kind": kind, "app": app, "task": task, "cap": cap, "cap_override": raw_cap if raw_cap and raw_cap != read_form.NO_ANSWER else None,
+    return {"kind": kind, "app": app, "task": task, "cap": cap, "fix_for": child_tickets.read_fix_for(body) or None, "cap_override": raw_cap if raw_cap and raw_cap != read_form.NO_ANSWER else None,
             "declared": secrets_marker.declared_secrets(issue), "label": intake_labels.UPDATE_APP_INTAKE if kind == "update" else intake_labels.NEW_APP_INTAKE}
 
 
@@ -101,13 +101,13 @@ class PlanRun:
             if missing:
                 return self.stop(AWAITING_SECRET, secrets_check.waiting_message(missing, self.intake["app"], "re-add the label"))
         try:
-            doc, self.cost, _usage = self.ask(self.intake["task"])
+            doc, self.cost, _usage = self.ask(fix_for.task_for(self.intake["task"], self.intake.get("fix_for")))
         except run_stops.NeedsHuman as e:
             return self.stop(NEEDS_HUMAN, str(e))
         blocked, category, reasons, possible = triage.feasibility(doc)
         if blocked:
             return self.stop(REFUSED, triage.refusal_text(category, reasons, possible))
-        problems, questions = validate_plan.validate_plan(doc, build_kind, int(self.lim.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS)), (),
+        problems, questions = validate_plan.validate_plan(doc, build_kind, fix_for.max_change_sets(self.intake.get("fix_for"), int(self.lim.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS))),
                                                           int(self.lim.get("planner_max_criteria", validate_plan.MAX_CRITERIA)))
         if problems:
             return self.stop(NEEDS_HUMAN, "the planner's plan was rejected: " + "; ".join(problems))
@@ -122,7 +122,7 @@ class PlanRun:
                 return {"ending": AWAITING_SECRET, "message": secrets_check.waiting_message(missing, self.intake["app"], "re-add the label"),
                         "cost": self.cost, "children": []}
         sets = doc["change_sets"]
-        made = self.file(self.number, sets, validate_plan.topological_order(sets), needed)
+        made = self.file(self.number, sets, validate_plan.topological_order(sets), needed, **({"fix": self.intake["fix_for"]} if self.intake.get("fix_for") else {}))
         lines = ", ".join(f"{cs} (#{n})" for cs, n in made)
         self.comment(plan_comment.render_plan_comment(doc) + f"\n\n**Filed {len(made)} child ticket(s), run one at a time in this order:** {lines}.")
         return {"ending": PLANNED, "message": f"Planned as {len(made)} change set(s): {lines}.", "cost": self.cost, "children": made}
@@ -201,7 +201,7 @@ def main():
         problems = []
 
         def check(doc):
-            found, _ = validate_plan.validate_plan(doc, build_kind, int(lim.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS)), (),
+            found, _ = validate_plan.validate_plan(doc, build_kind, int(lim.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS)),
                                                    int(lim.get("planner_max_criteria", validate_plan.MAX_CRITERIA)))
             problems[:] = found
             if found:
@@ -216,8 +216,8 @@ def main():
         tickets = child_tickets.ChildTickets(repo, number, pat)
         run = PlanRun(number, intake, lim, ask, lambda text: gh(["issue", "comment", number, "--repo", repo, "--body", text]),
                       lambda: secret_names_of(app_repo, gh), tickets,
-                      lambda parent, sets, order, secrets: file_children.file_children(repo, pat, intake["app"], parent, sets, order, intake["task"],
-                                                                                         cap=intake["cap_override"], secrets=secrets, tickets=tickets),
+                      lambda parent, sets, order, secrets, fix=None: file_children.file_children(repo, pat, intake["app"], parent, sets, order, intake["task"],
+                                                                                                  cap=intake["cap_override"], secrets=secrets, tickets=tickets, fix=fix),
                       repo, pat)
         result = run.run()
     except run_stops.ProviderBlocked as e:

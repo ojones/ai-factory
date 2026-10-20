@@ -2,11 +2,12 @@
 # stopped loses `proceed-with-change`, so adding the label again retries it (a label that is still there cannot fire again). The children are the
 # parent's sub-issues, and what a waiting child waits for is its GitHub blockers: it is ready when every blocker is closed. The last child to
 # close closes the parent.
+import json
 import os
 import sys
 
 from request import intake_labels
-from shared import child_tickets
+from shared import child_tickets, github
 from shared.shell import sh
 
 
@@ -28,21 +29,40 @@ def start_child(repo, pat, number):
        env={**os.environ, "GH_TOKEN": pat}, check=False)
 
 
-def advance(repo, pat, number, tickets=None):
-    # After child `number` closed: close the parent if that was the last child, otherwise start the child that was waiting for it. Returns
-    # {"started": [numbers], "parent_closed": bool}. An issue with no parent (a child of no plan) does nothing.
-    parent = tickets.parent if tickets else child_tickets.parent_of(repo, number, pat)
-    if not parent:
-        return {"started": [], "parent_closed": False}
+def settle_fix(repo, pat, parent, run=None):
+    # STEP 7.4: a plan that closed was a bug Intake's (its body carries a `fix-for` marker): the story it fixed hears that the fix is done, and the plan the failed
+    # child belongs to moves on, which starts that child again (it was blocked by the Intake and is waiting). Returns the numbers started.
+    run = run or github.run
+    p = run(["issue", "view", str(parent), "--repo", repo, "--json", "body"], pat)
+    fix = child_tickets.read_fix_for(json.loads(p.stdout or "{}").get("body") if p.returncode == 0 else "")
+    if not fix:
+        return []
+    run(["issue", "comment", str(fix["fix_for"]), "--repo", repo, "--body",
+         f"The fix for this change set is done (#{parent} is closed). It starts again, now with the fix in `main`."], pat)
+    return advance_plan(repo, pat, fix["origin_parent"])["started"]
+
+
+def advance_plan(repo, pat, parent, tickets=None):
+    # Move plan `parent` on: close it if every child is closed, otherwise start the child that is ready. Returns {"started": [numbers], "parent_closed": bool}.
     tickets = tickets or child_tickets.ChildTickets(repo, parent, pat)
     children = tickets.children()
     if children and all(c["state"] == "CLOSED" for c in children):
         tickets.close(parent, "Every change set of this plan is done.")
-        return {"started": [], "parent_closed": True}
+        return {"started": settle_fix(repo, pat, parent, getattr(tickets, "_run", None)), "parent_closed": True}
     started = ready_to_start(children, tickets.blockers)
     for n in started:
         start_child(repo, pat, n)
     return {"started": started, "parent_closed": False}
+
+
+def advance(repo, pat, number, tickets=None):
+    # After child `number` closed: close the parent if that was the last child, otherwise start the child that was waiting for it. Returns
+    # {"started": [numbers], "parent_closed": bool}. An issue with no parent (a child of no plan) does nothing. A closing bug Intake also moves on the plan of
+    # the child it fixed (settle_fix), and `started` then lists that plan's child.
+    parent = tickets.parent if tickets else child_tickets.parent_of(repo, number, pat)
+    if not parent:
+        return {"started": [], "parent_closed": False}
+    return advance_plan(repo, pat, parent, tickets)
 
 
 def finish_update_intake(ok, repo, number, pat):

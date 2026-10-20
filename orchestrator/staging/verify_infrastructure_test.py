@@ -37,6 +37,15 @@ class Checks(unittest.TestCase):
         self.assertTrue(all(r["ok"] for r in out), out)
         self.assertIn("Infrastructure verified", v.report(out))
 
+    def test_each_failed_check_is_one_failure_event_for_the_staging_child_and_a_pass_is_none(self):
+        app = FakeApp(secrets=v.STAGING_SECRETS, health=500)
+        out = v.verify(app.deps(), "notes", "abc", "tok", [])
+        events = v.failure_events("notes", "12", out)
+        self.assertEqual({e["fingerprint"] for e in events}, {r["check"] for r in out if not r["ok"]})
+        self.assertTrue(events and all(e["severity"] == "failure" and e["source"] == "staging" and e["story"] == 12 for e in events))
+        healthy = v.verify(FakeApp(secrets=v.STAGING_SECRETS).deps(), "notes", "abc", "tok", [])
+        self.assertEqual(v.failure_events("notes", "12", healthy), [])
+
     def test_a_pipeline_stage_that_failed_fails_ci_without_waiting_out_the_timeout(self):
         runs = [GREEN[0], dict(GREEN[1], conclusion="failure"), {"name": "Deploy to Fly", "status": "queued", "conclusion": None}]
         app = FakeApp(runs=runs)

@@ -63,7 +63,7 @@ def secret_problems(secrets):
     return problems
 
 
-def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, reuse_flags=(), max_criteria=MAX_CRITERIA):
+def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, max_criteria=MAX_CRITERIA):
     # (problems, questions). `problems` are reasons the plan cannot be used and must be redone; `questions` are
     # the blocking open questions a person has to answer first. A plan is ready only when both are empty.
     problems, questions = [], []
@@ -165,8 +165,6 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, re
             problems.append(f"{name} is an update with a user-visible effect but no flag (set `flag`, or `internal_only: true` if users cannot see it)")
     if len(set(flags)) != len(flags):
         problems.append("two change sets share a flag: each change set has its own, so one can be switched off alone")
-    if reuse_flags and len(sets) == 1 and flags and flags[0] not in reuse_flags:
-        problems.append(f"this story is a retry and keeps its flag: use exactly {', '.join(repr(f) for f in reuse_flags)} for the change set, not {flags[0]!r}")
 
     for rid in req_ids:
         if rid not in covered:
