@@ -37,7 +37,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT / "orchestrator"))
-import build_run as b  # noqa: E402
+from shared import agent_usage, config, prompts, starter_template  # noqa: E402
 
 TEMPLATE = ROOT / "templates" / "starter"
 TASKS_DIR = HERE / "tasks"
@@ -114,7 +114,7 @@ def score(workdir, task, base_sha):
     if not count.isdigit() or int(count) == 0:
         return False, "no commit"
     changed = run(["git", "diff", "--name-only", f"{base_sha}..HEAD"], workdir)[1].split("\n")
-    bad = b.protected_violations([c for c in changed if c])
+    bad = starter_template.protected_violations([c for c in changed if c])
     if bad:
         return False, f"changed protected files: {', '.join(bad)}"
     overlay(task["dir"] / "accept", workdir / "backend" / "src" / "__tests__" / "accept")
@@ -159,7 +159,7 @@ def one_run(job):
         base_sha = run(["git", "rev-parse", "HEAD"], workdir)[1].strip()
         findings = root / f"findings-{slug}-{task['id']}-{trial}.json"
         findings.write_text('{"blocking": [], "minor": []}')
-        prompt = b.render(b.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), {
+        prompt = prompts.render(prompts.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), {
             "app_name": "smoke-app", "round": "1", "task": task["task"], "findings_path": findings,
             "build_kind": task["build_kind"]})
         home.mkdir(parents=True, exist_ok=True)
@@ -177,7 +177,7 @@ def one_run(job):
         usage, cost = None, 0.0
         for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
             state = json.loads(state_file.read_text())
-            usage, cost = b.summarize_token_usage(state), cost_of(state, prices.get(model, {}))
+            usage, cost = agent_usage.summarize_token_usage(state), cost_of(state, prices.get(model, {}))
         result.update(calls=(usage or {}).get("calls", 0), llm_secs=(usage or {}).get("llm_seconds", 0),
                       peak_context=(usage or {}).get("peak_context", 0), cost=round(cost, 4))
         result["passed"], result["reason"] = (False, f"coder exited {rc}") if rc == "timeout" else score(workdir, task, base_sha)
@@ -234,7 +234,7 @@ def main():
     if "--validate" in sys.argv:
         validate()
     key = os.environ["DEEPINFRA_API_KEY"]
-    profiles = b.load_config() if hasattr(b, "load_config") else {}
+    profiles = config.load()
     default_model = ((profiles.get("roles") or {}).get("coder") or {}).get("model", "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo")
     base_url = ((profiles.get("provider") or {}).get("base_url")) or "https://api.deepinfra.com/v1/openai"
     models = [m for m in os.environ.get("MODELS", default_model).split(",") if m]

@@ -3,15 +3,25 @@
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build_run as b  # noqa: E402
-import fixrequest as fr  # noqa: E402
-import retrospective as pm  # noqa: E402
-from shared import github, http_client, outcomes, provider, run_stops, spend_budget  # noqa: E402
+from build_run import review_code, track_progress  # noqa: E402
+from build_run.run import BuildRun  # noqa: E402
+from retrospective import lesson_records  # noqa: E402
+from shared import (  # noqa: E402
+    github,
+    http_client,
+    outcomes,
+    provider,
+    rollback,  # noqa: E402
+    run_stops,
+    spend_budget,
+)
+from try_fix import fix_request as fr  # noqa: E402
 
 # The event OpenHands printed, taken from the real log.
 REAL_EVENT = ('{"id": "af67", "timestamp": "2026-10-12T14:10:40", "source": "environment", "code": "LLMBadRequestError", '
@@ -74,16 +84,16 @@ class Places(unittest.TestCase):
     def test_the_single_call_reviewer_does_not_fall_back_to_the_agent_on_a_402(self):
         with mock.patch.object(http_client, "request", return_value=(402, {})):
             with self.assertRaises(run_stops.ProviderBlocked):
-                b.single_call_review("https://x/v1", "k", "m", "sys", "user")
-        with mock.patch.object(http_client, "request", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
-            with self.assertRaises(b.FastReviewFailed):
-                b.single_call_review("https://x/v1", "k", "m", "sys", "user", attempts=2)
+                review_code.single_call_review("https://x/v1", "k", "m", "sys", "user")
+        with mock.patch.object(http_client, "request", return_value=(500, {})), mock.patch.object(time, "sleep"):
+            with self.assertRaises(review_code.FastReviewFailed):
+                review_code.single_call_review("https://x/v1", "k", "m", "sys", "user", attempts=2)
 
 
 class Run(unittest.TestCase):
     def test_a_blocked_provider_ends_the_run_as_provider_blocked_and_nothing_else(self):
-        run = object.__new__(b.BuildRun)
-        run.state = b.State("/tmp/unused-state.json", "demo", "1", "u")
+        run = object.__new__(BuildRun)
+        run.state = track_progress.State("/tmp/unused-state.json", "demo", "1", "u")
         run.state.save = lambda: None
         run.setup = mock.Mock(side_effect=run_stops.ProviderBlocked(provider.BLOCKED_MESSAGE))
         run.run()
@@ -93,17 +103,17 @@ class Run(unittest.TestCase):
     def test_it_is_not_a_good_ending_and_is_not_rolled_back_either(self):
         self.assertNotIn("provider_blocked", outcomes.OK)
         d = {"outcome": "provider_blocked", "commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
-        self.assertFalse(b.rollback_decision(d)[0])  # code is fixed forward; only a regression rolls the deploy back
+        self.assertFalse(rollback.rollback_decision(d)[0])  # code is fixed forward; only a regression rolls the deploy back
 
 
 class AfterwardsOnlyOneAlert(unittest.TestCase):
     FACTS = {"app": "demo", "run_url": "https://x/run/9", "issue_number": "66", "rollback": {"status": "rolled_back", "restored": "01234567", "deploy": "healthy"}}
 
     def test_no_self_starting_retry_no_lesson_no_stuck_issue(self):
-        self.assertFalse(pm.wants_fix_request({"outcome": "provider_blocked"}, {}))
-        self.assertFalse(pm.records_stuck_issue("provider_blocked"))
-        self.assertTrue(pm.wants_fix_request({"outcome": "round_limit"}, {}))
-        self.assertTrue(pm.records_stuck_issue("round_limit"))
+        self.assertFalse(lesson_records.wants_fix_request({"outcome": "provider_blocked"}, {}))
+        self.assertFalse(lesson_records.records_stuck_issue("provider_blocked"))
+        self.assertTrue(lesson_records.wants_fix_request({"outcome": "round_limit"}, {}))
+        self.assertTrue(lesson_records.records_stuck_issue("round_limit"))
 
     def fake(self, existing):
         calls = []

@@ -8,9 +8,9 @@ CS = {"id": "CS-2", "title": "t", "flag": True, "internal_only": False, "size": 
 
 class Marker(unittest.TestCase):
     def test_a_marker_round_trips_through_a_body_and_other_issues_have_none(self):
-        meta = ct.marker_for(CS, 7, "update", [41], [{"name": "A_KEY", "purpose": "x", "read_by": "backend"}])
+        meta = ct.marker_for(CS, 7, "update", [{"name": "A_KEY", "purpose": "x", "read_by": "backend"}])
         self.assertEqual(meta, {"parent": 7, "cs": "CS-2", "kind": "update", "flag": True, "internal_only": False, "size": "S", "requirements": ["REQ-1"],
-                                "depends_on": [41], "secrets": [{"name": "A_KEY", "purpose": "x"}]})
+                                "secrets": [{"name": "A_KEY", "purpose": "x"}]})
         self.assertEqual(ct.read_marker("text\n" + ct.render_marker(meta) + "\nmore"), meta)
         for none in ("", None, "no marker", "<!-- factory-plan:{broken -->", "<!-- factory-plan:[1] -->"):
             self.assertEqual(ct.read_marker(none), {})

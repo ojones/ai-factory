@@ -177,34 +177,34 @@ flowchart TD
 | 2.2 | Refuse | Orchestrator | `planning/triage.feasibility`, `Refused` |  |  |
 | 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` |  |  |
 | 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` |  |  |
-| 2.5 | Start the first child | Orchestrator | `update_app_intake.ready_to_start` |  |  |
+| 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` |  |  |
 | 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` |  |  |
 | 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh` |  |  |
 | 3.2 | Verify infrastructure | Orchestrator, Tester | Starter smoke test, tester |  |  |
-| 4.1 | Prepare the run | Orchestrator | `BuildRun.setup`, new `ensure_feature` |  |  |
+| 4.1 | Prepare the run | Orchestrator | `build_run/prepare_run.py`, `flag_lifecycle/flag_slug.ensure_feature` |  |  |
 | 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_lifecycle.retirement_selection.piggyback_slugs` |  |  |
 | 4.3 | Code | Coder Agent | `agents/prompts/coder.md` |  |  |
 | 4.4 | Pre-review check | Orchestrator | `limits.precheck`, Starter `scripts/check-flags.mjs` |  |  |
-| 4.5 | Review | Reviewer Agent | `reviewer.md`, `banded_findings` |  |  |
-| 4.6 | Push | Orchestrator | `BuildRun.push` |  |  |
+| 4.5 | Review | Reviewer Agent | `reviewer.md`, `build_run/review_code.py` |  |  |
+| 4.6 | Push | Orchestrator | `build_run/ship_code.py` |  |  |
 | 4.7 | CI and dark deploy | app CI | Starter workflows |  |  |
 | 4.8 | Diagnose pipeline failure | Pipeline Agent | pipeline role |  |  |
-| 4.9 | Test the deployed app | Tester Agent | `tester.md`, `api_check.py`, `ui_check.py` |  |  |
+| 4.9 | Test the deployed app | Tester Agent | `tester.md`, `build_run/verify_deployed_app.py`, `shared/api_check.py`, `build_run/ui_check.py` |  |  |
 | 4.10 | Retest | Orchestrator | `limits.test_retries` |  |  |
 | 4.11 | Roll back the deploy | Orchestrator | `rollback-fly.yml` |  |  |
-| 4.12 | Release gate | Orchestrator | `BuildRun.release` conditions |  |  |
-| 4.13 | Release | Orchestrator | `BuildRun.release`, watchdog |  |  |
-| 4.14 | Child fails | Orchestrator | `finish_update_app_intake` |  |  |
-| 5.1-5.7 | Flag lifecycle | Orchestrator | `flag_lifecycle/`, `appstate.py` |  |  |
-| 6.1 | Child closed | Orchestrator | `finish_update_app_intake` |  |  |
-| 6.2 | Retrospective | Retrospective Agent | `retrospective.py`, `finalize` |  |  |
-| 6.3 | Advance to the next child | Orchestrator | `update_app_intake.advance` |  |  |
-| 6.4 | Parent closes | Orchestrator | new, in `advance` |  |  |
-| 6.5 | App live and recorded | Orchestrator | `appstate.py` |  |  |
+| 4.12 | Release gate | Orchestrator | `build_run/gate_release.py` |  |  |
+| 4.13 | Release | Orchestrator | `build_run/gate_release.py`, `flag_lifecycle/` |  |  |
+| 4.14 | Child fails | Orchestrator | `retrospective/close_child.finish_update_intake` |  |  |
+| 5.1-5.7 | Flag lifecycle | Orchestrator | `flag_lifecycle/`, `retrospective/app_state.py` |  |  |
+| 6.1 | Child closed | Orchestrator | `retrospective/close_child.finish_update_intake` |  |  |
+| 6.2 | Retrospective | Retrospective Agent | `retrospective/finalize.py`, `retrospective/run_retrospective.py`, `retrospective/cause.py` |  |  |
+| 6.3 | Advance to the next child | Orchestrator | `retrospective/close_child.advance` |  |  |
+| 6.4 | Parent closes | Orchestrator | `retrospective/close_child.advance` |  |  |
+| 6.5 | App live and recorded | Orchestrator | `retrospective/app_state.py` |  |  |
 | 6.6 | Ongoing signals | scheduled workflows | `template_sync`, `maintenance` |  |  |
-| 7.1 | Fix child | Planner | new, in `fixrequest.py` |  |  |
-| 7.2 | Factory fix request | Orchestrator | `fixrequest.py` |  |  |
+| 7.1 | Fix child | Planner | new, in `try_fix/fix_request.py` |  |  |
+| 7.2 | Factory fix request | Orchestrator | `try_fix/fix_request.py` |  |  |
 | 7.3 | Learning PR | Retrospective Agent | `factory-run.yml` |  |  |
-| 7.4 | Resume the failed child | Orchestrator | new, in `fixrequest.py` |  |  |
+| 7.4 | Resume the failed child | Orchestrator | new, in `try_fix/fix_request.py` |  |  |
 | 7.5 | Needs human | Orchestrator | `needs-human` label |  |  |
 | 8.1-8.4 | Bugs found later | production_feedback | `production_feedback.py` |  |  |

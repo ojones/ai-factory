@@ -37,18 +37,18 @@ class ChangeSets(unittest.TestCase):
         self.assertNotIn("original request", text)
 
     def test_child_metadata_round_trips_and_other_issues_have_none(self):
-        body = render_child.child_body("notes", "do it", 7, {"id": "CS-2"}, [41, 42])
+        body = render_child.child_body("notes", "do it", 7, {"id": "CS-2"})
         marker = child_tickets.read_marker(body)
-        self.assertEqual((marker["parent"], marker["cs"], marker["kind"], marker["depends_on"]), (7, "CS-2", "update", [41, 42]))
-        staging = render_child.child_body("notes", "do it", 7, {"id": "CS-1", "flag": None, "size": "M"}, [], kind="staging")
+        self.assertEqual((marker["parent"], marker["cs"], marker["kind"]), (7, "CS-2", "update"))
+        staging = render_child.child_body("notes", "do it", 7, {"id": "CS-1", "flag": None, "size": "M"}, kind="staging")
         self.assertEqual((child_tickets.read_marker(staging)["kind"], child_tickets.read_marker(staging)["flag"]), ("staging", False))
         self.assertEqual(read_form.app_name(body), "notes")
         for none in ("", None, "no marker", "<!-- factory-plan:{broken -->", "<!-- factory-plan:[1] -->"):
             self.assertEqual(child_tickets.read_marker(none), {})
 
     def test_children_keep_the_parents_cost_cap(self):
-        self.assertIn("### Cost cap override (USD)\n\n1.00", render_child.child_body("notes", "t", 7, {"id": "CS-1"}, [], "1.00"))
-        self.assertIn("### Cost cap override (USD)\n\n_No response_", render_child.child_body("notes", "t", 7, {"id": "CS-1"}, []))
+        self.assertIn("### Cost cap override (USD)\n\n1.00", render_child.child_body("notes", "t", 7, {"id": "CS-1"}, "1.00"))
+        self.assertIn("### Cost cap override (USD)\n\n_No response_", render_child.child_body("notes", "t", 7, {"id": "CS-1"}))
 
     def test_the_plan_comment_shows_change_sets_assumptions_and_questions(self):
         plan = {"change_sets": [{"id": "CS-1", "title": "Soft-delete a todo", "flag": "delete-todo"},

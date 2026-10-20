@@ -28,7 +28,7 @@ Some tests exercise the code (what the rule says must happen), some read a file 
 | INV-20 | The retrospective Agent never receives the DeepInfra parent key; it gets a capped scoped credential or does not run. | ARCHITECTURE: Learning loop | 6.2 |
 | INV-21 | Every workflow that installs OpenHands pins it to the version in `agents/openhands-version.txt`, so an upstream release cannot change an unattended run. | ARCHITECTURE: Visibility | 4.3 |
 | INV-22 | An Update App Intake can change only a repo this Factory created (its description carries the `Intake: <factory repo>#<n>` marker); anything else is refused and nothing is dispatched. | ARCHITECTURE: Intake | 1.2 |
-| INV-23 | A change set of a plan starts only when every change set it depends on is closed, and only one starts at a time, so an app never has two pending Build Runs (GitHub would drop one). | ARCHITECTURE: Intake | 6.3 |
+| INV-23 | A change set of a plan starts only when every blocker of it is closed, and only one starts at a time (none while another is in flight or stopped), so an app never has two pending Build Runs (GitHub would drop one); the last child to close closes the parent. | ARCHITECTURE: Intake | 6.3 |
 | INV-24 | `update-app-intake.yml` starts a Build Run only when the label `proceed-with-change` is added to an `update-app-intake` issue, and the good endings are defined once, in `shared/outcomes.py`, which every module uses. | ARCHITECTURE: Intake | 2.5 |
 | INV-25 | Nothing is ever reverted in git: code is fixed forward and `main` keeps every commit. The one exception to leaving the live app alone is a regression (the tester saw, through a helper, behaviour that was live before the run stop working): the run ends as `regression` and the app's own CI (`rollback-fly.yml`, given to existing apps by template sync) redeploys the previous version's image. No other ending rolls anything back, a failed rollback is reported instead of hidden, and the Orchestrator has no code path that commits a revert. | ARCHITECTURE: Rollback of a regression | 4.11 |
 | INV-26 | A Build Run that ends badly gets its failure handled once: when the cause is the request (or a release the watchdog switched off) the story's own issue gets a comment saying it broke and why, with the retry state hidden in it, and never a second issue; a Factory cause files one Factory fix request per Intake; no cause files an information issue. The same failure reported twice is one attempt. | ARCHITECTURE: Fix requests | 7.1 |
@@ -68,7 +68,6 @@ Some tests exercise the code (what the rule says must happen), some read a file 
 | ID | What changes | Ticket |
 |---|---|---|
 | INV-22 | A New App Intake also plans before it stages. | 14 |
-| INV-23 | Dependencies are native issue dependencies on sub-issues; the one-at-a-time rule stays. | 10 |
 | INV-24 | The start label is applied by planning to a child with a `factory-plan` marker; the `planned` outcome goes away. | 12, 13 |
 | INV-25, INV-26 | `planned` leaves the good endings; a failure files a fix child instead of a comment and a retry. | 13, 15 |
 | INV-27 | Automatic retry of the unchanged story is replaced by fix first (new bound). | 15 |

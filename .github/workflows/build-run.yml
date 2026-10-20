@@ -1,7 +1,7 @@
 name: Build Run
 
 # The multi-agent Build Run (issue #32), dispatched by App Staging with the
-# Intake issue number and app name. All logic is in orchestrator/build_run.py;
+# Intake issue number and app name. All logic is in orchestrator/build_run/;
 # the stages and rules it implements are in ARCHITECTURE.md → Agents and Build
 # Run stages. Role prompts, models and limits come from agents/.
 on:
@@ -54,7 +54,7 @@ jobs:
       - name: Install OpenHands and the orchestrator's dependencies
         run: pip install "openhands==$(cat factory/agents/openhands-version.txt)" pyyaml
 
-      # limits.ui_check in agents/profiles.yml: the tester may drive a headless browser (orchestrator/ui_check.py). Playwright and its
+      # limits.ui_check in agents/profiles.yml: the tester may drive a headless browser (orchestrator/build_run/ui_check.py). Playwright and its
       # Chromium are pinned (agents/playwright-version.txt) and installed outside any Managed App, in a directory every account can read.
       - name: Install the browser for ui-check (pinned)
         run: |
@@ -98,7 +98,7 @@ jobs:
           GROWTHBOOK_ADMIN_PAT: ${{ secrets.GROWTHBOOK_ADMIN_PAT }}
           PREVIEW_MASTER_SECRET: ${{ secrets.PREVIEW_MASTER_SECRET }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: python factory/orchestrator/build_run.py run
+        run: PYTHONPATH=factory/orchestrator python -m build_run.run run
 
       # Always last: Summary, Report, and the failure Issue, even after a
       # breach, a crash or a cancel.
@@ -107,7 +107,7 @@ jobs:
         env:
           FACTORY_GH_TOKEN: ${{ github.token }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
-        run: python factory/orchestrator/build_run.py finalize
+        run: PYTHONPATH=factory/orchestrator python -m retrospective.finalize
 
       - name: Retrospective (every run, released or not)
         if: always()
@@ -115,7 +115,7 @@ jobs:
           FACTORY_GH_TOKEN: ${{ github.token }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
-        run: python factory/orchestrator/retrospective.py
+        run: PYTHONPATH=factory/orchestrator python -m retrospective.run_retrospective
 
       - uses: actions/upload-artifact@v4
         if: always()

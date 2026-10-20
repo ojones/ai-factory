@@ -1,6 +1,6 @@
 name: Factory Run
 
-# Analyse one lesson on demand (orchestrator/retrospective.py lesson <issue>): adding the label
+# Analyse one lesson on demand (orchestrator/retrospective/run_retrospective.py lesson <issue>): adding the label
 # `ready-for-factory-run` to a `factory-learning` issue runs the retrospective Agent over that lesson and opens
 # a learning PR (or comments that it found nothing to change). Lessons from a Build Run are handled by the
 # Build Run workflow itself; this is for older lessons, ones marked fix-ineffective, and re-tries.
@@ -56,4 +56,4 @@ jobs:
           FACTORY_GH_TOKEN: ${{ github.token }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
-        run: python orchestrator/retrospective.py lesson "${{ github.event.issue.number }}"
+        run: PYTHONPATH=orchestrator python -m retrospective.run_retrospective lesson "${{ github.event.issue.number }}"

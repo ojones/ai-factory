@@ -2,7 +2,7 @@ name: Update App Intake
 
 # Adding the `proceed-with-change` label to an `update-app-intake` issue starts it at once: this workflow checks the
 # issue and dispatches a Build Run, which plans the change, then codes, tests and reviews it
-# (orchestrator/update_intake.py; ARCHITECTURE.md: Intake). A change set that waits on an earlier one of the same
+# (orchestrator/build_run/start_build.py; ARCHITECTURE.md: Intake). A change set that waits on an earlier one of the same
 # plan is given the label by the Orchestrator when its dependencies finish; that is done with the PAT, because a
 # label added with the Actions token would not start this workflow.
 on:
@@ -33,4 +33,4 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python orchestrator/update_intake.py start
+        run: PYTHONPATH=orchestrator python -m build_run.start_build start

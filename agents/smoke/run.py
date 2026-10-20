@@ -29,10 +29,11 @@ REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "")
 HERE = pathlib.Path(__file__).parent
 
 sys.path.insert(0, str(HERE.parent.parent / "orchestrator"))
-import build_run as orchestrator  # noqa: E402
+from build_run import review_code  # noqa: E402
+from shared import prompts  # noqa: E402
 
 # The schema the Orchestrator's single-call reviewer sends, so the smoke test checks the model against what it will really be asked.
-VERDICT_SCHEMA = orchestrator.REVIEW_SCHEMA
+VERDICT_SCHEMA = review_code.REVIEW_SCHEMA
 RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {"name": "review_verdict", "schema": VERDICT_SCHEMA, "strict": True},
@@ -41,8 +42,8 @@ RESPONSE_FORMAT = {
 # the way the Orchestrator renders it. A fixture is an update unless expected.json says "first build".
 
 def review_system(kind):
-    return orchestrator.render(
-        orchestrator.load_prompt("prompts/reviewer-fast.md"),
+    return prompts.render(
+        prompts.load_prompt("prompts/reviewer-fast.md"),
         {"app_name": "smoke-app", "build_kind": kind, "base_sha": "base", "head_sha": "head"})
 
 TOOLS = [{
@@ -91,7 +92,7 @@ def parse_verdict(resp):
     # The Orchestrator derives the verdict from the findings instead of
     # trusting the model's own field.
     v["model_verdict"] = v["verdict"]
-    v["findings"] = orchestrator.banded_findings(v)  # a blocking finding the fields do not back is minor, as at run time
+    v["findings"] = review_code.banded_findings(v)  # a blocking finding the fields do not back is minor, as at run time
     v["verdict"] = "changes_requested" if any(f["severity"] == "blocking" for f in v["findings"]) else "clean"
     return v
 

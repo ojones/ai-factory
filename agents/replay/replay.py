@@ -26,14 +26,15 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent / "orchestrator"))
-import build_run as b  # noqa: E402
+from build_run import review_code  # noqa: E402
+from shared import agent_usage, config, prompts  # noqa: E402
 
 KEY = os.environ["DEEPINFRA_API_KEY"]
 MODE = os.environ.get("MODE", "single")
 OWNER = os.environ.get("OWNER", "ojones")
 WORKERS = int(os.environ.get("WORKERS", "4"))
 REPEAT = int(os.environ.get("REPEAT", "1"))
-cfg = b.load_config()
+cfg = config.load()
 MODEL = os.environ.get("MODEL") or cfg["roles"]["reviewer"]["model"]
 BASE_URL = cfg["provider"]["base_url"]
 MAX_CHARS = cfg["limits"].get("review_context_max_chars", 200000)
@@ -62,10 +63,10 @@ def git_in(repo):
 
 def single(case):
     repo = clones[case["app"]]
-    ctx = b.build_review_context(git_in(repo), case["base"], case["head"], MAX_CHARS)
-    system = b.render(b.load_prompt(cfg["roles"]["reviewer"]["fast_prompt"]),
+    ctx = review_code.build_review_context(git_in(repo), case["base"], case["head"], MAX_CHARS)
+    system = prompts.render(prompts.load_prompt(cfg["roles"]["reviewer"]["fast_prompt"]),
                       {"app_name": case["app"], "build_kind": "first build", "base_sha": case["base"][:8], "head_sha": case["head"][:8]})
-    doc, usage = b.single_call_review(BASE_URL, KEY, MODEL, system, ctx)
+    doc, usage = review_code.single_call_review(BASE_URL, KEY, MODEL, system, ctx)
     return doc, {"prompt_tokens": usage.get("prompt_tokens", 0), "output_tokens": usage.get("completion_tokens", 0),
                  "cost": usage.get("estimated_cost") or 0}
 
@@ -77,7 +78,7 @@ def agent(case):
     home = work / f"home-{case['id']}"
     home.mkdir()
     verdict = work / f"verdict-{case['id']}.json"
-    prompt = b.render(b.load_prompt(cfg["roles"]["reviewer"]["prompt"]),
+    prompt = prompts.render(prompts.load_prompt(cfg["roles"]["reviewer"]["prompt"]),
                       {"app_name": case["app"], "build_kind": "first build", "base_sha": case["base"], "head_sha": case["head"], "verdict_path": verdict})
     env = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR", "CI") if k in os.environ}
     env.update({"HOME": str(home), "LLM_MODEL": "openai/" + MODEL, "LLM_BASE_URL": BASE_URL, "LLM_API_KEY": KEY, "RUNTIME": "process"})
@@ -88,7 +89,7 @@ def agent(case):
     doc = json.loads(verdict.read_text())
     out_tokens = calls = 0
     for state in home.glob(".openhands/conversations/*/base_state.json"):
-        u = b.summarize_token_usage(json.loads(state.read_text()))
+        u = agent_usage.summarize_token_usage(json.loads(state.read_text()))
         out_tokens, calls = u["completion_tokens"], u["calls"]
     return doc, {"output_tokens": out_tokens, "calls": calls}
 
@@ -97,7 +98,7 @@ def run(case):
     start = time.time()
     try:
         doc, stats = (single if MODE == "single" else agent)(case)
-        clean, blocking, minor = b.derive_review(doc)
+        clean, blocking, minor = review_code.derive_review(doc)
         return {"id": case["id"], "secs": round(time.time() - start), **stats, "clean": clean,
                 "blocking": [f["summary"] for f in blocking], "minor": [f["summary"] for f in minor],
                 "recorded": case["recorded"]}

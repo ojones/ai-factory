@@ -33,7 +33,7 @@ Purely mechanical — checks are the style guide, not prose. The Starter Templat
 
 The Factory's own Python (`orchestrator/`, `agents/`) is linted with [ruff](https://docs.astral.sh/ruff/), configured in `pyproject.toml` (`ruff check`, a step of the `unit` job in `factory-checks.yml`). Rules are added there one at a time, so the set only grows.
 
-- **Test files** are named `<name>_test.py`, beside the module they test (`build_run.py` → `build_run_test.py`), never `test_<name>.py`. CI runs `python -m unittest discover -p "*_test.py" orchestrator`, which only finds that suffix, so a misnamed file would silently never run. Test methods inside a file keep the `test_` prefix, which `unittest` requires.
+- **Test files** are named `<name>_test.py`, beside the module they test (`build_run/run.py` → `build_run/run_test.py`), never `test_<name>.py`. CI runs `python -m unittest discover -p "*_test.py" orchestrator`, which only finds that suffix, so a misnamed file would silently never run. Test methods inside a file keep the `test_` prefix, which `unittest` requires.
 - **Comments are `#` comments. No docstrings**, and no bare string standing in for a comment. Say what a module, class or function is for in `#` lines at the top of its body. Triple-quoted strings are fine as data (a prompt, a fixture), just not as a statement on their own. Code must not read `__doc__`.
 
 `orchestrator/style_test.py` enforces both (ruff has no rule for either) and fails the build.

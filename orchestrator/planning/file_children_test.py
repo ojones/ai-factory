@@ -36,8 +36,8 @@ class FilingChildren(unittest.TestCase):
         self.assertEqual(self.gh.blocked, {numbers["CS-2"]: [numbers["CS-1"]]})
         second = self.gh.issues[numbers["CS-2"]]
         marker = child_tickets.read_marker(second["body"])
-        self.assertEqual((marker["parent"], marker["cs"], marker["kind"], marker["flag"], marker["size"], marker["depends_on"]),
-                         (7, "CS-2", "update", True, "S", [numbers["CS-1"]]))
+        self.assertEqual((marker["parent"], marker["cs"], marker["kind"], marker["flag"], marker["size"]),
+                         (7, "CS-2", "update", True, "S"))
         self.assertIn("- AC-1" if False else "- a", second["body"])  # the criteria are in the body: the child needs nothing else to be built
         self.assertIn("### What should change?", second["body"])
         self.assertIn("plan:7", {label["name"] for label in second["labels"]})

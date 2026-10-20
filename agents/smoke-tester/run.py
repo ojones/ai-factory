@@ -42,7 +42,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT / "orchestrator"))
-import build_run as b  # noqa: E402
+from build_run import verify_deployed_app  # noqa: E402
+from shared import agent_output, config, prompts  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("smoke_coder", ROOT / "agents" / "smoke-coder" / "run.py")
 sc = importlib.util.module_from_spec(_spec)
@@ -77,11 +78,11 @@ def judge(fixture, doc, flag):
     if doc is None:
         return {"outcome": "unusable", "right_reason": None, "failed": []}
     try:
-        passed, failures = b.derive_test(doc, [flag])
+        passed, failures = verify_deployed_app.derive_test(doc, [flag])
     except ValueError:
         return {"outcome": "unusable", "right_reason": None, "failed": []}
     failed = [f"{r.get('check', '')} | {r.get('evidence', '')}" for r in failures if isinstance(r, dict)]
-    observed_failure = any(b.check_state(r) == "failed" for r in doc.get("results", []) if isinstance(r, dict))
+    observed_failure = any(verify_deployed_app.check_state(r) == "failed" for r in doc.get("results", []) if isinstance(r, dict))
     if not passed and not observed_failure and fixture["expect"] != "not_pass":
         # Nothing was run (every check not_run or blocked: seen when the tester could not execute curl). The Orchestrator rightly
         # refuses to release that, but it says nothing about whether the tester can find this bug, so it is not counted either way.
@@ -289,9 +290,9 @@ def one_run(job):
         head = build_checkout(base, data, fixture, dest)
         app = RunningApp(dest)
         report, api_log = root / f"report-{name}.json", root / f"api-check-{name}.jsonl"
-        prompt = b.render(b.load_prompt(str(ROOT / "agents" / "prompts" / "tester.md")), {
+        prompt = prompts.render(prompts.load_prompt(str(ROOT / "agents" / "prompts" / "tester.md")), {
             "app_name": "smoke-app", "build_kind": "update", "spec": spec_for(data, fixture), "app_url": app.url, "head_sha": head,
-            "report_path": report, "previous_report": "none (this is the first test pass)", "api_check": b.API_CHECK, "ui_section": ""})
+            "report_path": report, "previous_report": "none (this is the first test pass)", "api_check": verify_deployed_app.API_CHECK, "ui_section": ""})
         home.mkdir(parents=True, exist_ok=True)
         env = {**sc.minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": base_url, "LLM_API_KEY": key, "RUNTIME": "process",
                "PREVIEW_TOKEN": TOKEN, "API_CHECK_BASE": app.url, "API_CHECK_LOG": str(api_log)}
@@ -307,12 +308,12 @@ def one_run(job):
         for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
             cost = sc.cost_of(json.loads(state_file.read_text()), prices.get(model, {}))
         result["cost"] = round(cost, 4)
-        doc = b.load_json(report)
+        doc = agent_output.load_json(report)
         if doc is not None:  # the Orchestrator reads the report this way: the helper's observations outrank the tester's judgement
-            doc = b.reconcile_api_checks(doc, b.load_api_results(api_log))
-        result["helper_checks"] = len(b.load_api_results(api_log))
+            doc = verify_deployed_app.reconcile_api_checks(doc, verify_deployed_app.load_api_results(api_log))
+        result["helper_checks"] = len(verify_deployed_app.load_api_results(api_log))
         result.update(judge(fixture, doc, data["flag"]))
-        result["json_problem"] = b.json_problem(report) if doc is None else None
+        result["json_problem"] = agent_output.json_problem(report) if doc is None else None
         if doc is None:  # say why, from the agent's own output
             tail = (root / f"agent-{name}.log").read_text(errors="replace")[-600:] if (root / f"agent-{name}.log").exists() else ""
             result["agent_output_tail"] = re.sub(r"\s+", " ", tail).strip()
@@ -328,7 +329,7 @@ def main():
     if "--validate" in sys.argv:
         validate()
     key = os.environ["DEEPINFRA_API_KEY"]
-    cfg = b.load_config()
+    cfg = config.load()
     model = os.environ.get("MODEL") or cfg["roles"]["tester"]["model"]
     base_url = cfg["provider"]["base_url"]
     data = load()

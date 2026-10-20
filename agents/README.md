@@ -20,7 +20,7 @@ The Build Run replaces `{{name}}` placeholders before invoking OpenHands.
 | tester | `app_name`, `app_url`, `head_sha`, `report_path`, `previous_report`; env `PREVIEW_TOKEN` |
 | pipeline | `app_name`, `head_sha`, `failure_run_url`, `diagnosis_path`, `context_dir` |
 | planner | `app_name`, `build_kind`, `task`, `plan_path` (first stage of a Build Run for an Update App Intake; `orchestrator/planning/validate_plan.py` checks its output) |
-| retrospective | `facts_path`, `result_path`, `categories` (run by `orchestrator/retrospective.py`, not the Build Run) |
+| retrospective | `facts_path`, `result_path`, `categories` (run by `orchestrator/retrospective/`, not the Build Run) |
 
 ## Output contracts
 

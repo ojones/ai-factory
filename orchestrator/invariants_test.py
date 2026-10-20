@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,11 +16,26 @@ from unittest import mock
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
-import build_run as b  # noqa: E402
-import retrospective as pm  # noqa: E402
+from build_run import endings, gate_release, prepare_run, read_child, review_code, suggestions, track_progress, verify_deployed_app  # noqa: E402
+from build_run import run as run_module
+from build_run.run import BuildRun  # noqa: E402
 from flag_lifecycle import dark_feature, flag_manifest, retirement_check, retirement_selection, story_link  # noqa: E402
 from request import check_target_app, intake_labels  # noqa: E402
-from shared import agent_process, agent_runner, config, github, http_client, outcomes, preview_token, provider, run_stops, spend_budget, starter_template  # noqa: E402
+from retrospective import agent_run, learning_pr, lesson_records, story_report, tracker  # noqa: E402
+from shared import (  # noqa: E402
+    agent_process,
+    agent_runner,
+    config,
+    github,
+    http_client,
+    outcomes,
+    preview_token,
+    provider,
+    rollback,  # noqa: E402
+    run_stops,
+    spend_budget,
+    starter_template,
+)
 
 ROOT = config.FACTORY_DIR
 PROFILES = yaml.safe_load((ROOT / "agents/profiles.yml").read_text())
@@ -47,30 +63,30 @@ class Invariants(unittest.TestCase):
         self.assertEqual(starter_template.protected_violations(["backend/src/routes/notes.ts", "flags.json"]), [])
 
     def test_inv03_release_needs_all_four_conditions_for_the_same_sha(self):
-        self.assertTrue(b.release_gate(True, True, True, True, "a", "a"))
+        self.assertTrue(gate_release.release_gate(True, True, True, True, "a", "a"))
         for i in range(4):
             args = [True] * 4
             args[i] = False
-            self.assertFalse(b.release_gate(*args, "a", "a"))
-        self.assertFalse(b.release_gate(True, True, True, True, "a", "b"))
+            self.assertFalse(gate_release.release_gate(*args, "a", "a"))
+        self.assertFalse(gate_release.release_gate(True, True, True, True, "a", "b"))
 
     def test_inv04_the_verdict_comes_from_the_findings_and_their_structure(self):
         backed = {"severity": "blocking", "category": "correctness", "evidence_kind": "cited", "summary": "x", "evidence": "e",
                   "file": "backend/src/a.ts", "line": "3", "requirement": "", "suggested_fix": "", "repro": ""}
-        clean, blocking, _ = b.derive_review({"verdict": "clean", "findings": [backed]})
+        clean, blocking, _ = review_code.derive_review({"verdict": "clean", "findings": [backed]})
         self.assertFalse(clean)
         self.assertEqual(len(blocking), 1)
-        self.assertTrue(b.derive_review({"verdict": "changes_requested", "findings": []})[0])
+        self.assertTrue(review_code.derive_review({"verdict": "changes_requested", "findings": []})[0])
         # a blocking label does not block unless its fields back it: an opinion, or a category that cannot block, is minor
-        self.assertTrue(b.derive_review({"findings": [dict(backed, evidence_kind="opinion")]})[0])
-        self.assertTrue(b.derive_review({"findings": [dict(backed, category="style")]})[0])
+        self.assertTrue(review_code.derive_review({"findings": [dict(backed, evidence_kind="opinion")]})[0])
+        self.assertTrue(review_code.derive_review({"findings": [dict(backed, category="style")]})[0])
         with self.assertRaises(ValueError):  # no structure at all: the reviewer is asked again, a label is not trusted
-            b.derive_review({"findings": [{"severity": "blocking", "summary": "x"}]})
+            review_code.derive_review({"findings": [{"severity": "blocking", "summary": "x"}]})
 
     def test_inv05_only_a_passed_check_passes(self):
         for state in ("failed", "blocked", "not_run"):
-            self.assertFalse(b.derive_test({"results": [{"flag": "a", "check": "x", "status": state}]}, ["a"])[0], state)
-        self.assertTrue(b.derive_test({"results": [{"flag": "a", "check": "x", "status": "passed"}]}, ["a"])[0])
+            self.assertFalse(verify_deployed_app.derive_test({"results": [{"flag": "a", "check": "x", "status": state}]}, ["a"])[0], state)
+        self.assertTrue(verify_deployed_app.derive_test({"results": [{"flag": "a", "check": "x", "status": "passed"}]}, ["a"])[0])
 
     def test_inv06_release_switches_on_only_the_storys_own_flag_and_never_creates_or_touches_another(self):
         from flag_lifecycle import release_features
@@ -84,15 +100,15 @@ class Invariants(unittest.TestCase):
         self.assertNotIn("demo.feature.ghost", gb.features)  # a missing flag is reported, never created
 
     def test_inv07_the_watchdog_switches_off_only_what_its_run_released(self):
-        run = object.__new__(b.BuildRun)
+        run = object.__new__(BuildRun)
         run.lim = {"watchdog_minutes": 0.05, "watchdog_interval_seconds": 0, "watchdog_max_failures": 1, "watchdog_max_errors": 5}
         run.app, run.deadline = "demo", float("inf")
-        run.state = b.State("/tmp/unused-state.json", "demo", "1", "u")
+        run.state = track_progress.State("/tmp/unused-state.json", "demo", "1", "u")
         run.state.save = lambda: None
         run.state.d["release"] = {"released": ["demo.feature.new"], "kept": ["demo.feature.old"]}
         run.app_error_count = lambda: 0
         run.disable_flags = mock.Mock(return_value=[])
-        with mock.patch.object(http_client, "request", return_value=(500, {})), mock.patch.object(b.time, "sleep"):
+        with mock.patch.object(http_client, "request", return_value=(500, {})), mock.patch.object(time, "sleep"):
             run.watch_release()
         run.disable_flags.assert_called_once_with(["demo.feature.new"])
 
@@ -114,8 +130,8 @@ class Invariants(unittest.TestCase):
         form = "### What should be built?\n\nA thing\n\n### Cost cap override (USD)\n\n{}\n"
         for bad in ("10.01", "0", "-1"):
             with self.assertRaises(run_stops.NeedsHuman):
-                b.parse_intake(form.format(bad), PROFILES["limits"]["cost_cap_usd_default"], PROFILES["limits"]["cost_cap_usd_ceiling"])
-        self.assertEqual(b.parse_intake(form.format("10"), 2.0, PROFILES["limits"]["cost_cap_usd_ceiling"])[1], 10.0)
+                read_child.parse_intake(form.format(bad), PROFILES["limits"]["cost_cap_usd_default"], PROFILES["limits"]["cost_cap_usd_ceiling"])
+        self.assertEqual(read_child.parse_intake(form.format("10"), 2.0, PROFILES["limits"]["cost_cap_usd_ceiling"])[1], 10.0)
 
     def test_inv11_the_review_round_limit_in_the_docs_is_the_configured_one(self):
         m = re.search(r"default \*\*(\d+)\*\*[^.]*`limits\.review_rounds`", ARCH)
@@ -137,15 +153,15 @@ class Invariants(unittest.TestCase):
     def test_inv14_the_retrospective_agent_cannot_change_workflows_or_protected_files(self):
         for bad in (".github/workflows/build-run.yml", "templates/starter/.github/workflows/build.yml", "templates/starter/fly.toml",
                     "templates/starter/fly/provision.sh", "agents/../.github/x.yml", "README.md"):
-            self.assertFalse(pm.allowed_path(bad), bad)
+            self.assertFalse(agent_run.allowed_path(bad), bad)
         for ok in ("agents/prompts/coder.md", "templates/starter/AGENTS.md", "orchestrator/build_run.py", "STANDARDS-CODING.md"):
-            self.assertTrue(pm.allowed_path(ok), ok)
+            self.assertTrue(agent_run.allowed_path(ok), ok)
 
     def test_inv15_only_additive_lint_or_formatter_config_auto_merges(self):
-        self.assertTrue(pm.auto_merge_eligible("4\t0\ttemplates/starter/.eslintrc.json"))
+        self.assertTrue(learning_pr.auto_merge_eligible("4\t0\ttemplates/starter/.eslintrc.json"))
         for bad in ("4\t1\ttemplates/starter/.eslintrc.json", "4\t0\tagents/prompts/coder.md",
                     "4\t0\ttemplates/starter/package.json", ""):
-            self.assertFalse(pm.auto_merge_eligible(bad), bad)
+            self.assertFalse(learning_pr.auto_merge_eligible(bad), bad)
 
     def test_inv16_the_starter_flags_fail_closed_and_the_kill_switch_is_placed_correctly(self):
         sources = {p: p.read_text() for p in (STARTER / "backend/src").rglob("*.ts") if "__tests__" not in p.parts}
@@ -160,7 +176,7 @@ class Invariants(unittest.TestCase):
     def test_inv17_finalize_and_the_retrospective_always_run(self):
         wf = yaml.safe_load((ROOT / ".github/workflows/build-run.yml").read_text())
         steps = next(iter(wf["jobs"].values()))["steps"]
-        for needle in ("build_run.py finalize", "retrospective.py"):
+        for needle in ("retrospective.finalize", "retrospective.run_retrospective"):
             step = next(s for s in steps if needle in s.get("run", ""))
             self.assertEqual(str(step.get("if")).strip(), "always()", needle)
 
@@ -175,16 +191,16 @@ class Invariants(unittest.TestCase):
         entry = {"round": 1, "sha": "a", "counts": {}, "checks": {"a: x": "failed"}, "blocking": ["no flag"]}
         n = PROFILES["limits"]["stuck_rounds"]
         self.assertGreaterEqual(n, 2)
-        self.assertTrue(b.stalled([dict(entry, round=i) for i in range(n)], n))
-        self.assertFalse(b.stalled([dict(entry, round=i) for i in range(n - 1)], n))
+        self.assertTrue(track_progress.stalled([dict(entry, round=i) for i in range(n)], n))
+        self.assertFalse(track_progress.stalled([dict(entry, round=i) for i in range(n - 1)], n))
 
     def test_inv20_the_retrospective_agent_never_gets_the_parent_key(self):
         cfg = {"limits": {"retrospective_cost_cap_usd": 0.5, "jwt_ttl_seconds": 60}, "roles": {"retrospective": {"model": "m/x"}}}
         with mock.patch.object(http_client, "request", return_value=(200, {"token": "scoped"})):
-            self.assertEqual(pm.mint_agent_key(cfg, "parent-key"), "scoped")
+            self.assertEqual(agent_run.mint_agent_key(cfg, "parent-key"), "scoped")
         with mock.patch.object(http_client, "request", return_value=(500, {})):
-            self.assertIsNone(pm.mint_agent_key(cfg, "parent-key"))
-        source = (ROOT / "orchestrator/retrospective.py").read_text()
+            self.assertIsNone(agent_run.mint_agent_key(cfg, "parent-key"))
+        source = (ROOT / "orchestrator/retrospective/agent_run.py").read_text()
         self.assertNotIn('"LLM_API_KEY": os.environ', source)
 
     def test_inv21_openhands_is_pinned_everywhere_it_is_installed(self):
@@ -200,7 +216,7 @@ class Invariants(unittest.TestCase):
         self.assertGreaterEqual(installs, 4)
 
     def test_inv22_an_update_intake_changes_only_a_repo_this_factory_created(self):
-        import update_intake as u
+        from build_run import start_build as u
         self.assertTrue(check_target_app.is_factory_repo("Intake: o/ai-factory#3", "o/ai-factory"))
         for bad in ("Intake: o/other#3", "", None, "my own project"):
             self.assertFalse(check_target_app.is_factory_repo(bad, "o/ai-factory"), bad)
@@ -216,55 +232,58 @@ class Invariants(unittest.TestCase):
             self.assertEqual(u.start(), 1)
         self.assertFalse([c for c in calls if c[:2] == ["workflow", "run"]])
 
-    def test_inv23_a_change_set_starts_only_after_its_dependencies_close_and_only_once(self):
-        import update_intake as u
-        kid = lambda n, state, labels, deps: {"number": n, "state": state, "labels": set(labels), "depends_on": deps}
-        self.assertEqual(u.ready_to_start([kid(1, "OPEN", [], []), kid(2, "OPEN", [u.WAIT], [1])]), [])
-        self.assertEqual(u.ready_to_start([kid(1, "CLOSED", [], []), kid(2, "OPEN", [u.WAIT], [1])]), [2])
-        self.assertEqual(u.ready_to_start([kid(1, "CLOSED", [], []), kid(2, "OPEN", [u.WAIT, intake_labels.START], [1])]), [])
-        # one at a time: a second ready change set waits, and nothing starts while one is in flight
-        self.assertEqual(u.ready_to_start([kid(1, "CLOSED", [], []), kid(2, "OPEN", [u.WAIT], [1]), kid(3, "OPEN", [u.WAIT], [1])]), [2])
-        self.assertEqual(u.ready_to_start([kid(1, "OPEN", [intake_labels.START], []), kid(2, "OPEN", [u.WAIT], [])]), [])
+    def test_inv23_a_change_set_starts_only_after_its_blockers_close_and_only_once(self):
+        from retrospective import close_child
+        from shared import child_tickets
+        W, S = child_tickets.WAIT, intake_labels.START
+        kid = lambda n, state, labels: {"number": n, "state": state, "labels": set(labels)}
+        blockers = lambda table: lambda n: [{"number": k, "state": v} for k, v in table.get(n, {}).items()]
+        self.assertEqual(close_child.ready_to_start([kid(1, "OPEN", []), kid(2, "OPEN", [W])], blockers({2: {1: "OPEN"}})), [])
+        self.assertEqual(close_child.ready_to_start([kid(1, "CLOSED", []), kid(2, "OPEN", [W])], blockers({2: {1: "CLOSED"}})), [2])
+        self.assertEqual(close_child.ready_to_start([kid(1, "CLOSED", []), kid(2, "OPEN", [W, S])], blockers({2: {1: "CLOSED"}})), [])
+        # one at a time: a second ready change set waits, nothing starts while one is in flight, and a stalled child holds the others
+        self.assertEqual(close_child.ready_to_start([kid(1, "CLOSED", []), kid(2, "OPEN", [W]), kid(3, "OPEN", [W])], blockers({})), [2])
+        self.assertEqual(close_child.ready_to_start([kid(1, "OPEN", [S]), kid(2, "OPEN", [W])], blockers({})), [])
+        self.assertEqual(close_child.ready_to_start([kid(1, "OPEN", []), kid(2, "OPEN", [W])], blockers({})), [])
 
     def test_inv24_only_the_go_label_on_an_update_intake_starts_a_run_and_modules_agree_on_good_endings(self):
-        import appstate
-        import audit
         from monitoring import dashboard
+        from retrospective import app_state, run_audit
         wf = yaml.safe_load((ROOT / ".github/workflows/update-app-intake.yml").read_text())
         self.assertEqual(wf[True]["issues"]["types"], ["labeled"])  # YAML reads the key `on` as True
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
         self.assertIn("github.event.label.name == 'proceed-with-change'", cond)
         self.assertIn("contains(github.event.issue.labels.*.name, 'update-app-intake')", cond)
-        for module in (b, audit, appstate, dashboard, pm):
+        for module in (run_module, run_audit, app_state, dashboard, lesson_records):
             self.assertIs(module.outcomes, outcomes)  # one list of good endings, defined in shared/outcomes.py, not mirrored
         self.assertIn("planned", outcomes.OK)
 
     def test_inv25_nothing_is_reverted_in_git_and_only_a_regression_rolls_the_deploy_back_through_ci(self):
         import inspect
         d = {"commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
-        self.assertTrue(b.rollback_decision(dict(d, outcome="regression"))[0])
+        self.assertTrue(rollback.rollback_decision(dict(d, outcome="regression"))[0])
         for outcome in ("released", "nothing_to_release", "planned", "watchdog_disabled", "round_limit", "needs_human", "stuck",
                         "budget_exhausted", "time_limit", "crash", "provider_blocked"):
-            self.assertFalse(b.rollback_decision(dict(d, outcome=outcome))[0], outcome)
+            self.assertFalse(rollback.rollback_decision(dict(d, outcome=outcome))[0], outcome)
         # the Orchestrator has no way to revert: no function, and the rollback runs the app's own workflow and touches no git
-        self.assertFalse(hasattr(b, "revert_main_to_base"))
-        src = inspect.getsource(b.rollback_deploy)
+        self.assertFalse(hasattr(run_module, "revert_main_to_base"))
+        src = inspect.getsource(rollback.rollback_deploy)
         self.assertIn("ROLLBACK_WORKFLOW", src)
         self.assertNotIn('"git"', src)
         wf = yaml.safe_load((ROOT / "templates/starter/.github/workflows/rollback-fly.yml").read_text())
         self.assertIn("workflow_dispatch", wf[True])
         self.assertIn(".github/workflows/rollback-fly.yml", starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR)  # template sync gives existing apps the workflow
-        import audit
-        self.assertTrue(audit.audit_report(dict(d, outcome="regression", stages=[], blocking=[], rollback={"status": "failed", "reason": "x"})))
-        self.assertTrue(audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
+        from retrospective import run_audit
+        self.assertTrue(run_audit.audit_report(dict(d, outcome="regression", stages=[], blocking=[], rollback={"status": "failed", "reason": "x"})))
+        self.assertTrue(run_audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
 
     def test_inv26_a_bad_ending_is_handled_on_the_stories_own_issue_or_as_one_fix_request(self):
-        import fixrequest as fr
-        import retrospective as pm
+        from retrospective import lesson_records
+        from try_fix import fix_request as fr
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
-            self.assertTrue(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
+            self.assertTrue(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release", "planned"):
-            self.assertFalse(pm.wants_fix_request({"outcome": outcome}, {}), outcome)
+            self.assertFalse(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         self.assertEqual((fr.route("plan_gap"), fr.route("spec_ambiguity"), fr.route("infra"), fr.route(None)), ("factory", "app", "info", "info"))
         self.assertEqual(fr.route(fr.inferred_category(None, "watchdog_disabled")), "app")  # a release the watchdog switched off is the story's to fix
         self.assertEqual(fr.fingerprint("a", "1", "factory"), fr.fingerprint("a", "1", "factory"))
@@ -273,7 +292,7 @@ class Invariants(unittest.TestCase):
         self.assertEqual(fr.retry_decision(state, {"run_url": "r1"}, {})[0], True)  # the same failure twice is one attempt
 
     def test_inv27_self_correction_runs_on_the_same_issue_and_flag_and_is_bounded(self):
-        import fixrequest as fr
+        from try_fix import fix_request as fr
         lim = {"fix_request_max_attempts": 2}
         self.assertEqual([fr.should_autostart("app", n, lim) for n in (1, 2, 3, 4)], [True, True, False, False])
         self.assertFalse(fr.should_autostart("factory", 1, lim))  # a Factory fix is a PR a person merges
@@ -299,13 +318,13 @@ class Invariants(unittest.TestCase):
 
     def test_inv28_a_check_that_admits_it_was_not_observed_does_not_pass(self):
         real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
-        self.assertEqual(b.check_state({"status": "passed", "evidence": real}), "not_run")
-        self.assertFalse(b.derive_test({"results": [{"flag": "a", "check": "x", "status": "passed", "evidence": real}]}, ["a"])[0])
-        self.assertEqual(b.check_state({"status": "passed", "evidence": "Status: 200"}), "passed")
-        self.assertEqual(b.check_state({"status": "passed", "evidence": "Cannot see logs, but npm run test:file shows 1 passed"}), "passed")
+        self.assertEqual(verify_deployed_app.check_state({"status": "passed", "evidence": real}), "not_run")
+        self.assertFalse(verify_deployed_app.derive_test({"results": [{"flag": "a", "check": "x", "status": "passed", "evidence": real}]}, ["a"])[0])
+        self.assertEqual(verify_deployed_app.check_state({"status": "passed", "evidence": "Status: 200"}), "passed")
+        self.assertEqual(verify_deployed_app.check_state({"status": "passed", "evidence": "Cannot see logs, but npm run test:file shows 1 passed"}), "passed")
 
     def test_inv29_a_provider_with_no_balance_stops_the_run_and_retries_nothing(self):
-        import retrospective as pm
+        from retrospective import lesson_records
         event = '{"code": "LLMBadRequestError", "detail": "OpenAIException - You need positive balance to do inference", "kind": "ConversationErrorEvent"}'
         self.assertTrue(provider.provider_blocked_text(event))
         self.assertFalse(provider.provider_blocked_text("the spec mentions a positive balance"))
@@ -314,19 +333,19 @@ class Invariants(unittest.TestCase):
                 provider.provider_check("https://x/v1", "k", "m")
             with self.assertRaises(run_stops.ProviderBlocked):
                 spend_budget.Budget("admin", 1.0, 60).mint("m")
-        self.assertFalse(pm.wants_fix_request({"outcome": "provider_blocked"}, {}))  # no self-starting retry
-        self.assertFalse(pm.records_stuck_issue("provider_blocked"))
+        self.assertFalse(lesson_records.wants_fix_request({"outcome": "provider_blocked"}, {}))  # no self-starting retry
+        self.assertFalse(lesson_records.records_stuck_issue("provider_blocked"))
         self.assertNotIn("provider_blocked", outcomes.OK)
 
     def test_inv30_the_api_check_helpers_observation_outranks_the_testers_judgement(self):
         from shared import api_check as ac
         api = {"create": {"id": "create", "ok": False, "problems": ["status: expected 201, got 200"], "observed": {"status": 200}}}
         passed = {"flag": "f", "check": "create", "status": "passed", "passed": True, "evidence": "ok", "api": ["create"]}
-        out = b.reconcile_api_checks({"results": [passed]}, api)
-        self.assertEqual(b.check_state(out["results"][0]), "failed")
-        self.assertEqual(b.check_state(b.reconcile_api_checks({"results": [passed]}, {})["results"][0]), "not_run")
-        left_out = b.reconcile_api_checks({"results": [{"flag": "f", "check": "x", "status": "passed", "passed": True, "evidence": "e"}]}, api)
-        self.assertEqual(b.check_state(left_out["results"][-1]), "failed")
+        out = verify_deployed_app.reconcile_api_checks({"results": [passed]}, api)
+        self.assertEqual(verify_deployed_app.check_state(out["results"][0]), "failed")
+        self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_api_checks({"results": [passed]}, {})["results"][0]), "not_run")
+        left_out = verify_deployed_app.reconcile_api_checks({"results": [{"flag": "f", "check": "x", "status": "passed", "passed": True, "evidence": "e"}]}, api)
+        self.assertEqual(verify_deployed_app.check_state(left_out["results"][-1]), "failed")
         self.assertIsNotNone(ac.validate([{"id": "a", "request": {"path": "https://other.example/"}, "expect": {"status": 200}}])[1])
 
     def test_inv31_production_feedback_is_rate_limited_and_owner_only(self):
@@ -386,12 +405,12 @@ class Invariants(unittest.TestCase):
                                                                                               ".github/workflows/deploy-fly.yml"})
 
     def test_inv36_the_browser_helpers_observation_outranks_the_testers_judgement(self):
-        import ui_check as uc
+        from build_run import ui_check as uc
         ui = {"s": {"id": "s", "ok": False, "problems": ["role='button': expected it to be visible, but it is not"], "observed": {}}}
         passed = {"flag": "f", "check": "c", "status": "passed", "passed": True, "evidence": "e", "ui": ["s"]}
-        self.assertEqual(b.check_state(b.reconcile_ui_checks({"results": [passed]}, ui)["results"][0]), "failed")
-        self.assertEqual(b.check_state(b.reconcile_ui_checks({"results": [passed]}, {})["results"][0]), "not_run")
-        self.assertEqual(b.check_state(b.reconcile_ui_checks({"results": [{**passed, "ui": []}]}, ui)["results"][-1]), "failed")
+        self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_ui_checks({"results": [passed]}, ui)["results"][0]), "failed")
+        self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_ui_checks({"results": [passed]}, {})["results"][0]), "not_run")
+        self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_ui_checks({"results": [{**passed, "ui": []}]}, ui)["results"][-1]), "failed")
         self.assertIsNotNone(uc.validate([{"id": "a", "start": "https://other.example/", "expect": {"visible": [{"label": "x"}]}}])[1])
         self.assertNotIn("TKN-secret", uc.scrub("/?preview=TKN-secret and TKN-secret", "TKN-secret"))
         self.assertRegex((ROOT / "agents/playwright-version.txt").read_text().strip(), r"^\d+\.\d+\.\d+$")
@@ -414,9 +433,9 @@ class Invariants(unittest.TestCase):
         self.assertEqual(story_link.flag_label("x"), "flag:x")
         self.assertIn("issues/9", story_link.flag_description("https://github.com/o/r/issues/9", "t"))
         self.assertEqual(story_link.flag_tags(9, "app"), ["intake-9", "app-app"])
-        import appstate
-        self.assertIn("issues/9", appstate.story_link({"issue": 9, "run_url": "https://github.com/o/r/actions/runs/1"}))
-        run = object.__new__(b.BuildRun)
+        from retrospective import app_state
+        self.assertIn("issues/9", app_state.story_link({"issue": 9, "run_url": "https://github.com/o/r/actions/runs/1"}))
+        run = object.__new__(BuildRun)
         run.update_intake, run.issue_title = False, "app"  # a first build's title is never touched
         calls = []
         run.gh = lambda *a, **k: calls.append(a)
@@ -424,8 +443,8 @@ class Invariants(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_inv39_a_story_and_its_flag_live_and_die_together(self):
-        import fixrequest as fr
         from planning import validate_plan as pl
+        from try_fix import fix_request as fr
         plan = {"requirements": [{"id": "REQ-1", "text": "t"}], "assumptions": [], "open_questions": [],
                 "change_sets": [{"id": "CS-1", "title": "T", "requirements": ["REQ-1"], "depends_on": [], "criteria": ["AC-1: x"], "verification": ["v"], "size": "S",
                                  "flag": "other", "internal_only": False, "out_of_scope": []}]}
@@ -433,18 +452,17 @@ class Invariants(unittest.TestCase):
         self.assertIn("story-flag", fr.retry_note(["story-flag"], 2))
         self.assertEqual(fr.retry_state([fr.with_retry_state({"flags": ["story-flag"]})])["flags"], ["story-flag"])
         for fn in ("release", "disable_flags"):
-            self.assertTrue(hasattr(b.BuildRun, fn))
+            self.assertTrue(hasattr(BuildRun, fn))
 
     def test_inv40_an_impossible_request_is_refused_before_anything_is_built(self):
-        import retrospective as pm2
         from planning import triage as tr
         self.assertEqual(tr.find_secrets("key sk-" + "x1y2z3w4v5u6t7s8r9q0p1o2"), ["an API key (sk- style)"])
         self.assertEqual(tr.find_secrets("add a password field"), [])
         self.assertTrue(tr.feasibility({"feasibility": {"status": "blocked", "category": "payments", "reasons": ["card"]}})[0])
         self.assertFalse(tr.feasibility({"feasibility": {"status": "ok"}})[0])
-        self.assertFalse(pm2.wants_fix_request({"outcome": "refused"}, {}))
+        self.assertFalse(lesson_records.wants_fix_request({"outcome": "refused"}, {}))
         self.assertNotIn("refused", outcomes.OK)
-        self.assertTrue(issubclass(b.Refused, Exception))
+        self.assertTrue(issubclass(endings.Refused, Exception))
 
     def test_inv41_a_model_swap_is_decided_by_a_measured_pass_and_survivable_at_run_time(self):
         from monitoring import benchmark as bm
@@ -458,10 +476,10 @@ class Invariants(unittest.TestCase):
         text = (ROOT / "agents/profiles.yml").read_text()
         doc = yaml.safe_load(bm.candidate_profile(text, {"coder": "x/y"}))
         self.assertEqual((doc["roles"]["coder"]["model"], doc["limits"]["flag_retirement"]["piggyback_max"]), ("x/y", 0))
-        run = object.__new__(b.BuildRun)
+        run = object.__new__(BuildRun)
         run.update_intake = False
         run.cfg = {"provider": {"base_url": "u"}, "roles": {"coder": {"model": "gone", "fallback_model": "ok"}}}
-        run.state = b.State(Path("/tmp/inv41-state.json"), "a", "1", "u")
+        run.state = track_progress.State(Path("/tmp/inv41-state.json"), "a", "1", "u")
         run.state.save = lambda: None
         with mock.patch.object(http_client, "request", lambda m, u, t=None, body=None, timeout=60: (404, {}) if body["model"] == "gone" else (200, {})), \
                 mock.patch.dict(os.environ, {"DEEPINFRA_API_KEY": "k"}):
@@ -470,13 +488,13 @@ class Invariants(unittest.TestCase):
 
     def test_inv42_only_reviewed_code_is_pushed_and_the_reviewer_runs_before_the_push(self):
         import inspect
-        self.assertNotIn('"push"', inspect.getsource(b.BuildRun.coder))  # the coder only commits
-        run_src = inspect.getsource(b.BuildRun.run)
+        self.assertNotIn('"push"', inspect.getsource(BuildRun.coder))  # the coder only commits
+        run_src = inspect.getsource(BuildRun.run)
         self.assertLess(run_src.index("review_before_push"), run_src.index("self.push(head)"))
         self.assertLess(run_src.index("self.push(head)"), run_src.index("test_deployed"))
         self.assertIn("PipelineFix", run_src)  # a fix CI needed is reviewed again before it is pushed
         # and the run's rounds, exercised end to end with the stages stubbed (build_run_test.RoundLoop)
-        from build_run_test import RoundLoop
+        from build_run.run_test import RoundLoop
         t = RoundLoop()
         run = t.make([t.BLOCKED, t.CLEAN], [t.PASSED])
         t.go(run)
@@ -499,42 +517,41 @@ class Invariants(unittest.TestCase):
     def test_inv44_the_tester_says_what_a_failure_means_and_only_what_a_helper_saw_is_a_regression(self):
         new_check = {"flag": "f", "check": "c", "status": "failed", "scope": "new", "api": ["a"]}
         old_check = {"flag": "", "check": "c", "status": "failed", "scope": "existing", "api": ["a"]}
-        self.assertEqual((b.test_impact([]), b.test_impact([new_check]), b.test_impact([old_check])), ("ok", "dark_only", "regression"))
-        self.assertEqual(b.test_impact([dict(old_check, api=[], ui=[])]), "dark_only")  # the model's word alone is not a regression
-        self.assertEqual(b.test_impact([dict(old_check, status="blocked")]), "dark_only")
+        self.assertEqual((verify_deployed_app.test_impact([]), verify_deployed_app.test_impact([new_check]), verify_deployed_app.test_impact([old_check])), ("ok", "dark_only", "regression"))
+        self.assertEqual(verify_deployed_app.test_impact([dict(old_check, api=[], ui=[])]), "dark_only")  # the model's word alone is not a regression
+        self.assertEqual(verify_deployed_app.test_impact([dict(old_check, status="blocked")]), "dark_only")
         doc = {"improvements": [{"target": "factory", "summary": "x", "evidence": ""}, {"target": "other", "summary": "y"}]}
-        self.assertEqual([i["target"] for i in b.improvements_from(doc, "tester")], ["factory"])  # the Agents suggest; they file nothing
-        import retrospective as pm
-        self.assertTrue(hasattr(pm, "note_bugs_on_story") and not hasattr(pm, "record_bugs"))  # bugs go on the story, never a new issue
-        self.assertGreaterEqual(len(pm.content_words("Coder prompt does not say to trim the input") & pm.content_words("The coder prompt never says to trim input")), 4)
+        self.assertEqual([i["target"] for i in suggestions.improvements_from(doc, "tester")], ["factory"])  # the Agents suggest; they file nothing
+        self.assertTrue(hasattr(story_report, "note_bugs_on_story") and not hasattr(story_report, "record_bugs"))  # bugs go on the story, never a new issue
+        self.assertGreaterEqual(len(tracker.content_words("Coder prompt does not say to trim the input") & tracker.content_words("The coder prompt never says to trim input")), 4)
 
     def test_inv45_the_retrospective_agent_is_isolated_like_the_build_run_agents(self):
         import inspect
 
-        import retrospective as pm
-        src = inspect.getsource(pm.run_agent)
+        from retrospective import agent_run, learning_pr
+        src = inspect.getsource(agent_run.run_agent)
         self.assertIn("run_isolation_probes", src)
         self.assertIn("user=user", src)
         self.assertIn("apply_changes", src)
         self.assertNotIn("subprocess.run", src)
-        self.assertNotIn('"git"', inspect.getsource(pm.run_tests) + inspect.getsource(pm.tree_changes) + inspect.getsource(pm.apply_changes))
-        self.assertIn("run_tests(", inspect.getsource(pm.open_pr))  # the tests of the proposal never run in the Orchestrator's own environment
-        self.assertNotIn("unittest", inspect.getsource(pm.open_pr).replace("run_tests", ""))
+        self.assertNotIn('"git"', inspect.getsource(agent_run.run_tests) + inspect.getsource(agent_run.tree_changes) + inspect.getsource(agent_run.apply_changes))
+        self.assertIn("run_tests(", inspect.getsource(learning_pr.open_pr))  # the tests of the proposal never run in the Orchestrator's own environment
+        self.assertNotIn("unittest", inspect.getsource(learning_pr.open_pr).replace("run_tests", ""))
         for name in ("build-run.yml", "factory-run.yml"):
             text = (ROOT / ".github/workflows" / name).read_text()
             self.assertIn("useradd -m -s /bin/bash agent", text, name)
             self.assertIn("AGENT_USER=agent", text, name)
-        self.assertEqual(pm.tree_changes.__module__, "retrospective")
+        self.assertEqual(agent_run.tree_changes.__module__, "retrospective.agent_run")
 
     def test_inv46_what_blocks_or_retries_is_decided_from_structure_not_labels(self):
-        from build_run_test import RoundLoop, finding
-        self.assertFalse(b.derive_review({"findings": [finding()]})[0])
+        from build_run.run_test import RoundLoop, finding
+        self.assertFalse(review_code.derive_review({"findings": [finding()]})[0])
         for weak in (finding(evidence_kind="opinion"), finding(category="style"), finding(file="", line="")):
-            self.assertTrue(b.derive_review({"findings": [weak]})[0])
-        found = b.flag_findings(lambda *a: json.dumps([{"slug": "s", "description": "none"}]) if a[0] == "show" else "", "head", ["s"])
+            self.assertTrue(review_code.derive_review({"findings": [weak]})[0])
+        found = review_code.flag_findings(lambda *a: json.dumps([{"slug": "s", "description": "none"}]) if a[0] == "show" else "", "head", ["s"])
         self.assertEqual({f["severity"] for f in found}, {"minor"})
         failed = {"flag": "f", "check": "c", "status": "failed"}
-        self.assertEqual(b.failed_checks([failed, {"status": "blocked"}, {"status": "not_run"}]), [failed])
+        self.assertEqual(verify_deployed_app.failed_checks([failed, {"status": "blocked"}, {"status": "not_run"}]), [failed])
         t = RoundLoop()
         run = t.make([t.CLEAN], [t.UNVERIFIED_BLOCKED, t.UNVERIFIED_BLOCKED])
         t.go(run)
@@ -549,11 +566,11 @@ class Invariants(unittest.TestCase):
             self.assertTrue((ROOT / "templates/starter" / f).is_file(), f)
         self.assertEqual(set(starter_template.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR), set(starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR) | set(starter_template.TEMPLATE_FILES_HELD))
         # staged after the run's base and never pushed on its own: the base is recorded before the config is staged
-        src = inspect.getsource(b.BuildRun.setup)
+        src = inspect.getsource(BuildRun.setup)
         self.assertLess(src.index("apply_template_files(labels)"), src.index('self.state.d["base_sha"]'))
         self.assertLess(src.index('self.state.d["base_sha"]'), src.index("stage_template_config(labels)"))
-        self.assertNotIn('"push"', inspect.getsource(b.BuildRun.stage_template_config) + inspect.getsource(b.BuildRun.copy_template_files))
-        found = b.suppression_findings(lambda *a: "+++ b/backend/src/a.ts\n@@ -1 +1 @@\n+// eslint-disable-next-line\n", "base", "head")
+        self.assertNotIn('"push"', inspect.getsource(BuildRun.stage_template_config) + inspect.getsource(BuildRun.copy_template_files))
+        found = review_code.suppression_findings(lambda *a: "+++ b/backend/src/a.ts\n@@ -1 +1 @@\n+// eslint-disable-next-line\n", "base", "head")
         self.assertEqual([f["severity"] for f in found], ["minor"])
         cases = json.loads((ROOT / "agents/lint-fixtures/cases.json").read_text())["cases"]
         self.assertTrue(any(c["expect"] for c in cases) and any(not c["expect"] for c in cases))  # failing and passing cases exist
@@ -561,7 +578,7 @@ class Invariants(unittest.TestCase):
 
     def test_inv48_a_request_needing_a_secret_builds_nothing_until_its_names_exist(self):
         from planning import triage
-        run = object.__new__(b.BuildRun)
+        run = object.__new__(BuildRun)
         run.app_repo, run.issue, run.factory_repo, run.factory_token = "o/app", "7", "o/f", "tok"
         run.state = mock.Mock(d={})
         sent = []
@@ -572,7 +589,7 @@ class Invariants(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=json.dumps(listed) if args[:2] == ["secret", "list"] else "")
         run.gh = gh
         need = [{"name": "WEATHER_API_KEY", "purpose": "forecast lookups"}]
-        with self.assertRaises(b.AwaitingSecret):
+        with self.assertRaises(endings.AwaitingSecret):
             run.require_secrets(need, record=True)
         comment = next(a for a in sent if a[:2] == ["issue", "comment"])[-1]
         self.assertIn("gh secret set WEATHER_API_KEY -R o/app", comment)
@@ -586,22 +603,22 @@ class Invariants(unittest.TestCase):
         child = render_child.child_body("app", "task", 5, {"id": "CS-1"}, [], secrets=need)
         self.assertEqual(secrets_marker.declared_secrets({"body": child, "comments": []}), need)
         self.assertEqual(secrets_marker.declared_secrets({"body": "no marker", "comments": []}), [])
-        src = __import__("inspect").getsource(b.BuildRun.setup)
+        src = __import__("inspect").getsource(BuildRun.setup)
         self.assertIn("secrets_marker.declared_secrets(issue)", src)
         self.assertLess(src.index("require_secrets(self.declared_secrets)"), src.index("self.spec = self.task"))
         listed.clear()
-        with self.assertRaises(b.AwaitingSecret):
+        with self.assertRaises(endings.AwaitingSecret):
             run.require_secrets(need, record=False)
         self.assertEqual(sum(1 for a in sent if a[:2] == ["issue", "comment"]), 2)  # the early check posts nothing more
         self.assertIn("awaiting_secret", outcomes.ANSWERED)
         self.assertNotIn("awaiting_secret", outcomes.OK)  # INV-24: an OK ending closes the Intake
-        self.assertFalse(pm.wants_fix_request({"outcome": "awaiting_secret"}, {}))
-        self.assertFalse(pm.records_stuck_issue("awaiting_secret"))
+        self.assertFalse(lesson_records.wants_fix_request({"outcome": "awaiting_secret"}, {}))
+        self.assertFalse(lesson_records.records_stuck_issue("awaiting_secret"))
         self.assertNotIn("-----", triage.secrets_request(need, "o/app"))
 
     def test_inv49_a_commit_with_a_secret_value_or_an_undeclared_name_is_never_pushed(self):
         from planning import triage
-        run = object.__new__(b.BuildRun)
+        run = object.__new__(BuildRun)
         run.state = mock.Mock(d={"secrets": ["WEATHER_API_KEY"]})
         calls = []
 
@@ -636,11 +653,11 @@ class Invariants(unittest.TestCase):
         step = deploy[deploy.index("Sync the app's own secrets"):deploy.index("Copy image from GHCR")]
         self.assertIn("< /tmp/app-secrets", step)  # the values go to Fly through stdin
         self.assertNotIn("toJSON(secrets)", deploy)  # GitHub flags a workflow that dumps the whole secrets context as malicious and will not run it
-        wired = b.wire_secrets(deploy, ["WEATHER_API_KEY", "FLY_API_TOKEN", "bad name"])
+        wired = prepare_run.wire_secrets(deploy, ["WEATHER_API_KEY", "FLY_API_TOKEN", "bad name"])
         self.assertIn("WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}", wired)  # an ordinary static reference
         self.assertNotIn("secrets.FLY_API_TOKEN: ", wired.split("factory-secrets:begin")[1].split("factory-secrets:end")[0])
-        self.assertEqual(b.wire_secrets(wired, ["WEATHER_API_KEY"]), wired)  # idempotent
-        self.assertEqual(b.wire_secrets(wired, []), deploy)  # and removable
+        self.assertEqual(prepare_run.wire_secrets(wired, ["WEATHER_API_KEY"]), wired)  # idempotent
+        self.assertEqual(prepare_run.wire_secrets(wired, []), deploy)  # and removable
         self.assertNotIn("echo \"$value\"", step)
         from planning import triage
         self.assertEqual(triage.find_secrets("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk"), ["a bearer or JWT token"])
@@ -668,8 +685,8 @@ class Invariants(unittest.TestCase):
         self.assertEqual(gb.features, {})  # nothing was created
         self.assertEqual(missing_flag.split(["read", "unread"], lambda s: s == "read"), (["read"], ["unread"]))
         self.assertNotIn(outcomes.FLAG_MISSING, outcomes.OK)
-        self.assertFalse(b.rollback_decision({"outcome": outcomes.FLAG_MISSING})[0])  # dark: nothing to roll back
-        self.assertTrue(b.rollback_decision({"outcome": "regression", "head_sha": "h", "base_sha": "g", "commits": ["h"]})[0])  # live and failing
+        self.assertFalse(rollback.rollback_decision({"outcome": outcomes.FLAG_MISSING})[0])  # dark: nothing to roll back
+        self.assertTrue(rollback.rollback_decision({"outcome": "regression", "head_sha": "h", "base_sha": "g", "commits": ["h"]})[0])  # live and failing
         self.assertIn("A flag that can be turned on has to exist", missing_flag.dark_message(["x"], None))
         self.assertIn("left as it is", missing_flag.live_message(["x"], None, False))
     def test_inv53_every_flag_is_tested_both_ways_before_review_and_a_retirement_removes_the_tests(self):

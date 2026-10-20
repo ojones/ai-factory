@@ -29,8 +29,8 @@ def render_marker(meta):
 # The marker's fields. `parent`: the Intake issue's number. `cs`: the change set's id in the plan. `kind`: "staging" (stage the app and verify its
 # infrastructure; only the first child of a new app) or "update". `flag`: whether the child's change is behind a flag (the slug is `issue-<n>`).
 # `flag_story`: set only on a fix child, the number of the failed story whose flag it reuses. `internal_only`, `size` ("S" or "M"),
-# `requirements`: what the planner decided. `secrets`: [{name, purpose}] the request declared. `depends_on`: issue numbers, kept only for the
-# label-based `update_intake.advance` until the Retrospective domain advances by native blockers (the blockers are the source of truth).
+# `requirements`: what the planner decided. `secrets`: [{name, purpose}] the request declared. Order is not in the marker:
+# a child's GitHub blockers are the source of truth (`ChildTickets.blockers`), because the UI shows them and readiness is judged from their state.
 KINDS = ("staging", "update")
 
 
@@ -43,10 +43,10 @@ def story_number(marker, issue_number):
     return int(marker.get("flag_story") or issue_number)
 
 
-def marker_for(cs, parent, kind="update", depends_on=(), secrets=None):
+def marker_for(cs, parent, kind="update", secrets=None):
     # The marker for one change set of a plan, in a fixed field order.
     meta = {"parent": parent, "cs": cs["id"], "kind": kind, "flag": bool(cs.get("flag")), "internal_only": bool(cs.get("internal_only")),
-            "size": cs.get("size"), "requirements": list(cs.get("requirements") or []), "depends_on": list(depends_on)}
+            "size": cs.get("size"), "requirements": list(cs.get("requirements") or [])}
     if secrets:
         meta["secrets"] = [{"name": x["name"], "purpose": x.get("purpose", "")} for x in secrets]
     return meta

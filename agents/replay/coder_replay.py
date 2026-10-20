@@ -33,14 +33,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT / "orchestrator"))
-import build_run as b  # noqa: E402
+from build_run import review_code  # noqa: E402
+from shared import agent_usage, config, prompts, starter_template  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("smoke_coder", ROOT / "agents" / "smoke-coder" / "run.py")
 smoke = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(smoke)
 
 KEY = os.environ["DEEPINFRA_API_KEY"]
-cfg = b.load_config()
+cfg = config.load()
 BASE_URL = cfg["provider"]["base_url"]
 REVIEWER = cfg["roles"]["reviewer"]
 MAX_CHARS = cfg["limits"].get("review_context_max_chars", 200000)
@@ -76,13 +77,13 @@ def prepare(app, base_sha, root):
 
 def review(workdir, base, head, build_kind):
     try:
-        ctx = b.build_review_context(lambda *a: git(workdir, *a), base, head, MAX_CHARS)
-    except b.ContextTooLarge:
+        ctx = review_code.build_review_context(lambda *a: git(workdir, *a), base, head, MAX_CHARS)
+    except review_code.ContextTooLarge:
         return None, "review skipped: diff too large for one call"
-    system = b.render(b.load_prompt(REVIEWER["fast_prompt"]),
+    system = prompts.render(prompts.load_prompt(REVIEWER["fast_prompt"]),
                       {"app_name": "replay", "build_kind": build_kind, "base_sha": base[:8], "head_sha": head[:8]})
-    doc, _ = b.single_call_review(BASE_URL, KEY, REVIEWER["model"], system, ctx)
-    _, blocking, _ = b.derive_review(doc)
+    doc, _ = review_code.single_call_review(BASE_URL, KEY, REVIEWER["model"], system, ctx)
+    _, blocking, _ = review_code.derive_review(doc)
     return [f["summary"] for f in blocking], ""
 
 
@@ -95,7 +96,7 @@ def one_run(job):
         shutil.copytree(prep, workdir, symlinks=True)
         findings = root / f"findings-{slug}-{app}-{trial}.json"
         findings.write_text('{"blocking": [], "minor": []}')
-        prompt = b.render(b.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), {
+        prompt = prompts.render(prompts.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), {
             "app_name": app, "round": "1", "task": task, "findings_path": findings, "build_kind": "first build",
             "issue_ref": "owner/repo#1"})
         home.mkdir(parents=True, exist_ok=True)
@@ -112,11 +113,11 @@ def one_run(job):
         usage, cost = None, 0.0
         for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
             state = json.loads(state_file.read_text())
-            usage, cost = b.summarize_token_usage(state), smoke.cost_of(state, prices.get(model, {}))
+            usage, cost = agent_usage.summarize_token_usage(state), smoke.cost_of(state, prices.get(model, {}))
         result.update(calls=(usage or {}).get("calls", 0), llm_secs=(usage or {}).get("llm_seconds", 0),
                       peak_context=(usage or {}).get("peak_context", 0), cost=round(cost, 4))
         head = git(workdir, "rev-parse", "HEAD").strip()
-        bad = b.protected_violations([c for c in git(workdir, "diff", "--name-only", f"{base_sha}..{head}").split("\n") if c])
+        bad = starter_template.protected_violations([c for c in git(workdir, "diff", "--name-only", f"{base_sha}..{head}").split("\n") if c])
         if rc == "timeout":
             result.update(built=False, clean=False, reason="coder timed out")
         elif head == base_sha:

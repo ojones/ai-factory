@@ -25,7 +25,7 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None,
             cs = by_id[cs_id]
             deps = [numbers[d] for d in cs.get("depends_on") or []]
             task = render_change_set_task(cs, parent=parent)
-            body = child_body(app, task, parent, cs, deps, cap, secrets, cs.get("kind") or "update")
+            body = child_body(app, task, parent, cs, cap, secrets, cs.get("kind") or "update")
             numbers[cs_id] = tickets.file(f"{app}: {one_line(cs['title'])}", body,
                                           [intake_labels.UPDATE_APP_INTAKE, f"app:{app}", f"plan:{parent}", child_tickets.WAIT])
             made.append((cs_id, numbers[cs_id]))

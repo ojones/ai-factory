@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Production feedback: errors a deployed Managed App logs, and defects its owner reports, become Update App Intakes by themselves.
 #
-# The watchdog (build_run.py) only looks for ten minutes after a release. A bug that shows up later reaches the Factory only if
+# The watchdog (build_run/) only looks for ten minutes after a release. A bug that shows up later reaches the Factory only if
 # someone files it. This scheduled scan closes that:
 #
 #   logs    Each Managed App's Fly log is read, error-level JSON lines are grouped by a fingerprint (the message with ids and
@@ -25,9 +25,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import build_run as b  # noqa: E402
 from request import file_intake, find_intakes  # noqa: E402
 from shared import app_state_record, config  # noqa: E402
+from shared.console import log  # noqa: E402
+from shared.shell import sh  # noqa: E402
 
 LABEL = "production-feedback"
 LABEL_DESC = "Filed and started by the Orchestrator from production feedback"
@@ -135,11 +136,11 @@ def defect_request(app, issue):
 
 
 def gh(args, token):
-    return b.sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=False)
+    return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=False)
 
 
 def app_logs(app):
-    p = b.sh(["flyctl", "logs", "--no-tail", "--app", app], env={**os.environ}, check=False, timeout=120)
+    p = sh(["flyctl", "logs", "--no-tail", "--app", app], env={**os.environ}, check=False, timeout=120)
     return p.stdout or ""
 
 
@@ -159,7 +160,7 @@ def scan_app(repo, token, pat, app, cfg):
         n = file_intake.file_update_app_intake(repo, token, pat, app, title_for(app, fp), error_request(app, fp, groups[fp]), LABEL, LABEL_DESC, STARTED_NOTE)
         if n:
             filed.append(n)
-            b.log(f"{app}: filed #{n} for error {fp} ({groups[fp]['count']} occurrences)")
+            log(f"{app}: filed #{n} for error {fp} ({groups[fp]['count']} occurrences)")
     for fp in again:
         gh(["issue", "comment", str(open_fps[fp]), "--repo", repo, "--body", f"Seen {groups[fp]['count']} more times in the latest scan."], token)
     return filed
@@ -192,14 +193,14 @@ def main():
     token, pat = os.environ["FACTORY_GH_TOKEN"], os.environ["FACTORY_PAT"]
     cfg = {**DEFAULTS, **((config.load().get("limits") or {}).get("production_feedback") or {})}
     if not cfg["enabled"]:
-        b.log("production feedback is off")
+        log("production feedback is off")
         return 0
     for app in app_state_record.managed_apps(repo, token):
         try:
             made = scan_defect_labels(repo, token, pat, app, cfg) or scan_app(repo, token, pat, app, cfg)
-            b.log(f"{app}: {len(made)} new Intake(s)")
+            log(f"{app}: {len(made)} new Intake(s)")
         except Exception as e:  # noqa: BLE001 - one app's failure never stops the scan of the others
-            b.log(f"{app}: scan failed: {type(e).__name__}: {e}")
+            log(f"{app}: scan failed: {type(e).__name__}: {e}")
     return 0
 
 
