@@ -1012,5 +1012,27 @@
   },
   "audit": [],
   "findings": {}
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/39388710351",
+  "app": "factory-bench",
+  "outcome": "released",
+  "kind": "update",
+  "started_at": "2026-10-20T07:48:25Z",
+  "minutes": 16.4,
+  "rounds": 1,
+  "cost_usd": 0.1306,
+  "cap_usd": 1.5,
+  "released": [
+   "factory-bench.feature.issue-142"
+  ],
+  "checks": {
+   "passed": 8,
+   "failed": 0,
+   "blocked": 0,
+   "not_run": 0
+  },
+  "audit": [],
+  "findings": {}
  }
 ]
