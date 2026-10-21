@@ -63,6 +63,28 @@ class Promoting(unittest.TestCase):
         self.assertEqual(self.sweep(), {})
         self.assertEqual(json.dumps(sorted(self.gh.issues)).count(","), 1)
 
+    def handed_over(self):
+        number = self.request(again=1)
+        self.sweep()
+        return number, [n for n, i in self.gh.issues.items() if "factory-change" in [x["name"] for x in i["labels"]]][0]
+
+    def test_a_failure_that_returns_after_the_handover_is_seen_again_on_the_intake(self):
+        number, intake = self.handed_over()
+        self.gh.comments[number].append("**Failed again** (child): y")
+        self.assertEqual(self.sweep(), {number: "seen_again"})
+        self.assertTrue(any(b.startswith("**Seen again") for b in self.gh.comments[intake]))
+
+    def test_a_returning_failure_is_relayed_once(self):
+        number, intake = self.handed_over()
+        self.gh.comments[number].append("**Failed again** (child): y")
+        self.sweep()
+        self.assertEqual(self.sweep(), {})
+        self.assertEqual(sum(b.startswith("**Seen again") for b in self.gh.comments[intake]), 1)
+
+    def test_a_failure_before_the_handover_is_not_relayed(self):
+        self.handed_over()
+        self.assertEqual(self.sweep(), {})
+
 
 if __name__ == "__main__":
     unittest.main()

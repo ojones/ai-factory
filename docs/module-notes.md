@@ -250,7 +250,7 @@ STEP 9.11, 9.12 (INV-65): a merged change is judged by whether its own finding c
 
 ### promote.py
 
-STEP 9.1: the cause is read from the `#### Cause` section Try Fix writes into a factory fix request, and the count of sightings is the first report plus its "Failed again" comments. The request is moved by filing a Factory Change Intake from its numbered requirements (already checked as checkable by Try Fix) and labelling it `moved-to-factory-change`; nothing in `try_fix` imports this domain, because `factory_change` imports `try_fix`.
+STEP 9.1: the cause is read from the `#### Cause` section Try Fix writes into a factory fix request, and the count of sightings is the first report plus its "Failed again" comments. The request is moved by filing a Factory Change Intake from its numbered requirements (already checked as checkable by Try Fix) and labelling it `moved-to-factory-change`; nothing in `try_fix` imports this domain, because `factory_change` imports `try_fix`. The handoff comment records the sightings at that moment; a request stays open after it, so every later "Failed again" comment is relayed once to the Intake as "Seen again" (and noted on the request as "Relayed"). Without this the breaker in `watch_merged` would never see a failure that returns, because the sweep skips a request once it is moved.
 
 ## orchestrator/flag_lifecycle/
 
