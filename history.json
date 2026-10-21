@@ -1034,5 +1034,42 @@
   },
   "audit": [],
   "findings": {}
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/39438025760",
+  "app": "factory-bench",
+  "outcome": "released",
+  "kind": "update",
+  "started_at": "2026-10-20T14:21:03Z",
+  "minutes": 16.4,
+  "rounds": 1,
+  "cost_usd": 0.1504,
+  "cap_usd": 1.5,
+  "released": [
+   "factory-bench.feature.issue-146"
+  ],
+  "checks": {
+   "passed": 10,
+   "failed": 0,
+   "blocked": 0,
+   "not_run": 0
+  },
+  "audit": [],
+  "findings": {}
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/39441002463",
+  "app": "factory-bench",
+  "outcome": "provider_blocked",
+  "kind": "update",
+  "started_at": "2026-10-20T14:40:05Z",
+  "minutes": 45.2,
+  "rounds": 0,
+  "cost_usd": 0.1266,
+  "cap_usd": 1.5,
+  "released": [],
+  "checks": {},
+  "audit": [],
+  "findings": {}
  }
 ]
