@@ -300,9 +300,9 @@ One rule for every failure and warning, whatever found it (a failed child, a fai
 
 What group 9 was built to. A Factory Change takes an `orchestrator_gap` finding from a ticket to a merged PR in ai-factory, bounded and unattended, with the existing checks as the gate in place of flags and a deployed tester. Decisions are in `.wayfinder/orchestrator-hardening/tickets/32-factory-change-open-decisions.md`.
 
-Flow steps are group 9 above. Decisions are in `.wayfinder/orchestrator-hardening/tickets/32-factory-change-open-decisions.md`.
+Flow steps are group 9 above.
 
-Today an `orchestrator_gap` finding ends as a learning PR that a person merges (`orchestrator/` is never auto-mergeable), and the only trigger for a Factory fix is a person adding `ready-for-factory-run` to a `factory-fix-request` issue. The Build Run and Planner are app-only and refuse a Factory repo. A Factory Change takes an `orchestrator_gap` finding from a ticket to a merged PR in ai-factory, bounded and unattended, with the existing checks as the gate in place of flags and a deployed tester. Other categories (prompt_gap, template_gap, plan_gap) stay on 7.2 and 7.3 until this is proven.
+Before group 9 an `orchestrator_gap` finding ended as a learning PR that a person merges (`orchestrator/` was never auto-mergeable), and the only trigger for a Factory fix was a person adding `ready-for-factory-run` to a `factory-fix-request` issue; that is still the path for the other Factory categories. The Build Run is app-only and refuses a Factory repo. Other categories (prompt_gap, template_gap, plan_gap) stay on 7.2 and 7.3 until this is proven.
 
 Out of scope: Managed App changes, automation of the other categories, replacing the Retrospective Agent (it stays the diagnoser and still writes small learning PRs).
 
@@ -333,7 +333,7 @@ There is no Analyst role (decision D2): the Planner plans, one Coder codes, the 
 
 ### 4. Gates and delivery (STEP 9.6, 9.7, 9.9, 9.10)
 
-- FC-40 Delivery is a PR on branch `factory-change/<issue>`, never a push to main. Branch protection requiring `unit` and `starter` (and `reviewer-smoke` when prompts change) is a prerequisite; the process refuses to start when the API says it is off.
+- FC-40 Delivery is a PR on branch `factory-change/<issue>`, never a push to main. Branch protection requiring `unit` and `starter` is a prerequisite (`reviewer-smoke` and `factory-change-gate` are checked by the merge job, not required by protection); the process refuses to start when the API says it is off.
 - FC-41 Gate is `factory-checks.yml` plus: the reproduction test fails on `main` and passes on the branch; `flow_spec_test` and `invariants_test` stay green; a new INV row where the change adds a rule.
 - FC-42 Live smoke runs only when the diff touches the coder, reviewer or prompt path: `agents/smoke-coder` and `smoke-tester` (and replay), at least 5 trials, compared with the stored baseline under `benchmark-protocol.md`. It has its own budget, separate from the per-change cap. A drop beyond `max_pass_drop` blocks the merge.
 - FC-43 Merge policy (decision D1): Tier 1 self-merges on green; Tier 2 waits for a person. This amends INV-15 and its test in the same change that builds 9.9: INV-15 keeps governing learning PRs, and a new INV row governs Factory Change merges.
@@ -344,7 +344,7 @@ There is no Analyst role (decision D2): the Planner plans, one Coder codes, the 
 - FC-50 At most K open factory-change PRs (like `max_open_learning_prs`, 3), one per fingerprint, and `fix_attempts_max` (2) along the chain, then `needs-human`.
 - FC-51 Circuit breaker (orchestrator-hardening ticket 01, revisited): if a merged change is followed by a failed Build Run at the same stage or a canary or benchmark regression, open a revert PR and pause the process until a person clears the `factory-change-paused` label. The breaker is the reason Tier 1 may self-merge.
 - FC-52 A merged change the Retrospective later tags `fix-ineffective` counts against the process; two in a row pause it.
-- FC-53 Every step ends in a named outcome (`merged`, `awaiting_human`, `refused`, `needs_human`, `paused`), and the process never fails the run it was triggered from (same contract as `run_retrospective.py`).
+- FC-53 Every step ends in a named outcome (`merged`, `pr_open`, `awaiting_human`, `refused`, `needs_human`, `paused`), and the process never fails the run it was triggered from (same contract as `run_retrospective.py`).
 - FC-54 Emphasis-word and prompt-change vetting from `rejected_proposal` apply unchanged.
 
 ### 6. Observability
@@ -367,5 +367,4 @@ Decided in ticket 32: D1 Tier 1 self-merges behind the circuit breaker, D2 no An
 - FC-42 live smoke for Python changes is not built; prompt changes still get `reviewer-smoke` from `factory-checks.yml`.
 - FC-51 watches two signals after a merge: the finding coming back (a "Seen again" comment on the Intake) and a `model-drift` alert opening. A failed Build Run "at the same stage" is not read; the recurring finding stands in for it.
 - FC-60 and FC-61: the dashboard does not read Factory Changes yet.
-- FC-53 gains a sixth outcome, `pr_open` (a Tier 1 PR is open and waits for the gate to merge it).
 - FC-70: `factory-change-gate` is not a required check in branch protection; a person merging a Tier 2 PR should see it pass first.
