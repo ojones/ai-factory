@@ -112,6 +112,21 @@ class Running(unittest.TestCase):
             self.assertEqual(self.go(coder, factory), "refused")
         self.assertFalse((factory / "pyproject.toml").exists())
 
+    def test_a_change_that_needs_the_spec_is_queued_for_a_person_and_discarded(self):
+        factory = factory_repo()
+        coder = Coder()
+        original = coder.run
+
+        def run_and_touch(role, label, prompt, cwd=None, **kw):
+            (Path(cwd) / "docs").mkdir(exist_ok=True)
+            (Path(cwd) / "docs" / "invariants.md").write_text("| INV-99 |", encoding="utf-8")
+            return original(role, label, prompt, cwd, **kw)
+        coder.run = run_and_touch
+        self.assertEqual(self.go(coder, factory), "needs_human")
+        self.assertIn("docs/invariants.md", self.gh.comments[5][0])
+        self.assertFalse((factory / "docs").exists())
+        self.opened.assert_not_called()
+
     def test_no_branch_protection_means_nothing_starts(self):
         self.unprotected = "branch protection on `main` does not require unit"
         coder = Coder()

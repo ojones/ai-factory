@@ -5,6 +5,8 @@ from pathlib import Path
 from retrospective import agent_run
 from shared import agent_output, prompts
 
+from factory_change import tiers
+
 ROLE = "factory_coder"
 
 
@@ -31,6 +33,11 @@ def usable_result(path):
     return doc if isinstance(doc, dict) and isinstance(doc.get("reproduction"), str) else None
 
 
+def spec_edits(factory, scratch):
+    changes, _ = agent_run.tree_changes(factory, scratch)
+    return sorted(p for p in changes if p in tiers.SPEC_PATHS)
+
+
 def write_change(cfg, runner, factory, work, task, round_no, blocking=()):
     scratch = scratch_copy(factory, work)
     result_path = Path(work) / "coder-result.json"
@@ -38,5 +45,7 @@ def write_change(cfg, runner, factory, work, task, round_no, blocking=()):
     prompt = coder_prompt(cfg, task, round_no, findings_file(work, list(blocking)), result_path)
     agent_run.share_with(work, runner.agent_user)
     runner.run(ROLE, str(round_no), prompt, cwd=scratch)
+    spec = spec_edits(factory, scratch)
     agent_run.carry_over_changes(factory, scratch)
-    return usable_result(result_path)
+    result = usable_result(result_path)
+    return {**(result or {}), "spec_paths": spec} if spec else result

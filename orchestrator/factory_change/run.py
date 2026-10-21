@@ -12,7 +12,7 @@ from shared.shell import sh
 
 from factory_change import gate, hold_for_person, open_pr, pause, protection, review_change, stop, tiers, vet_change, write_change
 
-RETRY, REFUSE, DONE = "retry", "refuse", "done"
+RETRY, REFUSE, DONE, HOLD = "retry", "refuse", "done", "hold"
 
 
 def finding(summary):
@@ -56,6 +56,8 @@ class ChangeRun:
         result = write_change.write_change(self.cfg, self.runner, self.factory, self.work, self.task, round_no, blocking)
         if result is None:
             return RETRY, [finding("write the reproduction's test name and a summary to the result file")]
+        if result.get("spec_paths"):
+            return HOLD, f"this change needs a person to edit {', '.join(result['spec_paths'])}, which no Agent may change; the code is discarded"
         changes = vet_change.read_changes(self.factory)
         why = self.scope_problem(changes)
         if why:

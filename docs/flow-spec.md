@@ -2,7 +2,7 @@
 
 This is the official specification of how a request becomes a running, recorded change. Every step has a stable ID (`group.step`, for example `STEP 4.9`, Test the deployed app) so that docs, tickets, tests and verification runs can cite it. [ARCHITECTURE.md](../ARCHITECTURE.md) explains the parts; where it disagrees with this page, this page is the intended behaviour and ARCHITECTURE.md is brought into line. This is the only flow diagram kept in the repo; the older ones were deleted, and a new one is drawn only when it is needed.
 
-**Status.** This is the workflow the code implements. The failure-to-ticket path (6.7, 7.1, 7.6, 8.x) is built (tickets 15b to 15d and 16); the live proof is ticket 17. The plan, order of work and the tickets that close each gap are in `.wayfinder/intake-planning-redesign/`. The "Implemented by" and "Verified by" columns are filled as each group is built and then checked in the last ticket.
+**Status.** This is the workflow the code implements. The failure-to-ticket path (6.7, 7.1, 7.6, 8.x) is built (tickets 15b to 15d and 16); the live proof is ticket 17. Group 9 (Factory Change) is built and unit-tested but has not run live. The plan, order of work and the tickets that close each gap are in `.wayfinder/intake-planning-redesign/`. The "Implemented by" and "Verified by" columns are filled as each group is built and then checked in the last ticket.
 
 **Domains.** Each numbered group is a domain with its own folder under `orchestrator/` (see [ARCHITECTURE.md](../ARCHITECTURE.md#code-layout)): 1 Request (`request`), 2 Planning (`planning`), 3 Staging (`staging`), 4 Build Run (`build_run`), 5 Flag Lifecycle (`flag_lifecycle`), 6 Retrospective (`retrospective`, record and advance included), 7 Try Fix (`try_fix`), 8 Bugs (`bugs`), 9 Factory Change (`factory_change`). Maintenance and Monitoring have no steps.
 
@@ -173,17 +173,17 @@ flowchart TD
     S5_5 -.-> S8_1
 
     subgraph g9["9. Factory Change (orchestrator_gap, its own process, PR to main)"]
-        S9_1["<b>9.1 File the Factory Change Intake</b><br/>label factory-change, filed with the PAT<br/>dedupe by fingerprint, acts at promote_after_runs<br/>checks the ticket: numbered requirements, evidence,<br/>a named reproduction that fails on main<br/>refuses to start if paused (9.12)<br/>or branch protection is off"]
+        S9_1["<b>9.1 File the Factory Change Intake</b><br/>label factory-change, filed with the PAT<br/>dedupe by fingerprint, acts at promote_after_runs<br/>checks the ticket: numbered requirements, evidence,<br/>a named reproduction that fails on main<br/>refuses to file while paused (9.12)"]
         S9_2["<b>9.2 Plan</b><br/>Planner Agent (2.1), factory-planner prompt<br/>decides one change set or several, no flags<br/>2.4 files them as sub-issues under the Intake<br/>always at least one child"]
         S9_3["<b>9.3 Code</b><br/>FACTORY CODER Agent, one child at a time<br/>writes the failing reproduction first if the ticket has none<br/>scratch copy, isolated<br/>no PAT, no Fly or GrowthBook key<br/>spend cap, timeout, stall limit<br/>style: CLAUDE.md, Factory Python"]
         S9_4["<b>9.4 Vet the proposal</b><br/>Orchestrator: allowed paths, tier list,<br/>diff size, no emphasis words,<br/>no weakened check or deleted test"]
         S9_5["<b>9.5 Review</b><br/>FACTORY REVIEWER Agent reads the diff<br/>against the ticket and the standards<br/>the orchestrator never trusts its verdict"]
         S9_6["<b>9.6 Open the PR</b><br/>branch factory-change/N, pushed by the Orchestrator<br/>max K open, one per fingerprint"]
-        S9_7["<b>9.7 Gate</b><br/>unit: ruff, tests, style, spec, invariants, boundary<br/>starter, reviewer-smoke when prompts change<br/>reproduction test FAILS on main, PASSES on the branch<br/>smoke-coder and smoke-tester, at least 5 trials<br/>no drop beyond max_pass_drop"]
+        S9_7["<b>9.7 Gate</b><br/>unit: ruff, tests, style, spec, invariants, boundary<br/>starter, reviewer-smoke when prompts change<br/>reproduction test FAILS on main, PASSES on the branch<br/>(live smoke for Python changes: not built, FC-42)"]
         S9_8{"<b>9.8 Route by tier</b><br/>which paths changed"}
         S9_9["<b>9.9 Self-merge</b><br/>tier 1 only: squash-merge with the PAT"]
         S9_10["<b>9.10 Wait for a person</b><br/>tier 2: the Factory's own control path<br/>comment on the PR, label awaiting-human"]
-        S9_11["<b>9.11 Watch after merge</b><br/>next Build Runs, canary, benchmark<br/>fix-ineffective on the lesson counts too"]
+        S9_11["<b>9.11 Watch after merge</b><br/>the finding coming back, a model-drift alert<br/>fix-ineffective on the lesson counts too"]
         S9_12["<b>9.12 Revert and pause</b><br/>revert PR, label factory-change-paused<br/>nothing new starts until a person clears it"]
         S9_13["<b>9.13 Refuse or stop</b><br/>not an orchestrator gap, no reproduction,<br/>diff over limit, rounds or cap used up,<br/>fix_attempts_max reached"]
 
@@ -203,7 +203,7 @@ flowchart TD
         S9_8 -->|"tier 2"| S9_10
         S9_9 --> S9_11
         S9_10 -->|"a person merges"| S9_11
-        S9_11 -->|"a later run or canary regresses,<br/>or two fix-ineffective in a row"| S9_12
+        S9_11 -->|"the finding returns, model drift,<br/>or two fix-ineffective in a row"| S9_12
     end
 
     S7_6 -->|"factory target,<br/>orchestrator_gap"| S9_1
@@ -330,11 +330,12 @@ There is no Analyst role (decision D2): the Planner plans, one Coder codes, the 
 - FC-31 Tier 2 (agent may propose, a person merges), the Factory's own control path, so a broken change cannot break the run that would fix it: `orchestrator/build_run/run.py`, `shared/agent_runner.py`, `shared/agent_process.py`, `shared/spend_budget.py`, `retrospective/*`, `try_fix/*`, `factory_change/*`, and the `profiles.yml` limits.
 - FC-32 Never: `.github/`, `templates/starter/.github/`, secrets, branch protection, `profiles.yml` model or cap increases, and the checks themselves (weakening `style_baseline.json`, deleting tests, loosening ruff).
 - FC-33 Diff limits: at most N files and M added lines (in `profiles.yml`), and no deleted test without a replacement. Over the limit is a refusal back to the ticket, not a partial PR.
+- FC-34 A change that needs `docs/invariants.md` or `docs/flow-spec.md` is queued for a person: the Orchestrator detects an Agent edit to either file before carrying changes over, discards the whole change and ends the ticket `needs_human`, not `refused`, because the request is right and only a person may make the edit.
 
 ### 4. Gates and delivery (STEP 9.6, 9.7, 9.9, 9.10)
 
 - FC-40 Delivery is a PR on branch `factory-change/<issue>`, never a push to main. Branch protection requiring `unit` and `starter` is a prerequisite (`reviewer-smoke` and `factory-change-gate` are checked by the merge job, not required by protection); the process refuses to start when the API says it is off.
-- FC-41 Gate is `factory-checks.yml` plus: the reproduction test fails on `main` and passes on the branch; `flow_spec_test` and `invariants_test` stay green; a new INV row where the change adds a rule.
+- FC-41 Gate is `factory-checks.yml` plus: the reproduction test fails on `main` and passes on the branch; `flow_spec_test` and `invariants_test` stay green; `docs/invariants.md` and `docs/flow-spec.md` are never edited by an Agent: a change that needs a new rule or step is discarded and the ticket is queued for a person (`needs_human`).
 - FC-42 Live smoke runs only when the diff touches the coder, reviewer or prompt path: `agents/smoke-coder` and `smoke-tester` (and replay), at least 5 trials, compared with the stored baseline under `benchmark-protocol.md`. It has its own budget, separate from the per-change cap. A drop beyond `max_pass_drop` blocks the merge.
 - FC-43 Merge policy (decision D1): Tier 1 self-merges on green; Tier 2 waits for a person. This amends INV-15 and its test in the same change that builds 9.9: INV-15 keeps governing learning PRs, and a new INV row governs Factory Change merges.
 - FC-44 Resume is after 9.11 reports clean, not at merge: `resume_after_merge` re-releases the failed child that triggered the finding once the watch window passes.
@@ -355,7 +356,7 @@ There is no Analyst role (decision D2): the Planner plans, one Coder codes, the 
 ### 7. Docs and tests the build must include
 
 - FC-70 Group 9 in `flow-spec.md` with stable `STEP 9.n` IDs (already drafted there as Target rows).
-- FC-71 New `INV-nn` rows, each backed by `invariants_test.py::test_invNN_*`: protected paths, no direct push to main, reproduction fails on main, breaker pause, and the amended INV-15 (see FC-43).
+- FC-71 New `INV-nn` rows are added by a person, each backed by `invariants_test.py::test_invNN_*`: protected paths, no direct push to main, reproduction fails on main, breaker pause, and the amended INV-15 (see FC-43).
 - FC-72 A `factory_change` domain in `orchestrator-map.md` and `boundary_test.py`; rationale in `module-notes.md` (no comments in code).
 
 ### Decisions

@@ -242,6 +242,8 @@ STEP 9.7 and 9.9 (INV-64, INV-66): the same checks run twice, once by the Orches
 
 ### run.py
 
+A coder edit to `docs/invariants.md` or `docs/flow-spec.md` is noticed in `write_change` before `carry_over_changes`, because that carry-over silently drops every path outside its allowed prefixes (docs among them); without the early check the PR would open without the spec change the coder wanted. The ticket ends `needs_human` (a person edits the spec, then adds `proceed-with-change` again), not `refused`, because the request is sound.
+
 STEP 9.3 to 9.10: the order is the cheapest refusal first. The scope check comes before the proof and the unit tests, because a change outside its scope is discarded whatever else is true, and a scope refusal is final (back to the ticket) while a failed proof, failed tests or a blocking finding go back to the coder for another round, up to `factory_change_review_rounds`. The snapshot of `main` is taken before the first coder round and never refreshed, so a later round cannot make its own failing test look pre-existing. The reviewer's verdict is derived from its findings (`review_code.derive_review`), not read from its `verdict` field.
 
 ### watch_merged.py

@@ -30,6 +30,7 @@ TIER_ONE_PATTERNS = (
 )
 
 PROMPT_PATH = re.compile(r"agents/prompts/.*")
+SPEC_PATHS = ("docs/invariants.md", "docs/flow-spec.md")
 
 
 def matches(path, patterns):
