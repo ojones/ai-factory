@@ -1,0 +1,54 @@
+name: Factory Change
+
+# STEP 9.3 to 9.10. A child of a planned Factory Change Intake (label `factory-change-child`, marker kind `factory`) is started by the label `proceed-with-change`, which the
+# Orchestrator adds with the PAT. orchestrator/factory_change/run.py works in this checkout of `main`: the Factory Coder writes the change in a scratch copy, the Orchestrator
+# vets it, proves the reproduction fails on `main`, runs the unit tests, has it reviewed, and opens a pull request on `factory-change/<child>`. It never pushes to `main`.
+# factory-checks.yml gates the pull request; a change that touches only files outside the control path merges itself, any other waits for a person.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: factory-change
+  cancel-in-progress: false
+
+jobs:
+  change:
+    if: >-
+      github.event.label.name == 'proceed-with-change' &&
+      contains(github.event.issue.labels.*.name, 'factory-change-child') &&
+      contains(github.event.issue.body, '"kind":"factory"')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "openhands==$(cat agents/openhands-version.txt)" pyyaml ruff==0.17.1
+      - name: Working directory, and the Agent user if isolation is on
+        run: |
+          mode=$(python -c "import yaml; print(yaml.safe_load(open('agents/profiles.yml'))['limits'].get('agent_isolation', 'off'))")
+          if [ "$mode" = user ]; then
+            sudo apt-get install -y -qq acl > /dev/null
+            sudo useradd -m -s /bin/bash agent
+            sudo mkdir -p /srv/agent
+            sudo chown agent:agent /srv/agent
+            sudo setfacl -R -m "u:$USER:rwx" /srv/agent
+            sudo setfacl -R -d -m "u:$USER:rwx" -m u:agent:rwx /srv/agent
+            echo "AGENT_USER=agent" >> "$GITHUB_ENV"
+            echo "BUILD_RUN_DIR=/srv/agent/run" >> "$GITHUB_ENV"
+            mkdir -p /srv/agent/run
+          fi
+      - name: Write, vet, review and open the Factory Change
+        env:
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: PYTHONPATH=orchestrator python -m factory_change.run

@@ -23,7 +23,7 @@ export function createApp(): Express {
   app.use(express.json());
   app.use(previewMiddleware());
 
-  // One structured JSON log line per request (STANDARDS-VISIBILITY.md).
+  // One structured JSON log line per request.
   app.use((req, res, next) => {
     res.on("finish", () => {
       logger.info("request", {
@@ -39,7 +39,7 @@ export function createApp(): Express {
   app.use(healthRouter);
 
   // One container: the backend serves the built frontend's static assets
-  // itself (STANDARDS-DEPLOYMENT.md) — no separate frontend server.
+  // itself — no separate frontend server.
   app.use(express.static(FRONTEND_DIST));
 
   // SPA fallback: any unmatched GET that isn't an API route falls through

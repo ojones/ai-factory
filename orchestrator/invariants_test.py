@@ -17,6 +17,7 @@ from build_run import read_child, ship_code
 from build_run import start_build as u
 from build_run import ui_check as uc
 from build_run.run_test import RoundLoop, finding
+from factory_change import file_change, gate, open_pr, pause, prove_reproduction, tiers, vet_change
 from flag_lifecycle import flag_slug, missing_flag, release_features
 from flag_lifecycle.fake_growthbook import FakeGrowthBook
 from maintenance import dependency_updates as mt
@@ -169,7 +170,7 @@ class Invariants(unittest.TestCase):
         for bad in (".github/workflows/build-run.yml", "templates/starter/.github/workflows/build.yml", "templates/starter/fly.toml",
                     "templates/starter/fly/provision.sh", "agents/../.github/x.yml", "README.md"):
             self.assertFalse(agent_run.allowed_path(bad), bad)
-        for ok in ("agents/prompts/coder.md", "templates/starter/AGENTS.md", "orchestrator/build_run.py", "STANDARDS-CODING.md"):
+        for ok in ("agents/prompts/coder.md", "templates/starter/AGENTS.md", "orchestrator/build_run.py", "ARCHITECTURE.md"):
             self.assertTrue(agent_run.allowed_path(ok), ok)
 
     def test_inv15_only_additive_lint_or_formatter_config_auto_merges(self):
@@ -299,25 +300,31 @@ class Invariants(unittest.TestCase):
             second = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
         self.assertEqual((first["action"], second["action"], second["number"]), ("bug_intake", "again", first["number"]), msg="the same event reported twice is one")
 
-    def test_inv27_fix_first_never_retry_the_unchanged_child_and_bounded(self):
-        self.assertEqual(PROFILES["limits"]["fix_attempts_max"], 2)
-        form = "### App name\n\ndemo\n\n### What should change?\n\nChange set CS-1: T\n"
+    FIX_FORM = "### App name\n\ndemo\n\n### What should change?\n\nChange set CS-1: T\n"
+
+    def failed_child_tracker(self):
         gh = FakeIssues()
         gh.add(7)
-        gh.add(12, body=child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "update", "flag": True}) + "\n\n" + form)
+        gh.add(12, body=child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "update", "flag": True}) + "\n\n" + self.FIX_FORM)
         gh.issues[12]["title"] = "demo: T"
         gh.subs[7] = [12]
+        return gh
+
+    def failure_verdict(self, story, fp):
+        ev = event.make("build_run", "failure", "demo", "round limit", fp, story=story)
+        return {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": "spec_ambiguity", "reason": "r", "event": ev}
+
+    def add_fix_child(self, gh, number, bug, attempt, of):
+        marker = {"parent": bug, "cs": "CS-1", "kind": "update", "flag": True, "fix_for": of, "fix_attempt": attempt}
+        gh.add(number, body=child_tickets.render_marker(marker) + "\n\n" + self.FIX_FORM, labels=["update-app-intake"])
+        gh.issues[number]["title"] = "demo: fix"
+        gh.subs[bug] = [number]
+
+    def test_inv27_fix_first_never_retry_the_unchanged_child_and_bounded(self):
+        self.assertEqual(PROFILES["limits"]["fix_attempts_max"], 2)
+        gh = self.failed_child_tracker()
         doc = {"how_found": "a", "root_cause": "b", "what_it_takes": ["c"], "requirements": ["POST /api/todos answers 400 for blank text"], "source": "agent"}
-
-        def verdict(story, fp):
-            ev = event.make("build_run", "failure", "demo", "round limit", fp, story=story)
-            return {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": "spec_ambiguity", "reason": "r", "event": ev}
-
-        def fix_child(number, bug, attempt, of):
-            marker = {"parent": bug, "cs": "CS-1", "kind": "update", "flag": True, "fix_for": of, "fix_attempt": attempt}
-            gh.add(number, body=child_tickets.render_marker(marker) + "\n\n" + form, labels=["update-app-intake"])
-            gh.issues[number]["title"] = "demo: fix"
-            gh.subs[bug] = [number]
+        verdict, fix_child = self.failure_verdict, lambda *a: self.add_fix_child(gh, *a)
         with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
             first = file_bug.file_bug("o/f", "t", "pat", verdict(12, "a"), doc, None, 2)
             fix_child(40, first["number"], 1, 12)
@@ -532,10 +539,10 @@ class Invariants(unittest.TestCase):
         src = inspect.getsource(agent_run.run_agent)
         self.assertIn("run_isolation_probes", src)
         self.assertIn("user=user", src)
-        self.assertIn("apply_changes", src)
+        self.assertIn("apply_changes", inspect.getsource(agent_run.carry_over_changes))
         self.assertNotIn("subprocess.run", src)
         self.assertNotIn('"git"', inspect.getsource(agent_run.run_tests) + inspect.getsource(agent_run.tree_changes) + inspect.getsource(agent_run.apply_changes))
-        self.assertIn("run_tests(", inspect.getsource(learning_pr.open_pr))
+        self.assertIn("run_tests(", inspect.getsource(learning_pr.proposal_passes_tests))
         self.assertNotIn("unittest", inspect.getsource(learning_pr.open_pr).replace("run_tests", ""))
         for name in ("build-run.yml", "factory-run.yml"):
             text = (ROOT / ".github/workflows" / name).read_text()
@@ -563,7 +570,7 @@ class Invariants(unittest.TestCase):
             self.assertIn(f, starter_template.TEMPLATE_FILES_HELD)
             self.assertTrue((ROOT / "templates/starter" / f).is_file(), f)
         self.assertEqual(set(starter_template.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR), set(starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR) | set(starter_template.TEMPLATE_FILES_HELD))
-        src = inspect.getsource(BuildRun.setup)
+        src = inspect.getsource(BuildRun.prepare_checkout)
         self.assertLess(src.index("apply_template_files(labels)"), src.index('self.state.d["base_sha"]'))
         self.assertLess(src.index('self.state.d["base_sha"]'), src.index("stage_template_config(labels)"))
         self.assertNotIn('"push"', inspect.getsource(BuildRun.stage_template_config) + inspect.getsource(BuildRun.copy_template_files))
@@ -573,17 +580,30 @@ class Invariants(unittest.TestCase):
         self.assertTrue(any(c["expect"] for c in cases) and any(not c["expect"] for c in cases), msg="failing and passing cases exist")
 
 
-    def test_inv48_a_request_needing_a_secret_builds_nothing_until_its_names_exist(self):
+    def secrets_run(self, listed):
         run = object.__new__(BuildRun)
         run.app_repo, run.issue, run.factory_repo, run.factory_token = "o/app", "7", "o/f", "tok"
         run.state = mock.Mock(d={})
-        sent = []
-        listed = [{"name": "OTHER"}]
+        run.gh = lambda args, token=None, check=True: mock.Mock(returncode=0, stdout=json.dumps(listed) if args[:2] == ["secret", "list"] else "")
+        return run
 
-        def gh(args, token=None, check=True):
-            sent.append(args)
-            return mock.Mock(returncode=0, stdout=json.dumps(listed) if args[:2] == ["secret", "list"] else "")
-        run.gh = gh
+    def assert_declared_secrets_round_trip(self, need):
+        marker = secrets_marker.secrets_marker(need)
+        self.assertEqual(secrets_marker.declared_secrets({"comments": [{"body": "text\n\n" + marker}]}), need)
+        child = render_child.child_body("app", "task", 5, {"id": "CS-1"}, [], secrets=need)
+        self.assertEqual(secrets_marker.declared_secrets({"body": child, "comments": []}), need)
+        self.assertEqual(secrets_marker.declared_secrets({"body": "no marker", "comments": []}), [])
+
+    def assert_awaiting_secret_is_an_answer_not_a_failure(self, need):
+        self.assertIn("awaiting_secret", outcomes.ANSWERED)
+        self.assertNotIn("awaiting_secret", outcomes.OK, msg="INV-24: an OK ending closes the Intake")
+        self.assertFalse(lesson_records.wants_fix_request({"outcome": "awaiting_secret"}, {}))
+        self.assertFalse(lesson_records.records_stuck_issue("awaiting_secret"))
+        self.assertNotIn("-----", triage.secrets_request(need, "o/app"))
+
+    def test_inv48_a_request_needing_a_secret_builds_nothing_until_its_names_exist(self):
+        listed = [{"name": "OTHER"}]
+        run = self.secrets_run(listed)
         need = [{"name": "WEATHER_API_KEY", "purpose": "forecast lookups"}]
         with self.assertRaises(endings.AwaitingSecret) as cm:
             run.require_secrets(need)
@@ -591,26 +611,16 @@ class Invariants(unittest.TestCase):
         self.assertEqual(run.state.d["secrets"], ["WEATHER_API_KEY"])
         listed.append({"name": "WEATHER_API_KEY"})
         run.require_secrets(need)
-        marker = secrets_marker.secrets_marker(need)
-        self.assertEqual(secrets_marker.declared_secrets({"comments": [{"body": "text\n\n" + marker}]}), need)
-        child = render_child.child_body("app", "task", 5, {"id": "CS-1"}, [], secrets=need)
-        self.assertEqual(secrets_marker.declared_secrets({"body": child, "comments": []}), need)
-        self.assertEqual(secrets_marker.declared_secrets({"body": "no marker", "comments": []}), [])
-        src = __import__("inspect").getsource(BuildRun.setup)
+        self.assert_declared_secrets_round_trip(need)
+        src = __import__("inspect").getsource(BuildRun.read_request)
         self.assertIn("secrets_marker.declared_secrets(issue)", src)
         self.assertLess(src.index("require_secrets(self.declared_secrets)"), src.index("self.spec = self.task"))
         listed.clear()
         with self.assertRaises(endings.AwaitingSecret):
             run.require_secrets(need)
-        self.assertIn("awaiting_secret", outcomes.ANSWERED)
-        self.assertNotIn("awaiting_secret", outcomes.OK, msg="INV-24: an OK ending closes the Intake")
-        self.assertFalse(lesson_records.wants_fix_request({"outcome": "awaiting_secret"}, {}))
-        self.assertFalse(lesson_records.records_stuck_issue("awaiting_secret"))
-        self.assertNotIn("-----", triage.secrets_request(need, "o/app"))
+        self.assert_awaiting_secret_is_an_answer_not_a_failure(need)
 
-    def test_inv49_a_commit_with_a_secret_value_or_an_undeclared_name_is_never_pushed(self):
-        run = object.__new__(BuildRun)
-        run.state = mock.Mock(d={"secrets": ["WEATHER_API_KEY"]})
+    def assert_secret_value_is_discarded(self, run):
         calls = []
 
         def git(*a, check=True, cwd=None):
@@ -623,10 +633,14 @@ class Invariants(unittest.TestCase):
         self.assertIn("API key", problem)
         self.assertNotIn("sk-a", problem)
         self.assertIn(("reset", "-q", "--hard", "base"), calls)
+
+    def test_inv49_a_commit_with_a_secret_value_or_an_undeclared_name_is_never_pushed(self):
+        run = object.__new__(BuildRun)
+        run.state = mock.Mock(d={"secrets": ["WEATHER_API_KEY"]})
+        self.assert_secret_value_is_discarded(run)
         self.assertIsNotNone(triage.secret_name_problem("FLY_API_TOKEN"))
         self.assertIsNotNone(triage.secret_name_problem("GITHUB_TOKEN"))
         self.assertIsNone(triage.secret_name_problem("WEATHER_API_KEY"))
-        run.git = lambda *a, check=True, cwd=None: mock.Mock(returncode=0, stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
         run.git = lambda *a, check=True, cwd=None: mock.Mock(
             returncode=0 if not (a[0] == "show" and a[1].startswith("base:")) else 1,
             stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
@@ -710,12 +724,15 @@ class Invariants(unittest.TestCase):
             self.assertTrue(read_child.planned_problem(*bad), bad)
         self.assertTrue(read_child.planned_problem({"parent": 7, "kind": "staging"}, {"number": 7, "state": "OPEN"}), msg="a staging child is never a Build Run")
 
-    def test_inv56_planning_is_its_own_process_that_files_a_child_and_can_always_be_retried(self):
+    def assert_plan_workflow_skips_children(self):
         wf = yaml.safe_load((ROOT / ".github/workflows/plan.yml").read_text())
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
         self.assertIn("update-app-intake", cond)
         self.assertIn("factory-plan", cond, msg="never a child")
         self.assertIn("plan-", wf["concurrency"]["group"])
+
+    def test_inv56_planning_is_its_own_process_that_files_a_child_and_can_always_be_retried(self):
+        self.assert_plan_workflow_skips_children()
         gh = FakeIssues()
         gh.add(7)
         comments = []
@@ -806,12 +823,58 @@ class Invariants(unittest.TestCase):
 
         self.assertGreaterEqual(PROFILES["limits"]["pipeline_retries"], 0)
         self.assertGreater(PROFILES["limits"]["pipeline_fix_attempts"], 0)
-        source = inspect.getsource(ship_code.ShipCode.pipeline)
+        source = inspect.getsource(ship_code)
         for bound in ("pipeline_retries", "pipeline_fix_attempts", "NOT_STARTED_CONCLUSIONS"):
             self.assertIn(bound, source)
 
 
 class Registry(unittest.TestCase):
+    def test_inv63_a_factory_change_outside_its_scope_or_limits_is_refused(self):
+        limits = {"factory_change_max_files": 2, "factory_change_max_added_lines": 10}
+        touched = {"status": "M", "added": 1, "deleted": 0}
+        for path in (".github/workflows/factory-checks.yml", "orchestrator/style_baseline.json", "pyproject.toml", "README.md"):
+            self.assertIsNotNone(vet_change.problem({path: touched}, limits), path)
+        self.assertIsNotNone(vet_change.problem({"orchestrator/bugs/a.py": touched, "orchestrator/try_fix/b.py": touched}, limits))
+        self.assertIsNotNone(vet_change.problem({"orchestrator/a_test.py": {"status": "D", "added": 0, "deleted": 4}}, limits))
+        self.assertIsNotNone(vet_change.problem({"agents/profiles.yml": touched}, limits, {"agents/profiles.yml": "+  model: x\n"}))
+        self.assertIsNone(vet_change.problem({"orchestrator/bugs/a.py": touched}, limits))
+        profiles = yaml.safe_load((ROOT / "agents/profiles.yml").read_text(encoding="utf-8"))["limits"]
+        self.assertTrue({"factory_change_max_files", "factory_change_max_added_lines", "max_open_factory_change_prs"} <= set(profiles))
+
+    def test_inv66_a_factory_change_is_a_pull_request_and_merges_itself_only_outside_the_control_path_after_every_gate(self):
+        self.assertNotIn("HEAD:main", inspect.getsource(open_pr))
+        self.assertNotIn("push", inspect.getsource(open_pr.open_pr).replace("push_branch", ""))
+        self.assertEqual(open_pr.branch_of(7), "factory-change/7")
+        self.assertEqual(tiers.merge_tier(["orchestrator/bugs/a.py"]), tiers.TIER_ONE)
+        self.assertNotEqual(tiers.merge_tier(["orchestrator/bugs/a.py", "orchestrator/try_fix/b.py"]), tiers.TIER_ONE)
+        self.assertEqual(open_pr.labels_for(tiers.TIER_TWO), [open_pr.PR_LABEL, open_pr.HOLD_LABEL])
+        job = yaml.safe_load((ROOT / ".github/workflows/factory-checks.yml").read_text())["jobs"]["factory-change-merge"]
+        self.assertEqual(set(job["needs"]), {"unit", "starter", "reviewer-smoke", "factory-change-gate"})
+        steps = [s.get("run", "") for s in job["steps"]]
+        self.assertLess(next(i for i, r in enumerate(steps) if "gate merge-check" in r), next(i for i, r in enumerate(steps) if "gh pr merge" in r))
+        self.assertIn("startsWith(github.head_ref, 'factory-change/')", job["if"])
+        self.assertIn("merge-check", inspect.getsource(gate.main))
+
+    def test_inv64_a_reproduction_has_to_fail_on_main_before_any_agent_runs(self):
+        for bad in ("-k", "--help", "../x.y", "x"):
+            self.assertFalse(prove_reproduction.valid_name(bad), bad)
+        self.assertEqual(prove_reproduction.classify_run(0, "OK"), "passes")
+        self.assertEqual(prove_reproduction.classify_run(1, "FAIL: test_it (m.C.test_it)"), "fails")
+        self.assertEqual(prove_reproduction.classify_run(1, "ModuleNotFoundError: no m\nERROR: m (unittest.loader._FailedTest)"), "missing")
+        problems = file_change.ticket_problems("## Observable failure\nx\n## Requirements\n1. Every child is filed under the Intake\n## Reproduction\nnot a test", 8)
+        self.assertEqual(len(problems), 1)
+
+    def test_inv65_an_open_paused_issue_stops_the_factory_change_process(self):
+        gh = FakeIssues()
+        with mock.patch.object(github, "run", gh):
+            pause.pause("o/f", "t", "a regression")
+            self.assertTrue(pause.is_paused("o/f", "t"))
+            filed = file_change.file_change("o/f", "t", {"fingerprint": "ab", "summary": "s", "failure": "f", "requirements": ["Every child is filed under the Intake"], "evidence": "e"}, 8)
+        self.assertEqual(filed["action"], "paused")
+        self.assertIsNotNone(pause.breaker_reason("review", [{"failed": True, "stage": "review"}], 0))
+        self.assertIsNotNone(pause.breaker_reason("review", [{"regression": True}], 0))
+        self.assertIsNotNone(pause.breaker_reason("review", [], 2))
+
     def test_the_table_and_the_tests_list_the_same_invariants(self):
         table = set(re.findall(r"^\| INV-(\d\d) \|", (ROOT / "docs/invariants.md").read_text(), re.M))
         tests = set(re.findall(r"def test_inv(\d\d)_", Path(__file__).read_text(encoding="utf-8")))

@@ -46,6 +46,19 @@ def candidate_profile(profile_text, overrides):
     return yaml.safe_dump(doc, sort_keys=False)
 
 
+def task_problems(tid, t, suite):
+    problems = [] if t.get("request") else [f"{tid}: no request"]
+    outcomes = (t.get("expected") or {}).get("outcomes")
+    if not isinstance(outcomes, list) or not outcomes:
+        problems.append(f"{tid}: expected.outcomes is required")
+    if not isinstance(t.get("oracle", {}).get("checks"), list):
+        problems.append(f"{tid}: oracle.checks must be a list (empty for a task that must be refused)")
+    if "{seed_flag}" in t.get("request", "") and suite.get("base_sha") and not suite.get("seed_flag"):
+        problems.append(f"{tid}: the request names {{seed_flag}} but the suite has none: run `freeze --seed-flag issue-<n>`")
+    ids = [c.get("id") for c in t.get("oracle", {}).get("checks", []) + t.get("setup", [])]
+    return problems + ([f"{tid}: duplicate oracle or setup check ids"] if len(ids) != len(set(ids)) else [])
+
+
 def validate_suite(suite):
     problems, seen = [], set()
     tasks = suite.get("tasks") if isinstance(suite, dict) else None
@@ -57,18 +70,7 @@ def validate_suite(suite):
             problems.append(f"task {tid!r} needs a unique id")
             continue
         seen.add(tid)
-        if not t.get("request"):
-            problems.append(f"{tid}: no request")
-        outcomes = (t.get("expected") or {}).get("outcomes")
-        if not isinstance(outcomes, list) or not outcomes:
-            problems.append(f"{tid}: expected.outcomes is required")
-        if not isinstance(t.get("oracle", {}).get("checks"), list):
-            problems.append(f"{tid}: oracle.checks must be a list (empty for a task that must be refused)")
-        if "{seed_flag}" in t.get("request", "") and suite.get("base_sha") and not suite.get("seed_flag"):
-            problems.append(f"{tid}: the request names {{seed_flag}} but the suite has none: run `freeze --seed-flag issue-<n>`")
-        ids = [c.get("id") for c in t.get("oracle", {}).get("checks", []) + t.get("setup", [])]
-        if len(ids) != len(set(ids)):
-            problems.append(f"{tid}: duplicate oracle or setup check ids")
+        problems += task_problems(tid, t, suite)
     return problems
 
 
@@ -169,28 +171,42 @@ def aggregate(scores):
             "failed": [s["id"] for s in scores if not s["passed"]], "by_task": {s["id"]: s for s in scores}}
 
 
-def compare(candidate, baseline, rules=None):
-    rules = {**DEFAULT_RULES, **(rules or {})}
+def lost_tagged_passes(candidate, baseline, rules):
     reasons = []
-    drop = baseline["passed"] - candidate["passed"]
-    if drop > rules["max_pass_drop"]:
-        reasons.append(f"passes {candidate['passed']} of {candidate['tasks']}, {drop} fewer than the baseline's {baseline['passed']} (allowed: {rules['max_pass_drop']})")
     for tid, base in baseline.get("by_task", {}).items():
         now = candidate.get("by_task", {}).get(tid)
         if base.get("passed") and now is not None and not now.get("passed") and set(base.get("tags", [])) & set(rules["must_pass_tags"]):
             reasons.append(f"{tid} ({', '.join(base['tags'])}) passed in the baseline and failed now: {now.get('outcome')}")
-    cost_ratio = candidate["cost_usd"] / baseline["cost_usd"] if baseline["cost_usd"] else 1.0
+    return reasons
+
+
+def ratio(candidate_value, baseline_value):
+    return candidate_value / baseline_value if baseline_value else 1.0
+
+
+def regression_reasons(candidate, baseline, rules):
+    reasons = []
+    drop = baseline["passed"] - candidate["passed"]
+    if drop > rules["max_pass_drop"]:
+        reasons.append(f"passes {candidate['passed']} of {candidate['tasks']}, {drop} fewer than the baseline's {baseline['passed']} (allowed: {rules['max_pass_drop']})")
+    reasons += lost_tagged_passes(candidate, baseline, rules)
+    cost_ratio = ratio(candidate["cost_usd"], baseline["cost_usd"])
     if cost_ratio > rules["max_cost_ratio"]:
         reasons.append(f"cost ${candidate['cost_usd']:.2f} is {cost_ratio:.2f}x the baseline's ${baseline['cost_usd']:.2f} (allowed: {rules['max_cost_ratio']}x)")
     rounds_delta = candidate["rounds_mean"] - baseline["rounds_mean"]
     if rounds_delta > rules["max_rounds_delta"]:
         reasons.append(f"rounds per run rose by {rounds_delta:.2f} (allowed: {rules['max_rounds_delta']})")
-    minutes_ratio = candidate["minutes"] / baseline["minutes"] if baseline["minutes"] else 1.0
-    accept = not reasons
+    return reasons
+
+
+def compare(candidate, baseline, rules=None):
+    rules = {**DEFAULT_RULES, **(rules or {})}
+    reasons = regression_reasons(candidate, baseline, rules)
+    cost_ratio, minutes_ratio = ratio(candidate["cost_usd"], baseline["cost_usd"]), ratio(candidate["minutes"], baseline["minutes"])
     better = cost_ratio <= rules["improvement_ratio"] or minutes_ratio <= rules["improvement_ratio"]
-    return {"accept": accept, "reasons": reasons, "improvement": bool(accept and better),
+    return {"accept": not reasons, "reasons": reasons, "improvement": bool(not reasons and better),
             "deltas": {"passed": candidate["passed"] - baseline["passed"], "cost_ratio": round(cost_ratio, 2), "minutes_ratio": round(minutes_ratio, 2),
-                       "rounds_delta": round(rounds_delta, 2)}}
+                       "rounds_delta": round(candidate["rounds_mean"] - baseline["rounds_mean"], 2)}}
 
 
 def render_report(label, candidate_models, agg, verdict=None):
@@ -340,17 +356,55 @@ def archive_bench_flags(app, keep=("bench-seed",)):
             http_client.request("POST", f"{config.GROWTHBOOK_API}/features/{fid}", os.environ["GROWTHBOOK_ADMIN_PAT"], {"archived": True})
 
 
+def load_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def print_plan(label, overrides, suite, tasks):
+    est = estimate(tasks)
+    print(f"Pass '{label}': {len(tasks)} task(s) on {suite['app']}: {', '.join(t['id'] for t in tasks)}")
+    print(f"Candidate: {', '.join(f'{r}={m}' for r, m in overrides.items()) or 'current profile (baseline pass)'}")
+    print(f"Estimate: ${est['cost_low']} to ${est['cost_high']}, {est['hours_low']} to {est['hours_high']} hours ({est['runs']} Build Runs, {est['refusals']} refusals).")
+
+
+def run_one_task(repo, app, branch, pass_id, suite, task):
+    reset_bench(repo.split("/")[0], app, suite["base_sha"])
+    issue = file_task_issue(repo, app, pass_id, task, suite.get("seed_flag", ""))
+    report = run_task(repo, app, branch, issue)
+    oracle = run_oracle(app, task) if report and report.get("outcome") in outcomes.OK else []
+    score = score_task(task, report, oracle)
+    print(f"{task['id']}: {'PASS' if score['passed'] else 'FAIL'} ({score['outcome']}, ${score['cost_usd']:.3f}, {score['rounds']} rounds)", flush=True)
+    return score
+
+
+def score_tasks_on_branch(repo, branch, pass_id, suite, tasks):
+    app = suite["app"]
+    try:
+        return [run_one_task(repo, app, branch, pass_id, suite, task) for task in tasks]
+    finally:
+        delete_branch(repo, branch)
+        archive_bench_flags(app, keep=(suite.get("seed_flag") or "bench-seed",))
+        reset_bench(repo.split("/")[0], app, suite["base_sha"])
+
+
+def write_result(label, overrides, pass_id, agg):
+    base = load_json(BASELINE) if BASELINE.exists() else None
+    verdict = compare(agg, base["aggregate"], load_json(RULES)) if base else None
+    out = {"label": label, "candidate": overrides, "pass_id": pass_id, "aggregate": agg, "verdict": verdict}
+    Path(f"benchmark-result-{label}.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
+    report_md = render_report(label, overrides, agg, verdict)
+    Path(f"benchmark-result-{label}.md").write_text(report_md, encoding="utf-8")
+    print(report_md)
+
+
 def run_pass(label, overrides, task_names, execute):
-    suite = json.load(open(SUITE, encoding="utf-8"))
+    suite = load_json(SUITE)
     problems = validate_suite(suite)
     if problems:
         print("suite problems:\n- " + "\n- ".join(problems))
         return 2
     tasks = select_tasks(suite, task_names)
-    est = estimate(tasks)
-    print(f"Pass '{label}': {len(tasks)} task(s) on {suite['app']}: {', '.join(t['id'] for t in tasks)}")
-    print(f"Candidate: {', '.join(f'{r}={m}' for r, m in overrides.items()) or 'current profile (baseline pass)'}")
-    print(f"Estimate: ${est['cost_low']} to ${est['cost_high']}, {est['hours_low']} to {est['hours_high']} hours ({est['runs']} Build Runs, {est['refusals']} refusals).")
+    print_plan(label, overrides, suite, tasks)
     if not execute:
         print("Dry run: nothing was started. Add --execute to spend it.")
         return 0
@@ -358,36 +412,38 @@ def run_pass(label, overrides, task_names, execute):
         print("suite.json has no base_sha: stage and seed the bench app, then run `benchmark.py freeze` (docs/benchmark-protocol.md).")
         return 2
     repo = os.environ["GITHUB_REPOSITORY"]
-    owner, app = repo.split("/")[0], suite["app"]
     pass_id = time.strftime("%m%d%H%M", time.gmtime())
     branch = f"bench/{re.sub(r'[^a-z0-9-]', '-', label.lower())}-{pass_id}"
     publish_branch(repo, branch, candidate_profile((ROOT / "agents" / "profiles.yml").read_text(), overrides))
-    scores = []
-    try:
-        for task in tasks:
-            reset_bench(owner, app, suite["base_sha"])
-            issue = file_task_issue(repo, app, pass_id, task, suite.get("seed_flag", ""))
-            report = run_task(repo, app, branch, issue)
-            oracle = run_oracle(app, task) if report and report.get("outcome") in outcomes.OK else []
-            score = score_task(task, report, oracle)
-            scores.append(score)
-            print(f"{task['id']}: {'PASS' if score['passed'] else 'FAIL'} ({score['outcome']}, ${score['cost_usd']:.3f}, {score['rounds']} rounds)", flush=True)
-    finally:
-        delete_branch(repo, branch)
-        archive_bench_flags(app, keep=(suite.get("seed_flag") or "bench-seed",))
-        reset_bench(owner, app, suite["base_sha"])
-    agg = aggregate(scores)
-    base = json.load(open(BASELINE, encoding="utf-8")) if BASELINE.exists() else None
-    verdict = compare(agg, base["aggregate"], json.load(open(RULES, encoding="utf-8"))) if base else None
-    out = {"label": label, "candidate": overrides, "pass_id": pass_id, "aggregate": agg, "verdict": verdict}
-    Path(f"benchmark-result-{label}.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
-    report_md = render_report(label, overrides, agg, verdict)
-    Path(f"benchmark-result-{label}.md").write_text(report_md, encoding="utf-8")
-    print(report_md)
+    write_result(label, overrides, pass_id, aggregate(score_tasks_on_branch(repo, branch, pass_id, suite, tasks)))
     return 0
 
 
-def main(argv):
+def freeze(seed_flag):
+    suite = load_json(SUITE)
+    repo = _env()["GITHUB_REPOSITORY"]
+    sha = gh(["api", f"repos/{repo.split('/')[0]}/{suite['app']}/commits/main", "--jq", ".sha"]).strip()
+    suite["base_sha"] = sha
+    if seed_flag:
+        suite["seed_flag"] = seed_flag
+    SUITE.write_text(json.dumps(suite, indent=2) + "\n")
+    print(f"froze {suite['app']} at {sha}")
+    return 0
+
+
+def compare_with_baseline(result):
+    verdict = compare(result["aggregate"], load_json(BASELINE)["aggregate"], load_json(RULES))
+    print(render_report(result["label"], result["candidate"], result["aggregate"], verdict))
+    return 0 if verdict["accept"] else 1
+
+
+def accept_as_baseline(result):
+    BASELINE.write_text(json.dumps({"label": result["label"], "candidate": result["candidate"], "aggregate": result["aggregate"]}, indent=2) + "\n")
+    print(f"{BASELINE} now holds '{result['label']}'. Commit it.")
+    return 0
+
+
+def parse_args(argv):
     ap = argparse.ArgumentParser(prog="benchmark.py")
     ap.add_argument("command", choices=["plan", "run", "compare", "accept", "freeze"])
     ap.add_argument("path", nargs="?")
@@ -396,30 +452,23 @@ def main(argv):
     ap.add_argument("--label", default="baseline")
     ap.add_argument("--execute", action="store_true")
     ap.add_argument("--seed-flag", default="", help="freeze: the flag the bench app was seeded with (for example issue-142)")
-    a = ap.parse_args(argv[1:])
+    return ap.parse_args(argv[1:])
+
+
+def dispatch(a):
+    overrides = parse_candidate(a.candidate)
+    if a.command in ("plan", "run"):
+        return run_pass(a.label, overrides, a.tasks, execute=(a.command == "run" and a.execute))
+    if a.command == "freeze":
+        return freeze(a.seed_flag)
+    result = load_json(a.path)
+    return compare_with_baseline(result) if a.command == "compare" else accept_as_baseline(result)
+
+
+def main(argv):
+    a = parse_args(argv)
     try:
-        overrides = parse_candidate(a.candidate)
-        if a.command in ("plan", "run"):
-            return run_pass(a.label, overrides, a.tasks, execute=(a.command == "run" and a.execute))
-        if a.command == "freeze":
-            suite = json.load(open(SUITE, encoding="utf-8"))
-            repo = _env()["GITHUB_REPOSITORY"]
-            sha = gh(["api", f"repos/{repo.split('/')[0]}/{suite['app']}/commits/main", "--jq", ".sha"]).strip()
-            suite["base_sha"] = sha
-            if a.seed_flag:
-                suite["seed_flag"] = a.seed_flag
-            SUITE.write_text(json.dumps(suite, indent=2) + "\n")
-            print(f"froze {suite['app']} at {sha}")
-            return 0
-        result = json.load(open(a.path, encoding="utf-8"))
-        if a.command == "compare":
-            base = json.load(open(BASELINE, encoding="utf-8"))
-            verdict = compare(result["aggregate"], base["aggregate"], json.load(open(RULES, encoding="utf-8")))
-            print(render_report(result["label"], result["candidate"], result["aggregate"], verdict))
-            return 0 if verdict["accept"] else 1
-        BASELINE.write_text(json.dumps({"label": result["label"], "candidate": result["candidate"], "aggregate": result["aggregate"]}, indent=2) + "\n")
-        print(f"{BASELINE} now holds '{result['label']}'. Commit it.")
-        return 0
+        return dispatch(a)
     except (ValueError, RuntimeError, KeyError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

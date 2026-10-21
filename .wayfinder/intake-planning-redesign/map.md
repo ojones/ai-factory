@@ -17,13 +17,13 @@ Planning runs as its own process (`plan.yml`) the moment a `new-app-intake` or `
 - Import rules (enforced by `boundary_test.py`): `shared` imports no domain; every domain may import `shared`; `planning`, `build_run`, `maintenance`, `bugs`, `flag_lifecycle` and `try_fix` may import `request`; `build_run` may import `flag_lifecycle`; `retrospective` may import `try_fix`; `try_fix` may import `planning`; `monitoring` imports only `request`; no cycles. A new edge is a deliberate edit to the test and `docs/orchestrator-map.md`.
 - Entry points: a workflow sets `PYTHONPATH=orchestrator` and runs `python -m <domain>.<command>`, with command files named for the command. Tests stay beside the code, named for the behaviour they check; cross-cutting tests (`invariants_test`, `style_test`, `flow_spec_test`, `boundary_test`) stay at the top of `orchestrator/`. No re-export shims or old paths are left behind: a move edits its workflow's command in the same commit.
 - Move first, then change: a move or split of existing code is its own commit with behaviour unchanged and the existing tests green; behaviour changes come after, in the domain's own ticket. `main` runs the live Factory.
-- Style: no docstrings in Python (STANDARDS-CODING); a domain's purpose, files and interfaces are written in `docs/orchestrator-map.md` and `docs/flow-spec.md`, not in code. Test files are `name_test.py`.
+- Style: no comments or docstrings in Python (CLAUDE.md); a domain's purpose, files and interfaces are written in ARCHITECTURE.md (Code layout) and `docs/flow-spec.md`, not in code. Test files are `name_test.py`.
 - Names: `new-app-intake` and `update-app-intake` (labels), "New App Intake" and "Update App Intake" (prose). The repo-description marker `Intake: <factory>#<n>` keeps its name.
 - `docs/flow-spec.md` is the only flow diagram. `docs/diagrams.md`, `docs/intake-cycle.md` and `docs/update-flow.md` were deleted (owner's instruction, 2026-10-19); draw a new diagram only when one is needed, and cite step IDs instead of redrawing the flow.
 - Step IDs (`STEP 4.9`) are a public contract once docs cite them. Never renumber; add or retire.
 - Unattended by default: planning, hand-off and fix-first are automatic and bounded; no review gates. Any temporary switch (ticket 13's `limits.planner_enabled`) is short-lived and retired by the ticket that proves it. See STANDARDS-FEATURE-FLAGS.md.
 - Tracker: local markdown. Tickets in `tickets/`; `blocked_by` lists ticket filenames; claimed = assignee set. One ticket per session.
-- Related: ARCHITECTURE.md, GLOSSARY.md, docs/orchestrator-map.md, docs/invariants.md, orchestrator/build_run.py, orchestrator/update_intake.py, orchestrator/planner.py, infra/app-staging/*, .github/workflows/*.
+- Related: ARCHITECTURE.md, GLOSSARY.md, docs/invariants.md, orchestrator/build_run.py, orchestrator/update_intake.py, orchestrator/planner.py, infra/app-staging/*, .github/workflows/*.
 
 ## Decisions so far
 

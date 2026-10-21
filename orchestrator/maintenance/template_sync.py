@@ -94,29 +94,33 @@ def baseline(owner, app, pat):
     return git("rev-list", "-n1", f"--before={created}", "HEAD").strip() if created else ""
 
 
+def sync_app(repo, owner, token, pat, app, target):
+    base = baseline(owner, app, pat)
+    if not base or base == target:
+        return
+    changes = parse_name_status(git("diff", "--name-status", "-M", base, target, "--", TEMPLATE))
+    applicable, protected, _ = split_changes(changes)
+    by_orchestrator = orchestrator_applied(changes)
+    titles = [i["title"] for i in find_intakes.intakes_with(repo, token, app, LABEL, "all")]
+    open_now = find_intakes.intakes_with(repo, token, app, LABEL, "open")
+    if not should_sync(applicable or by_orchestrator, target, app_stamp(owner, app, pat), titles, open_now, app):
+        return
+    paths = [p for _, p in applicable]
+    diff_text = git("diff", "-M", base, target, "--", *[TEMPLATE + p for p in paths]) if paths else ""
+    request = sync_request(app, target, base, applicable, protected, diff_text, by_orchestrator)
+    n = file_intake.file_update_app_intake(repo, token, pat, app, f"{app}: template sync [sync {target[:7]}]", request, LABEL,
+                                           "Filed and started by the Orchestrator to bring an app up to the Starter Template",
+                                           "Started automatically: the Starter Template changed after this app was seeded. The planner runs first.")
+    console.log(f"{app}: template sync filed as #{n} ({len(paths)} file(s), {len(protected)} protected)")
+
+
 def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     owner, token, pat = repo.split("/")[0], os.environ["FACTORY_GH_TOKEN"], os.environ["FACTORY_PAT"]
     target = git("rev-parse", "HEAD").strip()
     for app in app_state_record.managed_apps(repo, token):
         try:
-            base = baseline(owner, app, pat)
-            if not base or base == target:
-                continue
-            changes = parse_name_status(git("diff", "--name-status", "-M", base, target, "--", TEMPLATE))
-            applicable, protected, _ = split_changes(changes)
-            by_orchestrator = orchestrator_applied(changes)
-            titles = [i["title"] for i in find_intakes.intakes_with(repo, token, app, LABEL, "all")]
-            open_now = find_intakes.intakes_with(repo, token, app, LABEL, "open")
-            if not should_sync(applicable or by_orchestrator, target, app_stamp(owner, app, pat), titles, open_now, app):
-                continue
-            paths = [p for _, p in applicable]
-            diff_text = git("diff", "-M", base, target, "--", *[TEMPLATE + p for p in paths]) if paths else ""
-            n = file_intake.file_update_app_intake(repo, token, pat, app, f"{app}: template sync [sync {target[:7]}]",
-                               sync_request(app, target, base, applicable, protected, diff_text, by_orchestrator), LABEL,
-                               "Filed and started by the Orchestrator to bring an app up to the Starter Template",
-                               "Started automatically: the Starter Template changed after this app was seeded. The planner runs first.")
-            console.log(f"{app}: template sync filed as #{n} ({len(paths)} file(s), {len(protected)} protected)")
+            sync_app(repo, owner, token, pat, app, target)
         except Exception as e:  # noqa: BLE001 - one app's failure never stops the others
             console.log(f"{app}: template sync failed: {type(e).__name__}: {e}")
     return 0

@@ -63,81 +63,129 @@ def judge_run_events(events, result, cfg, key, repo, token, app, work, outcome):
     return verdicts
 
 
-def main():
-    work = Path(os.environ["BUILD_RUN_DIR"])
-    d = agent_output.load_json(work / "state.json")
-    if not d:
-        return 0
-    stuck = d.get("outcome") not in outcomes.OK
-    repo = os.environ["GITHUB_REPOSITORY"]
-    pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
-    if d.get("outcome") in outcomes.ANSWERED:
-        return 0
-    facts = run_facts.collect_facts(work, d)
-    if d.get("outcome") == "provider_blocked":
+class Sightings:
+    def __init__(self, repo, token, facts, promote_after):
+        self.repo, self.token, self.facts, self.promote_after = repo, token, facts, promote_after
+        self.seen_in = {}
+
+    def count(self, number):
         try:
-            log(f"provider alert: {provider_alert.file_provider_alert(repo, token, facts)}")
+            return tracker.note_sighting(self.repo, self.token, number, self.facts, self.promote_after)
+        except Exception as e:  # noqa: BLE001 - counting never fails the run
+            log(f"could not count the sighting on #{number}: {type(e).__name__}: {e}")
+            return self.promote_after
+
+    def earned(self, number, severe=False):
+        if number not in self.seen_in:
+            self.seen_in[number] = self.count(number)
+        return tracker.ready_for_fix(self.seen_in[number], self.promote_after, severe)
+
+
+class Retrospective:
+    def __init__(self, work, d):
+        self.work, self.d = work, d
+        self.repo = os.environ["GITHUB_REPOSITORY"]
+        self.pat, self.token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
+        self.run_id = os.environ.get("GITHUB_RUN_ID", "0")
+        self.stuck = d.get("outcome") not in outcomes.OK
+        self.artifacts = work / "artifacts"
+
+    def alert_provider(self):
+        try:
+            log(f"provider alert: {provider_alert.file_provider_alert(self.repo, self.token, self.facts)}")
         except Exception as e:  # noqa: BLE001 - the retrospective never fails the run
             log(f"could not file the provider alert: {type(e).__name__}: {e}")
         return 0
-    cfg_limits = config.load().get("limits", {})
-    lessons = lesson_records.lessons_from(facts)
-    events = collect_events.from_run(facts, run_facts.fingerprint(facts))
-    facts["events"] = events
-    facts["signals"] = [{"kind": x["kind"], "detail": x["detail"]} for x in lessons]
-    (work / "artifacts").mkdir(parents=True, exist_ok=True)
-    facts_path, result_path = work / "artifacts" / "retrospective-facts.json", work / "retrospective-result.json"
-    facts_path.write_text(json.dumps(facts, indent=2))
-    stuck_issue = lesson_records.record_issue(repo, token, facts) if lesson_records.records_stuck_issue(d.get("outcome")) else None
-    minors = minor_findings.record_minors(repo, token, facts)
-    promote_after = int(cfg_limits.get("promote_after_runs", 2))
-    seen_in = {}
 
-    def earned(number, severe=False):
-        if number not in seen_in:
-            try:
-                seen_in[number] = tracker.note_sighting(repo, token, number, facts, promote_after)
-            except Exception as e:  # noqa: BLE001 - counting never fails the run
-                log(f"could not count the sighting on #{number}: {type(e).__name__}: {e}")
-                seen_in[number] = promote_after
-        return tracker.ready_for_fix(seen_in[number], promote_after, severe)
+    def gather(self):
+        self.lessons = lesson_records.lessons_from(self.facts)
+        self.events = collect_events.from_run(self.facts, run_facts.fingerprint(self.facts))
+        self.facts["events"] = self.events
+        self.facts["signals"] = [{"kind": x["kind"], "detail": x["detail"]} for x in self.lessons]
+        self.artifacts.mkdir(parents=True, exist_ok=True)
+        self.facts_path = self.artifacts / "retrospective-facts.json"
+        self.facts_path.write_text(json.dumps(self.facts, indent=2))
 
-    new_minors = [n for n, proposed in minors if not proposed and earned(n)]
-    suggested, filed = improvement_issues.record_improvements(repo, token, facts)
-    new_improvements = [n for n, proposed in suggested if not proposed and earned(n)]
-    recorded = [(lesson_records.record_lesson(repo, token, x, facts), x["severe"]) for x in lessons]
-    new_lessons = [n for (n, status), severe in recorded
-                   if n and (status == "reopened" or (earned(n, severe) and (status == "new" or not tracker.already_proposed(repo, token, n))))]
-    targets = list(dict.fromkeys(([stuck_issue] if stuck_issue else []) + new_minors + new_improvements + new_lessons))
-    cfg, key = config.load(), os.environ.get("DEEPINFRA_API_KEY")
-    result = None
-    if targets and key and "retrospective" in cfg.get("roles", {}):
-        failed = {"child": int(d["issue_number"]), "outcome": d.get("outcome"), "has_bugs": bool(facts.get("bugs"))} if stuck else None
-        result = learning_pr.propose(config.FACTORY_DIR, cfg, repo, pat, token, key, facts_path, result_path, targets, os.environ.get("GITHUB_RUN_ID", "0"), failed)
-    cause = name_cause(facts, result)
-    verdicts = judge_run_events(events, result, cfg, key, repo, token, d["app"], work, d.get("outcome"))
-    (work / "artifacts" / "retrospective-cause.json").write_text(json.dumps(cause, indent=2))
-    filed_request, fixes = None, event_verdicts.fix_events(verdicts)
-    if fixes and bool(cfg.get("limits", {}).get("fix_requests", True)):
-        filed_events = file_failure.file_failures(repo, token, pat, fixes, facts, result, d.get("rollback"), cfg, key,
-                                                  lambda budget, cred: write_bug.record_spend(budget, cred, repo, token, os.environ.get("GITHUB_RUN_ID", "0")))
+    def fresh_minors(self):
+        minors = minor_findings.record_minors(self.repo, self.token, self.facts)
+        return [n for n, proposed in minors if not proposed and self.sightings.earned(n)]
+
+    def fresh_improvements(self):
+        suggested, self.filed = improvement_issues.record_improvements(self.repo, self.token, self.facts)
+        return [n for n, proposed in suggested if not proposed and self.sightings.earned(n)]
+
+    def lesson_is_new(self, number, status, severe):
+        if status == "reopened":
+            return True
+        return self.sightings.earned(number, severe) and (status == "new" or not tracker.already_proposed(self.repo, self.token, number))
+
+    def fresh_lessons(self):
+        recorded = [(lesson_records.record_lesson(self.repo, self.token, x, self.facts), x["severe"]) for x in self.lessons]
+        return [n for (n, status), severe in recorded if n and self.lesson_is_new(n, status, severe)]
+
+    def targets(self):
+        outcome = self.d.get("outcome")
+        stuck_issue = lesson_records.record_issue(self.repo, self.token, self.facts) if lesson_records.records_stuck_issue(outcome) else None
+        self.sightings = Sightings(self.repo, self.token, self.facts, int(self.cfg.get("limits", {}).get("promote_after_runs", 2)))
+        found = ([stuck_issue] if stuck_issue else []) + self.fresh_minors() + self.fresh_improvements() + self.fresh_lessons()
+        return list(dict.fromkeys(found))
+
+    def propose(self, targets):
+        if not (targets and self.key and "retrospective" in self.cfg.get("roles", {})):
+            return None
+        failed = {"child": int(self.d["issue_number"]), "outcome": self.d.get("outcome"), "has_bugs": bool(self.facts.get("bugs"))} if self.stuck else None
+        result_path = self.work / "retrospective-result.json"
+        return learning_pr.propose(config.FACTORY_DIR, self.cfg, self.repo, self.pat, self.token, self.key, self.facts_path, result_path, targets, self.run_id, failed)
+
+    def file_event_fixes(self, verdicts, result):
+        fixes = event_verdicts.fix_events(verdicts)
+        if not (fixes and bool(self.cfg.get("limits", {}).get("fix_requests", True))):
+            return None
+        spend = lambda budget, cred: write_bug.record_spend(budget, cred, self.repo, self.token, self.run_id)
+        filed_events = file_failure.file_failures(self.repo, self.token, self.pat, fixes, self.facts, result, self.d.get("rollback"), self.cfg, self.key, spend)
         for got in filed_events:
             log(f"event {got['key']} handled ({got['target']}: {got['action']}) {got['url']}")
-        filed_request = next((g for g in filed_events if g["severity"] == "failure"), None)
-    bugs = []
-    if facts.get("bugs") and stuck:
+        return next((g for g in filed_events if g["severity"] == "failure"), None)
+
+    def note_bugs(self, filed_request):
+        if not (self.facts.get("bugs") and self.stuck):
+            return []
         try:
             carried = bool(filed_request and filed_request["action"] == "bug_intake")
-            if story_report.note_bugs_on_story(repo, token, d["issue_number"], facts, carried):
-                bugs = [{"kind": x["kind"], "check": x["check"], "url": ""} for x in facts["bugs"][:story_report.MAX_BUGS]]
+            if story_report.note_bugs_on_story(self.repo, self.token, self.d["issue_number"], self.facts, carried):
+                return [{"kind": x["kind"], "check": x["check"], "url": ""} for x in self.facts["bugs"][:story_report.MAX_BUGS]]
         except Exception as e:  # noqa: BLE001
             log(f"could not note the bugs on the story: {type(e).__name__}: {e}")
-    try:
-        story_report.post_retrospective(repo, token, d["issue_number"], os.environ.get("GITHUB_RUN_ID", "0"),
-                           story_report.render_retrospective(facts, filed, lessons, result, bugs, cause, verdicts))
-    except Exception as e:  # noqa: BLE001
-        log(f"could not post the retrospective on the issue: {type(e).__name__}: {e}")
-    return 0
+        return []
+
+    def post(self, result, cause, verdicts, bugs):
+        try:
+            body = story_report.render_retrospective(self.facts, self.filed, self.lessons, result, bugs, cause, verdicts)
+            story_report.post_retrospective(self.repo, self.token, self.d["issue_number"], self.run_id, body)
+        except Exception as e:  # noqa: BLE001
+            log(f"could not post the retrospective on the issue: {type(e).__name__}: {e}")
+
+    def run(self):
+        if self.d.get("outcome") in outcomes.ANSWERED:
+            return 0
+        self.facts = run_facts.collect_facts(self.work, self.d)
+        if self.d.get("outcome") == "provider_blocked":
+            return self.alert_provider()
+        self.cfg, self.key = config.load(), os.environ.get("DEEPINFRA_API_KEY")
+        self.gather()
+        result = self.propose(self.targets())
+        cause = name_cause(self.facts, result)
+        verdicts = judge_run_events(self.events, result, self.cfg, self.key, self.repo, self.token, self.d["app"], self.work, self.d.get("outcome"))
+        (self.artifacts / "retrospective-cause.json").write_text(json.dumps(cause, indent=2))
+        bugs = self.note_bugs(self.file_event_fixes(verdicts, result))
+        self.post(result, cause, verdicts, bugs)
+        return 0
+
+
+def main():
+    work = Path(os.environ["BUILD_RUN_DIR"])
+    d = agent_output.load_json(work / "state.json")
+    return Retrospective(work, d).run() if d else 0
 
 
 if __name__ == "__main__":

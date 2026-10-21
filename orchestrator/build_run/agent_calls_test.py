@@ -71,12 +71,10 @@ class JsonOutput(unittest.TestCase):
         self.assertAlmostEqual(failed[0]["cost_usd"], 0.2)
         self.assertIn("2 attempt(s)", failed[0]["verdict"])
 
-    def test_an_agent_that_spent_its_whole_credential_is_not_given_a_second_attempt(self):
+    def run_that_always_hits_the_spending_limit(self, labels):
         run = object.__new__(BuildRun)
-        path = self.write(None)
         run.art = Path(__import__("tempfile").mkdtemp())
         run.state = track_progress.State(run.art / "state.json", "demo", "1", "url")
-        labels = []
 
         def invoke(role, label, values, extra_env, cwd, home, note=None):
             labels.append(label)
@@ -85,6 +83,11 @@ class JsonOutput(unittest.TestCase):
             return 0, 0.55, None
 
         run.invoke, run.restore_tree = invoke, lambda cwd=None: None
+        return run
+
+    def test_an_agent_that_spent_its_whole_credential_is_not_given_a_second_attempt(self):
+        path, labels = self.write(None), []
+        run = self.run_that_always_hits_the_spending_limit(labels)
         with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.agent_json("tester", "t1", {}, path)
         self.assertEqual(labels, ["t1"])

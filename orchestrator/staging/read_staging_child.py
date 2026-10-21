@@ -11,7 +11,7 @@ class NotStageable(Exception):
     pass
 
 
-def check_child(child, parent, parent_issue, in_flight, build_runs_running, max_apps, limits):
+def require_staging_marker(child, parent):
     marker = child_tickets.read_marker(child["body"])
     if marker.get("kind") != "staging":
         raise NotStageable("this child is not a staging child (its plan marker does not say `kind: staging`), so there is no app to stage for it")
@@ -21,16 +21,29 @@ def check_child(child, parent, parent_issue, in_flight, build_runs_running, max_
         raise NotStageable(f"its plan marker names #{marker.get('parent')} but it is a sub-issue of #{parent['number']}")
     if parent["state"] != "OPEN":
         raise NotStageable(f"its Intake (#{parent['number']}) is closed; reopen it, or file a new request")
+
+
+def read_staged_request(child, parent_issue, limits):
     try:
         app = read_form.app_name(child["body"])
         description, cap = read_form.read_request(parent_issue["body"], limits["cost_cap_usd_default"], limits["cost_cap_usd_ceiling"])
     except ValueError as e:
         raise NotStageable(str(e))
+    return app, description, cap
+
+
+def require_capacity(in_flight, build_runs_running, max_apps):
     if in_flight:
         raise NotStageable("staging child(ren) " + ", ".join(f"#{n}" for n in in_flight) + f" are already being staged; the limit is {max_apps} "
                            "Managed App(s) through staging at a time (`max_simultaneous_build_runs` in agents/profiles.yml)")
     if build_runs_running >= max_apps:
         raise NotStageable(f"{build_runs_running} Build Run(s) are in flight; the limit is {max_apps} at a time (`max_simultaneous_build_runs` in agents/profiles.yml)")
+
+
+def check_child(child, parent, parent_issue, in_flight, build_runs_running, max_apps, limits):
+    require_staging_marker(child, parent)
+    app, description, cap = read_staged_request(child, parent_issue, limits)
+    require_capacity(in_flight, build_runs_running, max_apps)
     raw = read_form.form_section(parent_issue["body"], "Cost cap override (USD)").lstrip("$")
     return {"app": app, "parent": parent["number"], "description": description, "cost_cap": f"{cap:.2f}",
             "cap_source": "override" if raw and raw != read_form.NO_ANSWER else "default"}
@@ -45,27 +58,31 @@ def shell_lines(found):
                                                                    ("COST_CAP", found["cost_cap"]), ("CAP_SOURCE", found["cap_source"]))]
 
 
+def gh_json(args, token):
+    p = github.run(args, token)
+    if p.returncode != 0:
+        raise NotStageable(f"GitHub refused `gh {' '.join(args[:3])}`: {(p.stderr or '').strip()[:200]}")
+    return json.loads(p.stdout or "null")
+
+
+def build_runs_running(repo, token):
+    return sum(len(gh_json(["run", "list", "--repo", repo, "--workflow", "build-run.yml", "--status", status, "--json", "url"], token)) for status in ("queued", "in_progress"))
+
+
+def inspect_child(repo, number, token):
+    child = gh_json(["issue", "view", str(number), "--repo", repo, "--json", "number,body,labels"], token)
+    parent = child_tickets.parent_info(repo, number, token)
+    parent_issue = gh_json(["issue", "view", str(parent["number"]), "--repo", repo, "--json", "body"], token) if parent else {"body": ""}
+    limits = config.load()["limits"]
+    max_apps = int(limits.get("max_simultaneous_build_runs", 1) or 1)
+    started = gh_json(["issue", "list", "--repo", repo, "--state", "open", "--label", intake_labels.START, "--limit", "100", "--json", "number,body"], token)
+    return check_child(child, parent, parent_issue, staging_children_in_flight(started, number), build_runs_running(repo, token), max_apps, limits)
+
+
 def main():
     e = os.environ
-    repo, number, token = e["FACTORY_REPO"], int(e["ISSUE_NUMBER"]), e["GH_TOKEN"]
-
-    def gh_json(args):
-        p = github.run(args, token)
-        if p.returncode != 0:
-            raise NotStageable(f"GitHub refused `gh {' '.join(args[:3])}`: {(p.stderr or '').strip()[:200]}")
-        return json.loads(p.stdout or "null")
-
     try:
-        child = gh_json(["issue", "view", str(number), "--repo", repo, "--json", "number,body,labels"])
-        parent = child_tickets.parent_info(repo, number, token)
-        parent_issue = gh_json(["issue", "view", str(parent["number"]), "--repo", repo, "--json", "body"]) if parent else {"body": ""}
-        limits = config.load()["limits"]
-        max_apps = int(limits.get("max_simultaneous_build_runs", 1) or 1)
-        started = gh_json(["issue", "list", "--repo", repo, "--state", "open", "--label", intake_labels.START, "--limit", "100", "--json", "number,body"])
-        running = 0
-        for status in ("queued", "in_progress"):
-            running += len(gh_json(["run", "list", "--repo", repo, "--workflow", "build-run.yml", "--status", status, "--json", "url"]))
-        found = check_child(child, parent, parent_issue, staging_children_in_flight(started, number), running, max_apps, limits)
+        found = inspect_child(e["FACTORY_REPO"], int(e["ISSUE_NUMBER"]), e["GH_TOKEN"])
     except (NotStageable, child_tickets.ChildTicketError) as ex:
         print(str(ex), file=sys.stderr)
         return 3

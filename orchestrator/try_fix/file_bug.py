@@ -44,56 +44,107 @@ def failure_comment(verdict, doc, run_url):
             + (f"Run: {run_url}\n\n" if run_url else "") + f"Root cause: {doc['root_cause']}")
 
 
-def file_bug(repo, token, pat, verdict, doc, facts=None, max_attempts=2):
-    ev, target = verdict["event"], verdict["target"]
-    run_url = (facts or {}).get("run_url", "")
-    story = ev.get("story")
-    again = open_bug(repo, token, verdict["key"])
-    if again:
-        github.run(["issue", "comment", str(again["number"]), "--repo", repo, "--body", f"**Seen again** ({ev['source']}): {ev['summary']}\n{run_url}"], token)
-        return {"target": target, "action": "again", "number": again["number"], "url": again["url"]}
-    failed = _issue(repo, story, token) if story else None
-    marker = child_tickets.read_marker(failed["body"]) if failed else {}
-    if target != "managed_app":
-        got = factory_fix_request.file_bug_request(repo, token, verdict, doc, run_url, target)
-        if failed and marker and failed["state"] == "OPEN" and ev["severity"] == "failure":
-            needs_human.hold(repo, token, story, ("a fault in the Factory itself (" + str(verdict.get("cause")) + ") was found; the child starts again by itself when the fix is merged")
-                             if target == "factory" else "no cause was named, or it was infrastructure")
+def label_specs(app):
+    return ((BUG_LABEL, "d73a4a", "Something a Managed App does wrong"), (intake_labels.UPDATE_APP_INTAKE, "1d76db", "A change request for an existing Managed App"),
+            (child_tickets.WAIT, "fbca04", "Waiting for an earlier change set of the same plan"), (intake_labels.app_label(app), "1d76db", f"Issues about the Managed App {app}"))
+
+
+class BugFiling:
+    def __init__(self, repo, token, pat, verdict, doc, facts, max_attempts):
+        self.repo, self.token, self.pat, self.verdict, self.doc, self.max_attempts = repo, token, pat, verdict, doc, max_attempts
+        self.ev, self.target = verdict["event"], verdict["target"]
+        self.run_url = (facts or {}).get("run_url", "")
+        self.story = self.ev.get("story")
+
+    def result(self, action, number=None, url=""):
+        return {"target": self.target, "action": action, "number": number, "url": url}
+
+    def issue_url(self, number):
+        return f"https://github.com/{self.repo}/issues/{number}" if number else ""
+
+    def hold(self, reason):
+        needs_human.hold(self.repo, self.token, self.story, reason)
+
+    def note_once(self, kind, text):
+        comment_once(self.repo, self.token, self.story, f"<!-- {kind}:{self.verdict['key']} -->", text, self.failed)
+
+    def seen_again(self, again):
+        text = f"**Seen again** ({self.ev['source']}): {self.ev['summary']}\n{self.run_url}"
+        github.run(["issue", "comment", str(again["number"]), "--repo", self.repo, "--body", text], self.token)
+        return self.result("again", again["number"], again["url"])
+
+    def story_is_open_child(self):
+        return bool(self.failed and self.marker and self.failed["state"] == "OPEN")
+
+    def for_factory(self):
+        got = factory_fix_request.file_bug_request(self.repo, self.token, self.verdict, self.doc, self.run_url, self.target)
+        if self.story_is_open_child() and self.ev["severity"] == "failure":
+            self.hold(self.factory_hold_reason())
         return got
-    app = ev["app"]
-    parent = child_tickets.parent_info(repo, story, token) if marker else None
-    dark = bool(failed and marker and parent and failed["state"] == "OPEN" and ev.get("released") is not True)
-    for name, color, desc in ((BUG_LABEL, "d73a4a", "Something a Managed App does wrong"), (intake_labels.UPDATE_APP_INTAKE, "1d76db", "A change request for an existing Managed App"),
-                              (child_tickets.WAIT, "fbca04", "Waiting for an earlier change set of the same plan"), (intake_labels.app_label(app), "1d76db", f"Issues about the Managed App {app}")):
-        github.ensure_label(repo, name, pat, color, desc)
-    title, labels = render_bug.title(verdict, app), [BUG_LABEL, intake_labels.app_label(app)]
-    if story:
-        comment_once(repo, token, story, f"<!-- bug-comment:{verdict['key']} -->", failure_comment(verdict, doc, run_url), failed)
-    if not dark:
-        number = create(repo, pat, title, render_bug.intake_body(app, doc, verdict, run_url), labels + [intake_labels.UPDATE_APP_INTAKE])
-        if story and number:
-            comment_once(repo, token, story, f"<!-- bug-filed:{verdict['key']} -->",
-                         f"A bug ticket was filed for this: #{number}. The flag was already released, so it is planned as a new change.")
-        return {"target": target, "action": "bug_intake", "number": number, "url": f"https://github.com/{repo}/issues/{number}" if number else ""}
-    attempt = int(marker.get("fix_attempt") or 0) + 1
-    if attempt > max_attempts:
-        needs_human.hold(repo, token, story, f"this story has used its {max_attempts} fix attempt(s) (`fix_attempts_max`); a person decides")
-        return {"target": target, "action": "needs_human", "number": None, "url": ""}
-    fix = child_tickets.render_fix_for(story, parent["number"], attempt)
-    original = render_bug.original_instructions(read_form.form_section(failed["body"], "What should change?"))
-    number = create(repo, pat, title, render_bug.intake_body(app, doc, verdict, run_url, original=original, fix_marker=fix), labels)
-    if not number:
-        needs_human.hold(repo, token, story, "the bug ticket for it could not be filed")
-        return {"target": target, "action": "needs_human", "number": None, "url": ""}
-    try:
-        child_tickets.ChildTickets(repo, parent["number"], pat).block(story, number)
-    except child_tickets.ChildTicketError:
-        github.run(["issue", "close", str(number), "--repo", repo, "--comment", "Closed: the failed change set could not be made to wait for it, so no fix was filed."], pat)
-        needs_human.hold(repo, token, story, "the bug ticket for it could not be linked to it")
-        return {"target": target, "action": "needs_human", "number": None, "url": ""}
-    github.run(["issue", "edit", str(story), "--repo", repo, "--add-label", child_tickets.WAIT, "--remove-label", needs_human.LABEL], token)
-    github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", intake_labels.UPDATE_APP_INTAKE], pat)
-    comment_once(repo, token, story, f"<!-- bug-filed:{verdict['key']} -->",
-                 f"**Fix first.** This change set is not started again as it was. Bug #{number} was filed and will be planned into one change set; "
-                 "this one starts again after that closes.")
-    return {"target": target, "action": "bug_intake", "number": number, "url": f"https://github.com/{repo}/issues/{number}"}
+
+    def factory_hold_reason(self):
+        if self.target != "factory":
+            return "no cause was named, or it was infrastructure"
+        return f"a fault in the Factory itself ({self.verdict.get('cause')}) was found; the child starts again by itself when the fix is merged"
+
+    def file_released(self, app, title, labels):
+        number = create(self.repo, self.pat, title, render_bug.intake_body(app, self.doc, self.verdict, self.run_url), labels + [intake_labels.UPDATE_APP_INTAKE])
+        if self.story and number:
+            self.note_once("bug-filed", f"A bug ticket was filed for this: #{number}. The flag was already released, so it is planned as a new change.")
+        return self.result("bug_intake", number, self.issue_url(number))
+
+    def link_failed_child(self, number):
+        try:
+            child_tickets.ChildTickets(self.repo, self.parent["number"], self.pat).block(self.story, number)
+        except child_tickets.ChildTicketError:
+            github.run(["issue", "close", str(number), "--repo", self.repo, "--comment", "Closed: the failed change set could not be made to wait for it, so no fix was filed."], self.pat)
+            self.hold("the bug ticket for it could not be linked to it")
+            return False
+        return True
+
+    def file_fix_child(self, app, title, labels, attempt):
+        fix = child_tickets.render_fix_for(self.story, self.parent["number"], attempt)
+        original = render_bug.original_instructions(read_form.form_section(self.failed["body"], "What should change?"))
+        return create(self.repo, self.pat, title, render_bug.intake_body(app, self.doc, self.verdict, self.run_url, original=original, fix_marker=fix), labels)
+
+    def make_story_wait(self, number):
+        github.run(["issue", "edit", str(self.story), "--repo", self.repo, "--add-label", child_tickets.WAIT, "--remove-label", needs_human.LABEL], self.token)
+        github.run(["issue", "edit", str(number), "--repo", self.repo, "--add-label", intake_labels.UPDATE_APP_INTAKE], self.pat)
+
+    def file_fix_first(self, app, title, labels):
+        attempt = int(self.marker.get("fix_attempt") or 0) + 1
+        if attempt > self.max_attempts:
+            self.hold(f"this story has used its {self.max_attempts} fix attempt(s) (`fix_attempts_max`); a person decides")
+            return self.result("needs_human")
+        number = self.file_fix_child(app, title, labels, attempt)
+        if not number:
+            self.hold("the bug ticket for it could not be filed")
+            return self.result("needs_human")
+        if not self.link_failed_child(number):
+            return self.result("needs_human")
+        self.make_story_wait(number)
+        self.note_once("bug-filed", f"**Fix first.** This change set is not started again as it was. Bug #{number} was filed and will be planned into one change set; this one starts again after that closes.")
+        return self.result("bug_intake", number, self.issue_url(number))
+
+    def for_app(self):
+        app = self.ev["app"]
+        self.parent = child_tickets.parent_info(self.repo, self.story, self.token) if self.marker else None
+        dark = bool(self.story_is_open_child() and self.parent and self.ev.get("released") is not True)
+        for name, color, desc in label_specs(app):
+            github.ensure_label(self.repo, name, self.pat, color, desc)
+        title, labels = render_bug.title(self.verdict, app), [BUG_LABEL, intake_labels.app_label(app)]
+        if self.story:
+            self.note_once("bug-comment", failure_comment(self.verdict, self.doc, self.run_url))
+        return self.file_fix_first(app, title, labels) if dark else self.file_released(app, title, labels)
+
+    def file(self):
+        again = open_bug(self.repo, self.token, self.verdict["key"])
+        if again:
+            return self.seen_again(again)
+        self.failed = _issue(self.repo, self.story, self.token) if self.story else None
+        self.marker = child_tickets.read_marker(self.failed["body"]) if self.failed else {}
+        return self.for_factory() if self.target != "managed_app" else self.for_app()
+
+
+def file_bug(repo, token, pat, verdict, doc, facts=None, max_attempts=2):
+    return BugFiling(repo, token, pat, verdict, doc, facts, max_attempts).file()

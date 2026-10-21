@@ -74,40 +74,53 @@ class ShipCode:
             (ctx / fname).write_text(text[-15000:])
         return ctx
 
+    def failed_stage(self, sha):
+        for name, wf in PIPELINE:
+            run = self.wait_run(wf, sha)
+            if run["conclusion"] != "success":
+                return name, run
+        return ("Health check", None) if not self.healthy() else None
+
+    def refuse_unstarted(self, failed):
+        name, run = failed
+        if run and run["conclusion"] in NOT_STARTED_CONCLUSIONS:
+            raise run_stops.NeedsHuman("pipeline", f"{name} did not start: GitHub ended the run as {run['conclusion']!r} before any job ran "
+                                       f"({run['url']}). Approve or fix it in the app's Actions tab, then add `proceed-with-change` again.")
+
+    def diagnose(self, failed, sha, n):
+        name, run = failed
+        path = self.work / f"diagnosis-{n}.json"
+        url = run["url"] if run else f"https://github.com/{self.app_repo}/actions"
+        values = {"head_sha": sha, "failure_run_url": url, "context_dir": self.failure_context(failed, sha, n), "diagnosis_path": path}
+        _, cost, usage = self.agent_json("pipeline", f"p{n}", values, path, check=lambda d: d.get("category") in ("code", "workflow", "infra", "flaky"))
+        diag = agent_output.load_json(path)
+        self.state.stage(f"{name} failed", "pipeline", n, cost, diag["category"], usage)
+        return diag
+
+    def rerun_failed_jobs(self, failed):
+        if failed[1]:
+            self.gh(["run", "rerun", str(failed[1]["databaseId"]), "--repo", self.app_repo, "--failed"], check=False)
+        time.sleep(20)
+
+    def fix_or_stop(self, failed, diag):
+        cat = diag["category"]
+        if cat == "code" and diag.get("fix_request") and getattr(self, "pipeline_fixes", 0) < self.lim["pipeline_fix_attempts"]:
+            self.pipeline_fixes = getattr(self, "pipeline_fixes", 0) + 1
+            raise endings.PipelineFix(self.coder(f"fix{self.pipeline_fixes}", diag["fix_request"], str(self.work / "findings-none.json")))
+        raise run_stops.NeedsHuman("pipeline", f"{failed[0]} failed ({cat}): {diag.get('summary', '')[:500]}")
+
     def pipeline(self, sha):
         retries, n = self.lim["pipeline_retries"], 0
         while True:
-            failed = None
-            for name, wf in PIPELINE:
-                run = self.wait_run(wf, sha)
-                if run["conclusion"] != "success":
-                    failed = (name, run)
-                    break
-            if failed is None and not self.healthy():
-                failed = ("Health check", None)
+            failed = self.failed_stage(sha)
             if failed is None:
                 self.state.stage("CI / Build / Deploy", "-", "-", 0, f"green, deployed {sha[:8]}")
                 return sha
-            if failed[1] and failed[1]["conclusion"] in NOT_STARTED_CONCLUSIONS:
-                raise run_stops.NeedsHuman("pipeline", f"{failed[0]} did not start: GitHub ended the run as {failed[1]['conclusion']!r} before any job ran "
-                                             f"({failed[1]['url']}). Approve or fix it in the app's Actions tab, then add `proceed-with-change` again.")
+            self.refuse_unstarted(failed)
             n += 1
-            ctx = self.failure_context(failed, sha, n)
-            url = failed[1]["url"] if failed[1] else f"https://github.com/{self.app_repo}/actions"
-            diag, cost, usage = self.agent_json(
-                "pipeline", f"p{n}", {"head_sha": sha, "failure_run_url": url, "context_dir": ctx,
-                                      "diagnosis_path": self.work / f"diagnosis-{n}.json"},
-                self.work / f"diagnosis-{n}.json", check=lambda d: d.get("category") in ("code", "workflow", "infra", "flaky"))
-            diag = agent_output.load_json(self.work / f"diagnosis-{n}.json")
-            self.state.stage(f"{failed[0]} failed", "pipeline", n, cost, diag["category"], usage)
-            cat = diag["category"]
-            if cat in ("flaky", "infra") and diag.get("retry_recommended") and retries > 0:
+            diag = self.diagnose(failed, sha, n)
+            if diag["category"] in ("flaky", "infra") and diag.get("retry_recommended") and retries > 0:
                 retries -= 1
-                if failed[1]:
-                    self.gh(["run", "rerun", str(failed[1]["databaseId"]), "--repo", self.app_repo, "--failed"], check=False)
-                time.sleep(20)
-                continue
-            if cat == "code" and diag.get("fix_request") and getattr(self, "pipeline_fixes", 0) < self.lim["pipeline_fix_attempts"]:
-                self.pipeline_fixes = getattr(self, "pipeline_fixes", 0) + 1
-                raise endings.PipelineFix(self.coder(f"fix{self.pipeline_fixes}", diag["fix_request"], str(self.work / "findings-none.json")))
-            raise run_stops.NeedsHuman("pipeline", f"{failed[0]} failed ({cat}): {diag.get('summary', '')[:500]}")
+                self.rerun_failed_jobs(failed)
+            else:
+                self.fix_or_stop(failed, diag)

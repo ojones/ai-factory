@@ -49,39 +49,49 @@ def wire_secrets(workflow_text, names):
 
 
 class PrepareRun:
-    def setup(self):
-        out = self.gh(["issue", "view", self.issue, "--repo", self.factory_repo, "--json", "title,body,labels,comments"],
-                      token=self.factory_token).stdout
-        issue = json.loads(out)
+    def read_issue(self):
+        out = self.gh(["issue", "view", self.issue, "--repo", self.factory_repo, "--json", "title,body,labels,comments"], token=self.factory_token).stdout
+        return json.loads(out)
+
+    def read_plan_meta(self, issue):
         self.plan_meta = read_child.identify_intake(issue, self.app, self.issue)
         self.locate_plan()
         self.fix_for = self.plan_meta.get("fix_for")
         if self.fix_for:
             self.state.d["fix_for"] = self.fix_for
-        self.task, self.cap = read_child.parse_intake(issue["body"] or "", self.lim["cost_cap_usd_default"],
-                                           self.lim["cost_cap_usd_ceiling"])
-        secrets = triage.find_secrets(issue["body"] or "")
+
+    def read_request(self, issue):
+        body = issue["body"] or ""
+        self.task, self.cap = read_child.parse_intake(body, self.lim["cost_cap_usd_default"], self.lim["cost_cap_usd_ceiling"])
+        secrets = triage.find_secrets(body)
         if secrets:
             raise endings.Refused(triage.secret_refusal(secrets))
         self.declared_secrets = secrets_marker.declared_secrets(issue)
         if self.declared_secrets:
             self.require_secrets(self.declared_secrets)
-            if self.plan_meta:
-                self.task += secrets_check.secrets_note(self.declared_secrets)
+            self.task += secrets_check.secrets_note(self.declared_secrets) if self.plan_meta else ""
         self.spec = self.task
         self.cap_override = self.requested_cap_override(issue)
         self.issue_title = issue.get("title", "")
+
+    def record_limits(self):
         self.state.d["cap_usd"] = self.cap
         self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
         self.state.save()
+
+    def check_before_spending(self):
         self.check_daily_cap()
         self.prepare_agent_user()
         self.check_models()
         self.wait_for_capacity()
+
+    def start_metering(self):
         self.meter = spend_budget.Budget(os.environ["DEEPINFRA_API_KEY"], self.cap, self.lim["jwt_ttl_seconds"])
         self.make_runner()
         self.preview = preview_token.for_app(os.environ["PREVIEW_MASTER_SECRET"], self.app)
         print(f"::add-mask::{self.preview}", flush=True)
+
+    def prepare_checkout(self, issue):
         self.clone_without_storing_credential()
         self.install_dependencies()
         self.git("config", "user.name", "ai-factory-coder")
@@ -90,6 +100,15 @@ class PrepareRun:
         self.apply_template_files(labels)
         self.state.d["base_sha"] = self.head()
         self.stage_template_config(labels)
+
+    def setup(self):
+        issue = self.read_issue()
+        self.read_plan_meta(issue)
+        self.read_request(issue)
+        self.record_limits()
+        self.check_before_spending()
+        self.start_metering()
+        self.prepare_checkout(issue)
         self.state.d["build_kind"] = self.build_kind
         self.retiring = self.choose_flags_to_retire()
         self.state.save()
@@ -188,30 +207,30 @@ class PrepareRun:
             self.flag_issues = issues
         return picked
 
+    def swap_unserved_model(self, role, profile, status):
+        model = profile["model"]
+        if status(model) != "missing":
+            return None
+        fallback = profile.get("fallback_model")
+        if not fallback or status(fallback) == "missing":
+            reason = f"its fallback `{fallback}` is not either" if fallback else "the role has no `fallback_model`"
+            raise run_stops.NeedsHuman("other", f"the {role} model `{model}` is no longer served by the provider and {reason}: choose a model in agents/profiles.yml")
+        profile["model"] = fallback
+        log(f"{role}: `{model}` is not served by the provider; using its fallback `{fallback}` for this run")
+        return {"from": model, "to": fallback}
+
     def check_models(self):
         base, key = self.cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"]
-        seen, swapped = {}, {}
+        seen = {}
 
         def status(model):
             if model not in seen:
                 seen[model] = provider.model_status(base, key, model)
             return seen[model]
 
-        for role in ["coder", "tester", "reviewer"]:
-            profile = self.cfg["roles"].get(role)
-            if not profile:
-                continue
-            model = profile["model"]
-            if status(model) != "missing":
-                continue
-            fallback = profile.get("fallback_model")
-            if not fallback or status(fallback) == "missing":
-                raise run_stops.NeedsHuman("other", f"the {role} model `{model}` is no longer served by the provider and "
-                                          + (f"its fallback `{fallback}` is not either" if fallback else "the role has no `fallback_model`")
-                                          + ": choose a model in agents/profiles.yml")
-            profile["model"] = fallback
-            swapped[role] = {"from": model, "to": fallback}
-            log(f"{role}: `{model}` is not served by the provider; using its fallback `{fallback}` for this run")
+        roles = [r for r in ("coder", "tester", "reviewer") if self.cfg["roles"].get(r)]
+        swaps = {role: self.swap_unserved_model(role, self.cfg["roles"][role], status) for role in roles}
+        swapped = {role: swap for role, swap in swaps.items() if swap}
         if swapped:
             self.state.d["fallbacks"] = swapped
             self.state.save()
@@ -288,6 +307,18 @@ class PrepareRun:
             log(f"{len(others)} other Build Run(s) in flight (cap {cap}); waiting")
             time.sleep(60)
 
+    def record_flag_in_manifest(self, slug):
+        path = self.app_dir / "flags.json"
+        before = path.read_text() if path.is_file() else ""
+        description = getattr(self, "issue_title", "") or self.task.splitlines()[0]
+        after = flag_slug.add_to_manifest(before, slug, f"{self.factory_repo}#{self.issue}", description)
+        if after == before:
+            return
+        path.write_text(after)
+        self.git("add", "--", "flags.json")
+        self.git("-c", "user.name=ai-factory-orchestrator", "-c", "user.email=orchestrator@ai-factory.local", "commit", "-q", "-m", f"chore: record the flag {slug} for #{self.issue}")
+        self.share_with_agent(self.app_dir)
+
     def name_the_flag(self):
         if flag_slug.SLOT not in (self.task or ""):
             return
@@ -301,12 +332,4 @@ class PrepareRun:
         if flag_slug.ensure_feature(self.gb, self.app, slug, getattr(self, "issue_url", ""), getattr(self, "issue_title", ""), self.issue):
             self.state.d["created_flag"] = slug
         self.state.save()
-        path = self.app_dir / "flags.json"
-        before = path.read_text() if path.is_file() else ""
-        after = flag_slug.add_to_manifest(before, slug, f"{self.factory_repo}#{self.issue}", getattr(self, "issue_title", "") or self.task.splitlines()[0])
-        if after != before:
-            path.write_text(after)
-            self.git("add", "--", "flags.json")
-            self.git("-c", "user.name=ai-factory-orchestrator", "-c", "user.email=orchestrator@ai-factory.local", "commit", "-q", "-m",
-                     f"chore: record the flag {slug} for #{self.issue}")
-            self.share_with_agent(self.app_dir)
+        self.record_flag_in_manifest(slug)

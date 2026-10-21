@@ -13,7 +13,7 @@ from shared.shell import sh
 CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
 
 
-ALLOWED_PREFIXES = ("agents/", "templates/starter/", "orchestrator/", "STANDARDS", "ARCHITECTURE.md", "GLOSSARY.md")
+ALLOWED_PREFIXES = ("agents/", "templates/starter/", "orchestrator/", "ARCHITECTURE.md", "GLOSSARY.md")
 
 
 DENIED_PREFIXES = (".github/", "templates/starter/.github/", "templates/starter/fly/", "templates/starter/fly.toml")
@@ -126,39 +126,54 @@ def run_tests(factory, root, user):
     return rc == 0
 
 
+def copy_workspace(root, factory, facts_path):
+    work, io, home = root / "work", root / "io", root / "home"
+    io.mkdir()
+    home.mkdir()
+    shutil.copytree(factory, work, ignore=shutil.ignore_patterns(".git", "node_modules"), symlinks=True)
+    facts_copy = io / "facts.json"
+    shutil.copyfile(facts_path, facts_copy)
+    return work, home, facts_copy, io / "result.json"
+
+
+def retrospective_prompt(cfg, facts_copy, result_copy):
+    values = {"app_name": "-", "build_kind": "-", "facts_path": facts_copy, "result_path": result_copy, "categories": ", ".join(CATEGORIES)}
+    return prompts.render(prompts.load_prompt(cfg["roles"]["retrospective"]["prompt"]), values)
+
+
+def retrospective_env(cfg, key, home):
+    env = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR", "CI") if k in os.environ}
+    env.update({"HOME": str(home), "LLM_MODEL": "openai/" + cfg["roles"]["retrospective"]["model"],
+                "LLM_BASE_URL": cfg["provider"]["base_url"], "LLM_API_KEY": key, "RUNTIME": "process"})
+    return env
+
+
+def carry_over_changes(factory, work):
+    changes, links = tree_changes(factory, work)
+    if links:
+        log("retrospective Agent's symlinks ignored: " + ", ".join(links))
+    applied = apply_changes(factory, work, changes)
+    log(f"retrospective Agent changed {len(changes)} file(s); {len(applied)} in allowed paths carried over")
+
+
 def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
     user = agent_user()
-    if user:
-        problems = agent_process.run_isolation_probes(user)
-        if problems:
-            log("retrospective Agent not run, isolation is not effective: " + "; ".join(problems))
-            return False
+    problems = agent_process.run_isolation_probes(user) if user else []
+    if problems:
+        log("retrospective Agent not run, isolation is not effective: " + "; ".join(problems))
+        return False
     root = scratch_root()
     try:
-        work, io, home = root / "work", root / "io", root / "home"
-        io.mkdir()
-        home.mkdir()
-        shutil.copytree(factory, work, ignore=shutil.ignore_patterns(".git", "node_modules"), symlinks=True)
-        facts_copy, result_copy = io / "facts.json", io / "result.json"
-        shutil.copyfile(facts_path, facts_copy)
+        work, home, facts_copy, result_copy = copy_workspace(root, factory, facts_path)
         share_with(root, user)
-        prompt = prompts.render(prompts.load_prompt(cfg["roles"]["retrospective"]["prompt"]), {
-            "app_name": "-", "build_kind": "-", "facts_path": facts_copy, "result_path": result_copy,
-            "categories": ", ".join(CATEGORIES)})
-        env = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR", "CI") if k in os.environ}
-        env.update({"HOME": str(home), "LLM_MODEL": "openai/" + cfg["roles"]["retrospective"]["model"],
-                    "LLM_BASE_URL": cfg["provider"]["base_url"], "LLM_API_KEY": key, "RUNTIME": "process"})
-        rc = agent_process.run_watched(["openhands", "--headless", "--override-with-envs", "-t", prompt], work, env, root / "openhands.out",
-                           timeout_min * 60, 0, user=user, pidfile=root / "pgid-agent.txt")
+        prompt = retrospective_prompt(cfg, facts_copy, result_copy)
+        rc = agent_process.run_watched(["openhands", "--headless", "--override-with-envs", "-t", prompt], work, retrospective_env(cfg, key, home),
+                                       root / "openhands.out", timeout_min * 60, 0, user=user, pidfile=root / "pgid-agent.txt")
         if rc == "timeout":
             log("retrospective agent timed out")
         if result_copy.is_file():
             shutil.copyfile(result_copy, result_path)
-        changes, links = tree_changes(factory, work)
-        if links:
-            log("retrospective Agent's symlinks ignored: " + ", ".join(links))
-        applied = apply_changes(factory, work, changes)
-        log(f"retrospective Agent changed {len(changes)} file(s); {len(applied)} in allowed paths carried over")
+        carry_over_changes(factory, work)
         return True
     finally:
         shutil.rmtree(root, ignore_errors=True)

@@ -10,11 +10,11 @@ The Orchestrator can run overnight across many Managed Apps without a human watc
 ## Notes
 
 - Execution override: tickets may carry out the adopted change (edit docs, prompts, profiles, workflows, orchestrator code with tests) as part of resolving, not only decide.
-- Origin: three advisory docs built on OpenHands' published posts (copies in `sources/`), then a pre-mortem and gap review. The full reasoning, pillars and phasing are in [source-plan.md](source-plan.md); read it before picking a ticket.
-- The advice is advisory. Where it conflicts with ARCHITECTURE.md or the STANDARDS, the repo wins unless a ticket decides otherwise and says so.
+- Origin: three advisory docs built on OpenHands' published posts, then a pre-mortem and gap review. The docs and the original plan were removed once their conclusions lived in the tickets; they are in git tag `archive/pre-purge-2026-10-21`.
+- The advice is advisory. Where it conflicts with ARCHITECTURE.md, the repo wins unless a ticket decides otherwise and says so.
 - The change-set gate (a default-off flag per update) is the core of the test-in-production strategy. Judge every ticket by whether it keeps that gate trustworthy.
 - Tracker: local markdown. Tickets in `tickets/`; `blocked_by` lists ticket filenames; claimed = assignee set. One ticket per session.
-- Related: ARCHITECTURE.md, STANDARDS*.md, agents/profiles.yml, orchestrator/build_run.py, orchestrator/postmortem.py, .github/workflows/*, infra/app-staging/*.
+- Related: ARCHITECTURE.md, agents/profiles.yml, orchestrator/build_run.py, orchestrator/postmortem.py, .github/workflows/*, infra/app-staging/*.
 
 ## Decisions so far
 

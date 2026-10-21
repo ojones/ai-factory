@@ -72,6 +72,21 @@ def enable_security_updates(owner, app, pat):
             console.log(f"{app}: could not enable {endpoint}: {(p.stderr or p.stdout).strip()[:160]}")
 
 
+def maintain_app(repo, owner, token, pat, app):
+    enable_security_updates(owner, app, pat)
+    applicable, reported = split_prs(dependabot_prs(owner, app, pat))
+    key = update_key(applicable) if applicable else ""
+    titles = [i["title"] for i in find_intakes.intakes_with(repo, token, app, LABEL, "all")]
+    open_now = find_intakes.intakes_with(repo, token, app, LABEL, "open")
+    if not should_file(applicable, key, titles, open_now):
+        console.log(f"{app}: {len(applicable)} applicable update(s); nothing to file")
+        return
+    n = file_intake.file_update_app_intake(repo, token, pat, app, f"{app}: dependency updates [maint {key}]", maintenance_request(app, applicable, reported), LABEL,
+                                           "Filed and started by the Orchestrator for dependency and base-image updates",
+                                           "Started automatically from Dependabot's pull requests. The planner runs first.")
+    console.log(f"{app}: maintenance filed as #{n} ({len(applicable)} update(s))")
+
+
 def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     owner, token, pat = repo.split("/")[0], os.environ["FACTORY_GH_TOKEN"], os.environ["FACTORY_PAT"]
@@ -80,18 +95,7 @@ def main():
         return 0
     for app in app_state_record.managed_apps(repo, token):
         try:
-            enable_security_updates(owner, app, pat)
-            applicable, reported = split_prs(dependabot_prs(owner, app, pat))
-            key = update_key(applicable) if applicable else ""
-            titles = [i["title"] for i in find_intakes.intakes_with(repo, token, app, LABEL, "all")]
-            open_now = find_intakes.intakes_with(repo, token, app, LABEL, "open")
-            if not should_file(applicable, key, titles, open_now):
-                console.log(f"{app}: {len(applicable)} applicable update(s); nothing to file")
-                continue
-            n = file_intake.file_update_app_intake(repo, token, pat, app, f"{app}: dependency updates [maint {key}]", maintenance_request(app, applicable, reported), LABEL,
-                               "Filed and started by the Orchestrator for dependency and base-image updates",
-                               "Started automatically from Dependabot's pull requests. The planner runs first.")
-            console.log(f"{app}: maintenance filed as #{n} ({len(applicable)} update(s))")
+            maintain_app(repo, owner, token, pat, app)
         except Exception as e:  # noqa: BLE001 - one app's failure never stops the others
             console.log(f"{app}: maintenance failed: {type(e).__name__}: {e}")
     return 0

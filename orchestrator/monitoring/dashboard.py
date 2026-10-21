@@ -95,30 +95,36 @@ def num(x, prefix=""):
     return "-" if x is None else f"{prefix}{x}"
 
 
+def digest_headline(recent, m):
+    allm = m["all"]
+    rec = m.get("recent") or {}
+    return [f"**Last day**: {len(recent)} Build Run(s), {sum(1 for r in recent if r['outcome'] in outcomes.OK)} ended OK, ${sum(r['cost_usd'] for r in recent):.2f} spent.",
+            f"**All time**: {allm['runs']} runs, {pct(allm['ok_rate'])} OK, {pct(allm['first_pass_rate'])} first pass, "
+            f"avg {num(allm['avg_rounds'])} rounds, avg {num(allm['avg_cost_usd'], '$')}, total {num(allm['total_cost_usd'], '$')}.",
+            f"**Cost target** (${COST_TARGET_USD:.2f} a run): {allm['over_target']} of {allm['runs']} run(s) over it, 90th percentile {num(allm['p90_cost_usd'], '$')}.",
+            f"**Payoff** (per accepted change; last {RECENT_RUNS} runs vs all): {num(rec.get('cost_per_accepted_usd'), '$')} vs "
+            f"{num(allm['cost_per_accepted_usd'], '$')} spent, {num(rec.get('rounds_per_accepted'))} vs {num(allm['rounds_per_accepted'])} rounds, "
+            f"{num(rec.get('findings_per_run'))} vs {num(allm['findings_per_run'])} blocking findings a run."]
+
+
+def digest_list(title, runs, describe):
+    return ["", title] + [f"- `{r['app']}`: {describe(r)} ([run]({r['run_url']}))" for r in runs] if runs else []
+
+
+def digest_lessons(m):
+    les = m.get("lessons") or {}
+    return ["", f"**Lessons**: {les.get('open', 0)} open, {les.get('fix_ineffective', 0)} marked fix-ineffective."] if les else []
+
+
 def render_digest(history, m, since):
     recent = [r for r in history if (r.get("started_at") or "") >= since]
-    allm = m["all"]
-    lines = ["## Factory digest", "",
-             f"**Last day**: {len(recent)} Build Run(s), {sum(1 for r in recent if r['outcome'] in outcomes.OK)} ended OK, "
-             f"${sum(r['cost_usd'] for r in recent):.2f} spent.",
-             f"**All time**: {allm['runs']} runs, {pct(allm['ok_rate'])} OK, {pct(allm['first_pass_rate'])} first pass, "
-             f"avg {num(allm['avg_rounds'])} rounds, avg {num(allm['avg_cost_usd'], '$')}, total {num(allm['total_cost_usd'], '$')}.",
-             f"**Cost target** (${COST_TARGET_USD:.2f} a run): {allm['over_target']} of {allm['runs']} run(s) over it, 90th percentile {num(allm['p90_cost_usd'], '$')}."]
-    rec = m.get("recent") or {}
-    lines.append(f"**Payoff** (per accepted change; last {RECENT_RUNS} runs vs all): {num(rec.get('cost_per_accepted_usd'), '$')} vs "
-                 f"{num(allm['cost_per_accepted_usd'], '$')} spent, {num(rec.get('rounds_per_accepted'))} vs {num(allm['rounds_per_accepted'])} rounds, "
-                 f"{num(rec.get('findings_per_run'))} vs {num(allm['findings_per_run'])} blocking findings a run.")
     attention = [r for r in recent if r["outcome"] not in outcomes.OK]
-    if attention:
-        lines += ["", "**Needs a person**:"] + [f"- `{r['app']}`: {r['outcome']} ([run]({r['run_url']}))" for r in attention]
     broken = [r for r in recent if r["audit"]]
-    if broken:
-        lines += ["", "**Invariants broken in a real run**:"] + [f"- `{r['app']}`: {', '.join(r['audit'])} ([run]({r['run_url']}))" for r in broken]
-    les = m.get("lessons") or {}
-    if les:
-        lines += ["", f"**Lessons**: {les.get('open', 0)} open, {les.get('fix_ineffective', 0)} marked fix-ineffective."]
-    if not attention and not broken:
-        lines += ["", "Nothing needs a person."]
+    lines = ["## Factory digest", ""] + digest_headline(recent, m)
+    lines += digest_list("**Needs a person**:", attention, lambda r: r["outcome"])
+    lines += digest_list("**Invariants broken in a real run**:", broken, lambda r: ", ".join(r["audit"]))
+    lines += digest_lessons(m)
+    lines += [] if attention or broken else ["", "Nothing needs a person."]
     return "\n".join(lines) + "\n"
 
 
@@ -131,41 +137,56 @@ h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:2rem}.cards{display:grid;grid
 th{color:var(--muted);font-weight:600}.ok{color:var(--ok)}.bad{color:var(--bad)}a{color:inherit}"""
 
 
-def render_html(history, m, generated):
-    e = html.escape
+def stat_cards(m):
     allm = m["all"]
     cards = [("Runs", allm["runs"]), ("OK", pct(allm["ok_rate"])), ("First pass", pct(allm["first_pass_rate"])),
              ("Avg rounds", num(allm["avg_rounds"])), ("Avg cost", num(allm["avg_cost_usd"], "$")), ("90th pct cost", num(allm["p90_cost_usd"], "$")),
              (f"Over ${COST_TARGET_USD:.0f}", allm["over_target"]), ("Total cost", num(allm["total_cost_usd"], "$")),
              ("Stuck", allm["stuck"]), ("Watchdog off", allm["watchdog_disabled"]), ("Audit breaks", allm["audit_violations"])]
     les = m.get("lessons") or {}
-    if les:
-        cards += [("Lessons open", les.get("open", 0)), ("Fix ineffective", les.get("fix_ineffective", 0))]
-    out = ["<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>",
-           "<title>Factory dashboard</title>", f"<style>{STYLE}</style><main>", "<h1>Factory dashboard</h1>",
-           f"<p class=muted>Generated {e(generated)} from {allm['runs']} Build Run Report(s).</p>", "<div class=cards>"]
-    out += [f"<div class=card><b>{e(str(v))}</b><span>{e(k)}</span></div>" for k, v in cards]
-    rec = m.get("recent") or {}
-    out += ["</div>", f"<h2>Payoff per accepted change</h2><div class=scroll><table><tr><th><th>All runs<th>Last {RECENT_RUNS}</tr>"]
+    return cards + [("Lessons open", les.get("open", 0)), ("Fix ineffective", les.get("fix_ineffective", 0))] if les else cards
+
+
+def payoff_table(m):
+    allm, rec = m["all"], m.get("recent") or {}
+    out = ["</div>", f"<h2>Payoff per accepted change</h2><div class=scroll><table><tr><th><th>All runs<th>Last {RECENT_RUNS}</tr>"]
     for label, key, pre in (("Accepted changes", "accepted", ""), ("Cost per accepted", "cost_per_accepted_usd", "$"),
                             ("Rounds per accepted", "rounds_per_accepted", ""), ("Blocking findings per run", "findings_per_run", ""),
                             ("Runs that needed a person", "interventions", "")):
-        out.append(f"<tr><td>{e(label)}<td>{num(allm[key], pre)}<td>{num(rec.get(key), pre)}</tr>")
-    cats = sorted(set(allm["findings_by_category"]) | set(rec.get("findings_by_category") or {}))
-    for c in cats:
-        out.append(f"<tr><td>Blocking findings: {e(c)}<td>{allm['findings_by_category'].get(c, 0)}<td>{(rec.get('findings_by_category') or {}).get(c, 0)}</tr>")
-    out += ["</table></div>", "<h2>Apps</h2><div class=scroll><table><tr><th>App<th>Runs<th>OK<th>First pass<th>Avg rounds<th>Avg cost<th>Total<th>Needs a person</tr>"]
+        out.append(f"<tr><td>{html.escape(label)}<td>{num(allm[key], pre)}<td>{num(rec.get(key), pre)}</tr>")
+    for c in sorted(set(allm["findings_by_category"]) | set(rec.get("findings_by_category") or {})):
+        out.append(f"<tr><td>Blocking findings: {html.escape(c)}<td>{allm['findings_by_category'].get(c, 0)}<td>{(rec.get('findings_by_category') or {}).get(c, 0)}</tr>")
+    return out + ["</table></div>"]
+
+
+def apps_table(m):
+    out = ["<h2>Apps</h2><div class=scroll><table><tr><th>App<th>Runs<th>OK<th>First pass<th>Avg rounds<th>Avg cost<th>Total<th>Needs a person</tr>"]
     for app, a in m["apps"].items():
-        out.append(f"<tr><td>{e(app)}<td>{a['runs']}<td>{pct(a['ok_rate'])}<td>{pct(a['first_pass_rate'])}<td>{num(a['avg_rounds'])}"
+        out.append(f"<tr><td>{html.escape(app)}<td>{a['runs']}<td>{pct(a['ok_rate'])}<td>{pct(a['first_pass_rate'])}<td>{num(a['avg_rounds'])}"
                    f"<td>{num(a['avg_cost_usd'], '$')}<td>{num(a['total_cost_usd'], '$')}<td>{a['needs_human']}</tr>")
-    out += ["</table></div>", "<h2>Recent runs</h2><div class=scroll><table><tr><th>Started<th>App<th>Kind<th>Outcome<th>Rounds<th>Cost<th>Min<th>Released<th>Audit</tr>"]
-    for r in reversed(history[-100:]):
-        cls = "ok" if r["outcome"] in outcomes.OK else "bad"
-        link = f"<a href='{e(r['run_url'], quote=True)}'>{e(r['outcome'])}</a>" if r["run_url"].startswith("https://") else e(r["outcome"])
-        out.append(f"<tr><td>{e(r['started_at'][:16].replace('T', ' '))}<td>{e(r['app'])}<td>{e(r['kind'])}<td class={cls}>{link}"
-                   f"<td>{r['rounds']}<td>${r['cost_usd']:.2f}<td>{num(r['minutes'])}<td>{len(r['released'])}<td>{e(', '.join(r['audit']) or '-')}</tr>")
-    out.append("</table></div></main></html>")
-    return "".join(out) + "\n"
+    return out + ["</table></div>"]
+
+
+def run_row(r):
+    e = html.escape
+    cls = "ok" if r["outcome"] in outcomes.OK else "bad"
+    link = f"<a href='{e(r['run_url'], quote=True)}'>{e(r['outcome'])}</a>" if r["run_url"].startswith("https://") else e(r["outcome"])
+    return (f"<tr><td>{e(r['started_at'][:16].replace('T', ' '))}<td>{e(r['app'])}<td>{e(r['kind'])}<td class={cls}>{link}"
+            f"<td>{r['rounds']}<td>${r['cost_usd']:.2f}<td>{num(r['minutes'])}<td>{len(r['released'])}<td>{e(', '.join(r['audit']) or '-')}</tr>")
+
+
+def runs_table(history):
+    head = "<h2>Recent runs</h2><div class=scroll><table><tr><th>Started<th>App<th>Kind<th>Outcome<th>Rounds<th>Cost<th>Min<th>Released<th>Audit</tr>"
+    return [head] + [run_row(r) for r in reversed(history[-100:])] + ["</table></div></main></html>"]
+
+
+def render_html(history, m, generated):
+    e = html.escape
+    out = ["<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>",
+           "<title>Factory dashboard</title>", f"<style>{STYLE}</style><main>", "<h1>Factory dashboard</h1>",
+           f"<p class=muted>Generated {e(generated)} from {m['all']['runs']} Build Run Report(s).</p>", "<div class=cards>"]
+    out += [f"<div class=card><b>{e(str(v))}</b><span>{e(k)}</span></div>" for k, v in stat_cards(m)]
+    return "".join(out + payoff_table(m) + apps_table(m) + runs_table(history)) + "\n"
 
 
 def gh_json(args):

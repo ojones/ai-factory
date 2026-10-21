@@ -13,7 +13,7 @@ The coder's per-run wall time is measurably lower on the replay cases with no dr
 - Judge every change on the replay harness (`agents/replay`) against a baseline: pass rate first, then time, tool calls, cost.
 - Origin: ChatGPT review of the OpenHands blog (https://chatgpt.com/share/6ac9a9a8-be34-83e8-9159-ff5cc985e1bb) plus a ten-item list of ideas.
 - Tracker: local markdown. Tickets in `tickets/`; blocked_by lists ticket filenames; claimed = assignee set.
-- Related: STANDARDS.md, agents/profiles.yml, agents/prompts/coder.md.
+- Related: ARCHITECTURE.md (Managed app standards), agents/profiles.yml, agents/prompts/coder.md.
 
 ## Decisions so far
 

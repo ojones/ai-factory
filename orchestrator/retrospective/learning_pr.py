@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -80,60 +81,110 @@ def rejected_proposal(factory, paths):
     return bad_fixture_reason(texts)
 
 
-def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3, failed_child=None):
-    changed = [l[3:].strip() for l in sh(["git", "status", "--porcelain"], cwd=factory).stdout.splitlines() if l]
-    bad = [c for c in changed if not agent_run.allowed_path(c)]
-    for c in bad:
-        sh(["git", "checkout", "--", c], cwd=factory, check=False)
-        sh(["git", "clean", "-fdq", "--", c], cwd=factory, check=False)
-    keep = [c for c in changed if c not in bad]
-    if not keep:
-        return None
-    bad = rejected_proposal(factory, keep)
-    if bad:
-        log(f"retrospective proposal rejected: {bad}")
-        tracker.gh(["issue", "comment", str(issue_no), "--repo", repo, "--body",
-            f"The retrospective Agent's proposed change was discarded by the guardrails: {bad}. No PR was opened."], pat)
-        for c in keep:
-            sh(["git", "checkout", "--", c], cwd=factory, check=False)
-            sh(["git", "clean", "-fdq", "--", c], cwd=factory, check=False)
-        return None
-    if open_learning_prs(repo, pat) >= max_open:
-        log(f"{max_open} learning PRs are already open; not opening another")
-        return None
+def discard_changes(factory, paths):
+    for path in paths:
+        sh(["git", "checkout", "--", path], cwd=factory, check=False)
+        sh(["git", "clean", "-fdq", "--", path], cwd=factory, check=False)
+
+
+def changed_paths(factory):
+    return [l[3:].strip() for l in sh(["git", "status", "--porcelain"], cwd=factory).stdout.splitlines() if l]
+
+
+def keep_allowed_changes(factory):
+    changed = changed_paths(factory)
+    disallowed = [c for c in changed if not agent_run.allowed_path(c)]
+    discard_changes(factory, disallowed)
+    return [c for c in changed if c not in disallowed]
+
+
+def discard_for_guardrail(factory, repo, pat, issue_no, kept, reason):
+    log(f"retrospective proposal rejected: {reason}")
+    message = f"The retrospective Agent's proposed change was discarded by the guardrails: {reason}. No PR was opened."
+    tracker.gh(["issue", "comment", str(issue_no), "--repo", repo, "--body", message], pat)
+    discard_changes(factory, kept)
+
+
+def proposal_passes_tests(factory):
     root = agent_run.scratch_root()
     try:
-        passed = agent_run.run_tests(factory, root, agent_run.agent_user())
+        return agent_run.run_tests(factory, root, agent_run.agent_user())
     finally:
         shutil.rmtree(root, ignore_errors=True)
-    if not passed:
-        log("retrospective proposal breaks the orchestrator tests; not opening a PR")
-        return None
-    branch = f"learning/run-{run_id}"
+
+
+def commit_proposal(factory, branch, kept, result, issue_no):
+    summary = f"Retrospective fix: {result.get('change_summary', 'proposed change')[:70]}\n\nFor #{issue_no}."
     for cmd in (["git", "checkout", "-q", "-b", branch], ["git", "config", "user.name", "ai-factory-retrospective"],
-                ["git", "config", "user.email", "retrospective@ai-factory.local"], ["git", "add", "--", *keep],
-                ["git", "commit", "-qm", f"Retrospective fix: {result.get('change_summary', 'proposed change')[:70]}\n\nFor #{issue_no}."]):
+                ["git", "config", "user.email", "retrospective@ai-factory.local"], ["git", "add", "--", *kept], ["git", "commit", "-qm", summary]):
         sh(cmd, cwd=factory)
-    auth = "AUTHORIZATION: basic " + __import__("base64").b64encode(f"x-access-token:{pat}".encode()).decode()
+
+
+def push_branch(factory, branch, pat):
+    auth = "AUTHORIZATION: basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode()
     sh(["git", "push", "-q", "origin", branch], cwd=factory, env={**os.environ, **github.git_auth_env(auth)})
-    numstat = sh(["git", "diff", "--numstat", "HEAD~1", "HEAD"], cwd=factory).stdout
-    fixture = lesson_has_fixture(keep)
+
+
+def fixture_line(fixture, auto, reason):
+    if fixture:
+        return "included"
+    if auto:
+        return "the lint rule is itself the check"
+    return "none: " + reason if reason else "NONE, and no reason given"
+
+
+def review_line(auto):
+    if auto:
+        return "**Auto-merge candidate**: an additive lint or formatter change. It merges itself once the PR checks pass.\n\n"
+    return "Review before merging: this edits shared prompts, the Starter Template, the orchestrator or the Standards.\n\n"
+
+
+def pr_body(result, issue_no, fixture, auto, failed_child):
     reason = (result.get("no_fixture_reason") or "").strip()
-    auto = auto_merge_eligible(numstat)
     body = (f"Proposed by the retrospective Agent for #{issue_no}.\n\n**Category**: {result.get('category')}\n\n"
             f"**Root cause**: {result.get('root_cause')}\n\n**Change**: {result.get('change_summary')}\n\n"
-            f"**Regression fixture**: {'included' if fixture else ('the lint rule is itself the check' if auto else ('none: ' + reason if reason else 'NONE, and no reason given'))}\n\n"
-            + ("**Auto-merge candidate**: an additive lint or formatter change. It merges itself once the PR checks pass.\n\n" if auto
-               else "Review before merging: this edits shared prompts, the Starter Template, the orchestrator or the Standards.\n\n"))
-    if failed_child:
-        body += factory_fix_request.failed_child_marker(failed_child) + "\n"
-    label = []
-    if auto:
-        tracker.gh(["label", "create", "auto-merge-candidate", "--repo", repo, "--color", "0e8a16", "--description", "Merges itself after the PR checks pass"], pat)
-        label = ["--label", "auto-merge-candidate"]
-    out = tracker.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title",
-              f"Retrospective fix for #{issue_no}", "--body", body, *label], pat).stdout.strip()
+            f"**Regression fixture**: {fixture_line(fixture, auto, reason)}\n\n" + review_line(auto))
+    return body + factory_fix_request.failed_child_marker(failed_child) + "\n" if failed_child else body
+
+
+def auto_merge_label(repo, pat, auto):
+    if not auto:
+        return []
+    tracker.gh(["label", "create", "auto-merge-candidate", "--repo", repo, "--color", "0e8a16", "--description", "Merges itself after the PR checks pass"], pat)
+    return ["--label", "auto-merge-candidate"]
+
+
+def vet_proposal(factory, repo, pat, issue_no, kept, max_open):
+    reason = rejected_proposal(factory, kept)
+    if reason:
+        discard_for_guardrail(factory, repo, pat, issue_no, kept, reason)
+        return False
+    if open_learning_prs(repo, pat) >= max_open:
+        log(f"{max_open} learning PRs are already open; not opening another")
+        return False
+    if not proposal_passes_tests(factory):
+        log("retrospective proposal breaks the orchestrator tests; not opening a PR")
+        return False
+    return True
+
+
+def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3, failed_child=None):
+    kept = keep_allowed_changes(factory)
+    if not kept or not vet_proposal(factory, repo, pat, issue_no, kept, max_open):
+        return None
+    branch = f"learning/run-{run_id}"
+    commit_proposal(factory, branch, kept, result, issue_no)
+    push_branch(factory, branch, pat)
+    auto = auto_merge_eligible(sh(["git", "diff", "--numstat", "HEAD~1", "HEAD"], cwd=factory).stdout)
+    body = pr_body(result, issue_no, lesson_has_fixture(kept), auto, failed_child)
+    out = tracker.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", f"Retrospective fix for #{issue_no}", "--body", body,
+                      *auto_merge_label(repo, pat, auto)], pat).stdout.strip()
     return out or None
+
+
+def comment_on_all(repo, token, targets, text):
+    for n in targets:
+        tracker.gh(["issue", "comment", str(n), "--repo", repo, "--body", text], token)
 
 
 def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path, targets, run_id, failed=None):
@@ -147,17 +198,13 @@ def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path,
         return None
     result = agent_output.load_json(result_path) or {}
     if result.get("category") not in agent_run.CATEGORIES:
-        for n in targets:
-            tracker.gh(["issue", "comment", str(n), "--repo", repo, "--body", "The retrospective Agent produced no usable analysis."], token)
+        comment_on_all(repo, token, targets, "The retrospective Agent produced no usable analysis.")
         return None
     cause = route.inferred_category(result.get("category"), failed["outcome"], failed["has_bugs"]) if failed else None
     resumes = failed["child"] if failed and route.route(cause) == "factory" else None
     pr = open_pr(factory, repo, pat, targets[0], result, run_id, int(cfg["limits"].get("max_open_learning_prs", 3)), resumes)
-    for n in targets:
-        tracker.gh(["issue", "comment", str(n), "--repo", repo, "--body",
-            f"**Retrospective** ({result['category']}): {result.get('root_cause', '')}\n\n"
-            f"**Proposed change**: {result.get('change_summary', 'none')}\n\n"
-            + (f"**PR**: {pr}" if pr else "No change was proposed, it did not pass validation, or too many learning PRs are open.")], token)
+    outcome = f"**PR**: {pr}" if pr else "No change was proposed, it did not pass validation, or too many learning PRs are open."
+    comment_on_all(repo, token, targets, f"**Retrospective** ({result['category']}): {result.get('root_cause', '')}\n\n**Proposed change**: {result.get('change_summary', 'none')}\n\n{outcome}")
     return result
 
 

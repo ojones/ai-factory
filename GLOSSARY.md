@@ -17,7 +17,7 @@ A worker process, backed by an LLM, spawned by the Orchestrator to carry out one
 _Avoid_: bot, worker
 
 **Standards**:
-The authored conventions — coding style, repo layout, container, and deployment rules — that Agents must follow when producing a Managed App.
+The authored conventions — coding style, repo layout, container, and deployment rules — that Agents must follow when producing a Managed App. Kept in the Starter Template's `AGENTS.md` (what a coder follows) and ARCHITECTURE.md (why).
 _Avoid_: rules, guidelines
 
 **Managed App**:
@@ -105,7 +105,7 @@ Enabling the flag that gates an update so the change is available to all users.
 _Avoid_: publish, go live
 
 **Retire**:
-Deleting a released flag's check and its line in `flags.json` once the change is proven and a later release has come after it, keeping the behaviour on. Automatic, under the owner's standing approval in STANDARDS-FEATURE-FLAGS.md, inside an Update App Intake's Build Run that is already coming in for the same app (never a run of its own); the flag is then archived in GrowthBook.
+Deleting a released flag's check and its line in `flags.json` once the change is proven and a later release has come after it, keeping the behaviour on. Automatic, under the owner's standing approval in ARCHITECTURE.md (Release and retirement), inside an Update App Intake's Build Run that is already coming in for the same app (never a run of its own); the flag is then archived in GrowthBook.
 _Avoid_: remove, clean up
 
 **Test Gate**:
@@ -120,7 +120,7 @@ _Avoid_: flag name, flag id
 `flags.json` at a Managed App's root: the flags a change introduced, recorded in the same commit. The release step reads it to know what to create and enable.
 
 **Change-set gate**:
-The advice documents' name for what the Factory implements as the flag around one update: a default-off, server-enforced flag that keeps a not-yet-trusted change dark for ordinary users while the tester exercises it with the Preview Token. One update has one gate; a first build has none. In this repo say "flag" or "the update's flag"; "change-set gate" appears only when citing the advice (see [docs/advice/](docs/advice/README.md)).
+The name used in outside advice for what the Factory implements as the flag around one update: a default-off, server-enforced flag that keeps a not-yet-trusted change dark for ordinary users while the tester exercises it with the Preview Token. One update has one gate; a first build has none. In this repo say "flag" or "the update's flag"; "change-set gate" appears only when citing the advice (see the archived advice documents (git tag `archive/pre-purge-2026-10-21`)).
 _Avoid_: feature flag (as a name for the gate itself; it is the underlying mechanism)
 
 **Lesson**:

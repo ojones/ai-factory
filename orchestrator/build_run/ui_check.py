@@ -26,6 +26,49 @@ def valid_locator(loc):
     return isinstance(loc, dict) and sum(k in loc for k in LOCATORS) == 1 and isinstance(loc[next(k for k in LOCATORS if k in loc)], str)
 
 
+def bad_path(path):
+    return not isinstance(path, str) or not path.startswith("/") or path.startswith("//") or "://" in path
+
+
+def step_problem(cid, step):
+    action = next((a for a in ACTIONS if isinstance(step, dict) and a in step), None)
+    if action is None:
+        return f"check {cid}: a step must be one of {', '.join(ACTIONS)}"
+    arg = step[action]
+    if action in ("click", "wait_for", "check", "fill", "select") and not valid_locator(arg):
+        return f"check {cid}: `{action}` needs a locator (exactly one of {', '.join(LOCATORS)})"
+    if action in ("fill", "select") and not isinstance(arg.get("value"), str):
+        return f"check {cid}: `{action}` needs a string `value`"
+    return None
+
+
+def steps_problem(cid, c):
+    steps = c.get("steps", [])
+    paths = [c.get("start", "/")] + [s["goto"] for s in steps if isinstance(s, dict) and "goto" in s]
+    if any(bad_path(path) for path in paths):
+        return f"check {cid}: paths must start with a single / (only the base URL is ever opened)"
+    if not isinstance(steps, list) or len(steps) > MAX_STEPS:
+        return f"check {cid}: `steps` must be a list of at most {MAX_STEPS}"
+    return next(filter(None, (step_problem(cid, s) for s in steps)), None)
+
+
+def expect_problem(cid, expect):
+    for key in ("visible", "hidden", "text", "count"):
+        if not all(valid_locator(l) for l in expect.get(key, [])):
+            return f"check {cid}: every `{key}` entry needs a locator"
+    return None
+
+
+def check_problem(i, c, seen):
+    if not isinstance(c, dict) or not isinstance(c.get("expect"), dict) or not c["expect"]:
+        return f"check {i + 1} needs a non-empty `expect`"
+    cid = c.get("id")
+    if not isinstance(cid, str) or not cid.strip() or cid in seen:
+        return f"check {i + 1} needs a unique string `id`"
+    seen.add(cid)
+    return steps_problem(cid, c) or expect_problem(cid, c["expect"])
+
+
 def validate(doc):
     checks = doc.get("checks") if isinstance(doc, dict) else doc
     if not isinstance(checks, list) or not checks:
@@ -33,58 +76,33 @@ def validate(doc):
     if len(checks) > MAX_CHECKS:
         return None, f"at most {MAX_CHECKS} checks per file"
     seen = set()
-    for i, c in enumerate(checks):
-        if not isinstance(c, dict) or not isinstance(c.get("expect"), dict) or not c["expect"]:
-            return None, f"check {i + 1} needs a non-empty `expect`"
-        cid = c.get("id")
-        if not isinstance(cid, str) or not cid.strip() or cid in seen:
-            return None, f"check {i + 1} needs a unique string `id`"
-        seen.add(cid)
-        for path in [c.get("start", "/")] + [s["goto"] for s in c.get("steps", []) if isinstance(s, dict) and "goto" in s]:
-            if not isinstance(path, str) or not path.startswith("/") or path.startswith("//") or "://" in path:
-                return None, f"check {cid}: paths must start with a single / (only the base URL is ever opened)"
-        steps = c.get("steps", [])
-        if not isinstance(steps, list) or len(steps) > MAX_STEPS:
-            return None, f"check {cid}: `steps` must be a list of at most {MAX_STEPS}"
-        for s in steps:
-            action = next((a for a in ACTIONS if isinstance(s, dict) and a in s), None)
-            if action is None:
-                return None, f"check {cid}: a step must be one of {', '.join(ACTIONS)}"
-            arg = s[action]
-            if action in ("click", "wait_for", "check", "fill", "select") and not valid_locator(arg):
-                return None, f"check {cid}: `{action}` needs a locator (exactly one of {', '.join(LOCATORS)})"
-            if action in ("fill", "select") and not isinstance(arg.get("value"), str):
-                return None, f"check {cid}: `{action}` needs a string `value`"
-        ex = c["expect"]
-        for key in ("visible", "hidden"):
-            if not all(valid_locator(l) for l in ex.get(key, [])):
-                return None, f"check {cid}: every `{key}` entry needs a locator"
-        for key in ("text", "count"):
-            if not all(valid_locator(l) for l in ex.get(key, [])):
-                return None, f"check {cid}: every `{key}` entry needs a locator"
-    return checks, None
+    problem = next(filter(None, (check_problem(i, c, seen) for i, c in enumerate(checks))), None)
+    return (None, problem) if problem else (checks, None)
 
 
-def compare(expect, obs):
+def visibility_problems(expect, obs):
+    problems = [f"{loc_key(loc)}: expected it to be visible, but it is not" for loc in expect.get("visible", []) if not obs["visible"].get(loc_key(loc))]
+    return problems + [f"{loc_key(loc)}: expected it to be hidden or absent, but it is visible" for loc in expect.get("hidden", []) if obs["visible"].get(loc_key(loc))]
+
+
+def text_problem(item, got):
+    key = loc_key(item)
+    if got is None:
+        return f"{key}: expected text, but nothing is there"
+    if "equals" in item and got.strip() != item["equals"].strip():
+        return f"{key}: expected text {item['equals']!r}, got {got.strip()[:80]!r}"
+    if "contains" in item and item["contains"] not in got:
+        return f"{key}: expected text containing {item['contains']!r}, got {got.strip()[:80]!r}"
+    return None
+
+
+def count_problems(expect, obs):
+    found = [(item, obs["count"].get(loc_key(item))) for item in expect.get("count", [])]
+    return [f"{loc_key(item)}: expected {item.get('is')} match(es), found {got}" for item, got in found if got != item.get("is")]
+
+
+def page_problems(expect, obs):
     problems = []
-    for loc in expect.get("visible", []):
-        if not obs["visible"].get(loc_key(loc)):
-            problems.append(f"{loc_key(loc)}: expected it to be visible, but it is not")
-    for loc in expect.get("hidden", []):
-        if obs["visible"].get(loc_key(loc)):
-            problems.append(f"{loc_key(loc)}: expected it to be hidden or absent, but it is visible")
-    for item in expect.get("text", []):
-        got = obs["text"].get(loc_key(item))
-        if got is None:
-            problems.append(f"{loc_key(item)}: expected text, but nothing is there")
-        elif "equals" in item and got.strip() != item["equals"].strip():
-            problems.append(f"{loc_key(item)}: expected text {item['equals']!r}, got {got.strip()[:80]!r}")
-        elif "contains" in item and item["contains"] not in got:
-            problems.append(f"{loc_key(item)}: expected text containing {item['contains']!r}, got {got.strip()[:80]!r}")
-    for item in expect.get("count", []):
-        got = obs["count"].get(loc_key(item))
-        if got != item.get("is"):
-            problems.append(f"{loc_key(item)}: expected {item.get('is')} match(es), found {got}")
     if "url_path" in expect and obs["url_path"] != expect["url_path"]:
         problems.append(f"url path: expected {expect['url_path']!r}, got {obs['url_path']!r}")
     if "title_contains" in expect and expect["title_contains"] not in obs["title"]:
@@ -92,6 +110,11 @@ def compare(expect, obs):
     if expect.get("no_console_errors") and obs["console_errors"]:
         problems.append("console errors: " + "; ".join(e[:120] for e in obs["console_errors"][:3]))
     return problems
+
+
+def compare(expect, obs):
+    texts = filter(None, (text_problem(item, obs["text"].get(loc_key(item))) for item in expect.get("text", [])))
+    return visibility_problems(expect, obs) + list(texts) + count_problems(expect, obs) + page_problems(expect, obs)
 
 
 def scrub(text, token):
@@ -254,24 +277,35 @@ def take_screenshot(page, c, shot_dir):
         return None
 
 
-def main(argv):
+def read_args(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     base = os.environ.get("UI_CHECK_BASE", "")
     if "--base" in argv:
         base = argv[argv.index("--base") + 1]
         args = [a for a in args if a != base]
-    if len(args) != 1 or not base.startswith(("http://", "https://")):
-        print("usage: ui_check.py checks.json --base https://host   (or set UI_CHECK_BASE)", file=sys.stderr)
-        return 2
+    return args, base
+
+
+def load_checks(path):
     try:
-        with open(args[0], encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             doc = json.load(f)
     except (OSError, ValueError) as e:
-        print(f"cannot read {args[0]}: {e}", file=sys.stderr)
-        return 2
+        print(f"cannot read {path}: {e}", file=sys.stderr)
+        return None
     checks, error = validate(doc)
     if error:
         print(f"unusable checks file: {error}", file=sys.stderr)
+    return checks
+
+
+def main(argv):
+    args, base = read_args(argv)
+    if len(args) != 1 or not base.startswith(("http://", "https://")):
+        print("usage: ui_check.py checks.json --base https://host   (or set UI_CHECK_BASE)", file=sys.stderr)
+        return 2
+    checks = load_checks(args[0])
+    if checks is None:
         return 2
     results = run_checks(checks, base, os.environ.get("PREVIEW_TOKEN"), os.environ.get("UI_CHECK_LOG"), os.environ.get("UI_CHECK_DIR"))
     print(render(results))

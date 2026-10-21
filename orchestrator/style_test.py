@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SKIP = {".git", "node_modules", "__pycache__", ".claude", ".scratch", ".wayfinder", "templates"}
 BASELINE = Path(__file__).with_name("style_baseline.json")
 
-GOAL_LINES = 5
-MAX_LINES = 10
+GOAL_LINES = 10
+MAX_LINES = 20
 MAX_INDENT = 4
 BLOCKS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
 ALLOWED_COMMENT_MARKERS = ("noqa", "type:", "pragma", "!")

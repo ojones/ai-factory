@@ -53,6 +53,22 @@ roles:
     model: openai/gpt-oss-120b
     fallback_model: Qwen/Qwen3.8-Flash
     prompt: prompts/planner.md
+  # Plans a Factory Change Intake (STEP 9.2): the same job and model as the planner, with a prompt for the Factory's own code (no flags, tiers, a reproduction first).
+  factory_planner:
+    model: openai/gpt-oss-120b
+    fallback_model: Qwen/Qwen3.8-Flash
+    prompt: prompts/factory-planner.md
+  # Writes one Factory Change child (STEP 9.3) in a scratch copy of the Factory; the Orchestrator reads its files and delivers the change. The coder's model; unmeasured on Python
+  # (agents/smoke-coder is Node), so watch the first Factory Changes.
+  factory_coder:
+    model: deepseek-ai/DeepSeek-V4.1-Flash
+    fallback_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    prompt: prompts/factory-coder.md
+  # Reviews a Factory Change's diff in one model call (STEP 9.5); the gates decide, not its verdict (INV-04 pattern).
+  factory_reviewer:
+    model: deepseek-ai/DeepSeek-V4.1-Flash
+    fallback_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
+    prompt: prompts/factory-reviewer.md
   # Writes the bug ticket for an event the retrospective judged worth fixing (orchestrator/try_fix/write_bug.py): how it was found, the cause, what it takes to resolve and
   # checkable requirements, from the bug template. One model call, no tools; the Orchestrator validates the answer and writes the ticket itself when it is unusable. The model is
   # unmeasured (the planner's, for the same reason: a writer needs no code-tuned model); watch the validation failures on the first real runs.
@@ -93,6 +109,14 @@ limits:
   # holds the parent key), and no more than this many learning PRs may be open at once.
   retrospective_cost_cap_usd: 0.50
   max_open_learning_prs: 3
+  # A Factory Change (STEP 9.4) is refused, not trimmed, when its diff touches more files or adds more lines than this, and no more than this many Factory Change PRs may be open at once.
+  factory_change_max_files: 8
+  factory_change_max_added_lines: 400
+  max_open_factory_change_prs: 3
+  # What one Factory Change child may spend on its coder and reviewer together, rounds of coding and review in all, and hours a merged change is watched (STEP 9.11).
+  factory_change_cost_cap_usd: 1.00
+  factory_change_review_rounds: 3
+  factory_change_watch_hours: 24
   # A lesson, minor finding or factory improvement is recorded and counted (distinct runs, a hidden marker in its issue) on its first sighting, but the
   # Agent analyses it and proposes a fix PR only once this many distinct runs have seen it. Severe lessons (an audit violation, a watchdog switch-off), stuck
   # runs and a lesson that came back after its fix go at once. 1 acts on the first sighting.

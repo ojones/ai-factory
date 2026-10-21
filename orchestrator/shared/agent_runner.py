@@ -34,42 +34,57 @@ class AgentRunner:
     def log_path(self, role, label):
         return self.art / f"openhands-{role}-{label}.jsonl"
 
-    def run(self, role, label, prompt, extra_env=None, cwd=None, home=None):
-        self.check_limits()
-        limits = self.cfg["limits"]
-        model = self.model_for(role, label)
-        jwt = self.budget.mint(model)
-        if self.agent_user and not home:
-            home = self.work / "home-agent"
+    def agent_home(self, home):
+        home = home or (self.work / "home-agent" if self.agent_user else None)
         if home:
             Path(home).mkdir(parents=True, exist_ok=True)
-        jsonl = self.log_path(role, label)
-        known = self.conversation_dirs(home)
-        began = time.time()
+        return home
+
+    def launch(self, role, label, prompt, jwt, model, extra_env, cwd, home, jsonl):
+        limits = self.cfg["limits"]
+        stall_seconds = float(limits.get("agent_stall_minutes", 0)) * 60
         rc = agent_process.run_watched(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd or self.default_cwd,
                                        self.agent_env(role, jwt, extra_env, home, model), jsonl, limits["agent_timeout_minutes"] * 60,
-                                       float(limits.get("agent_stall_minutes", 0)) * 60, user=self.agent_user,
-                                       pidfile=self.work / f"pgid-{role}-{label}.txt")
+                                       stall_seconds, user=self.agent_user, pidfile=self.work / f"pgid-{role}-{label}.txt")
         if rc == "stall":
             log(f"{role} ({label}): no output for {limits.get('agent_stall_minutes')} minutes; killed it so the attempt can restart")
-        after = self.on_spend(jwt)
+        return rc
+
+    def raise_if_provider_blocked(self, role, label, jsonl):
         blocked = provider.scan_for_provider_block(jsonl)
         if blocked:
             log(f"{role} ({label}): {blocked}")
             raise ProviderBlocked(blocked)
+
+    def context_line(self, role, label, usage):
+        goal = self.cfg["limits"].get("context_goal_tokens", 100000)
+        over = f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""
+        return (f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens; "
+                f"{usage['seconds']:.0f}s wall, {usage['llm_seconds']:.0f}s in the model{over}")
+
+    def log_run(self, role, label, rc, cost, after, usage):
+        lines = [f"::group::{role} ({label})", f"{role} ({label}) exited {rc}; cost ${cost:.4f}; run total ${after:.4f} of ${self.budget.cap:.2f}", "::endgroup::"]
+        if usage:
+            lines.insert(2, self.context_line(role, label, usage))
+        for line in lines:
+            log(line)
+
+    def run(self, role, label, prompt, extra_env=None, cwd=None, home=None):
+        self.check_limits()
+        model = self.model_for(role, label)
+        jwt = self.budget.mint(model)
+        home = self.agent_home(home)
+        jsonl = self.log_path(role, label)
+        known = self.conversation_dirs(home)
+        began = time.time()
+        rc = self.launch(role, label, prompt, jwt, model, extra_env, cwd, home, jsonl)
+        after = self.on_spend(jwt)
+        self.raise_if_provider_blocked(role, label, jsonl)
         usage = self.collect_usage(role, label, known, home)
         if usage:
             usage["seconds"] = round(time.time() - began, 1)
         cost = self.budget.tokens[jwt]
-        lines = [f"::group::{role} ({label})",
-                 f"{role} ({label}) exited {rc}; cost ${cost:.4f}; run total ${after:.4f} of ${self.budget.cap:.2f}", "::endgroup::"]
-        if usage:
-            goal = limits.get("context_goal_tokens", 100000)
-            lines.insert(2, f"{role} ({label}) context: {usage['calls']} calls, peak {usage['peak_context']:,} tokens; "
-                         f"{usage['seconds']:.0f}s wall, {usage['llm_seconds']:.0f}s in the model"
-                         + (f" (over the {goal:,} goal)" if usage["peak_context"] > goal else ""))
-        for line in lines:
-            log(line)
+        self.log_run(role, label, rc, cost, after, usage)
         return rc, cost, usage
 
     def conversations_root(self, home=None):
@@ -90,6 +105,20 @@ class AgentRunner:
         return None
 
 
+def accepted(doc, check):
+    try:
+        return doc is not None and (check is None or check(doc) is not False)
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def no_output_error(role, total_cost, note, exhausted):
+    problem = f" (last problem: {note})" if note else ""
+    if exhausted:
+        return NeedsHuman("other", f"the {role} spent its whole credential (${total_cost:.2f}) without writing a usable output file{problem}; a second attempt would only repeat it")
+    return NeedsHuman("other", f"the {role} produced no valid output file twice{problem}")
+
+
 def json_output(attempt, path, role, label, log_path, cwd=None, check=None, restore=lambda cwd: None, record_failed=lambda cost, message, usage: None):
     total_cost, usage, note, attempts, exhausted = 0.0, None, None, 0, False
     for n in (1, 2):
@@ -101,18 +130,12 @@ def json_output(attempt, path, role, label, log_path, cwd=None, check=None, rest
         usage = agent_usage.merge_usage(usage, used)
         agent_output.adopt_misplaced_file(path, cwd)
         doc = agent_output.load_json(path)
-        try:
-            if doc is not None and (check is None or check(doc) is not False):
-                return doc, total_cost, usage
-        except (ValueError, AttributeError, TypeError):
-            pass
+        if accepted(doc, check):
+            return doc, total_cost, usage
         note = agent_output.json_problem(path, check)
         restore(cwd)
         if provider.spending_limit_hit(log_path(role, attempt_label)):
             exhausted = True
             break
     record_failed(total_cost, f"no usable output after {attempts} attempt(s)", usage)
-    if exhausted:
-        raise NeedsHuman("other", f"the {role} spent its whole credential (${total_cost:.2f}) without writing a usable output file"
-                                  + (f" (last problem: {note})" if note else "") + "; a second attempt would only repeat it")
-    raise NeedsHuman("other", f"the {role} produced no valid output file twice" + (f" (last problem: {note})" if note else ""))
+    raise no_output_error(role, total_cost, note, exhausted)

@@ -1,26 +1,24 @@
 # Orchestrator Architecture
 
-Decisions about how the Orchestrator itself is built and operated — for whoever implements the v1 Orchestrator. Distinct from [STANDARDS.md](STANDARDS.md): nothing here is something a Managed App's own code needs to follow. Terminology follows [GLOSSARY.md](GLOSSARY.md).
+Decisions about how the Orchestrator itself is built and operated — for whoever implements the v1 Orchestrator. The conventions a Managed App's own code follows are under Managed app standards at the end. Terminology follows [GLOSSARY.md](GLOSSARY.md).
 
 **The flow.** [docs/flow-spec.md](docs/flow-spec.md) is the official, numbered spec of how a request becomes a running, recorded change; cite its steps as `STEP n.m`. This document explains the parts in terms of that flow. The flow was redesigned around a separate planning process, child tickets filed as GitHub sub-issues, and fix-first; a passage marked **Target** describes that design and is not built yet (the tickets that build it are in `.wayfinder/intake-planning-redesign/`), and a passage marked **Built today** describes what runs now. An unmarked passage is true of both.
 
-Advice from outside this repo, and how much of it the Orchestrator follows, is in [docs/advice/](docs/advice/README.md). It is advisory: where it conflicts with this document, this document wins.
-
-Each decision links back to its ticket in `.scratch/orchestrator-spec/issues/` for the full comparison, runner-ups, and citations.
+Each decision links back to its ticket in the archived `.scratch/orchestrator-spec/issues/` (git tag `archive/pre-purge-2026-10-21`) for the full comparison, runner-ups, and citations.
 
 ## Agent runtime
 
 The Orchestrator reuses an existing open-source CLI coding-agent harness rather than a custom LLM loop — shrinks build scope and matches the Factory's open-source lean.
 
 **Harness: [OpenHands](https://github.com/All-Hands-AI/OpenHands)** (MIT). SWE-bench-leading, pluggable to open-weight models via LiteLLM, purpose-built `--headless` CLI mode with `--json` structured output. Runner-up: mini-swe-agent.
-→ [issues/01](.scratch/orchestrator-spec/issues/01-agent-runtime-reuse-harness.md), [issues/07](.scratch/orchestrator-spec/issues/07-which-agent-harness.md)
+→ [issues/01](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/01-agent-runtime-reuse-harness.md), [issues/07](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/07-which-agent-harness.md)
 
 ## Agents and Build Run stages
 
 A Build Run runs several Agents in sequence, each a separate headless OpenHands invocation with its own role prompt. Role prompts live in ai-factory, not in the Managed App repo, so the coder can't edit its reviewer's instructions. Agents hand off through `main` and structured JSON files (findings, verdicts), never through branches or PRs. **The coder is the only Agent whose work reaches `main`**, but it only commits: the Orchestrator holds the PAT and does the push, so no Agent can read a credential from its checkout or environment. The Orchestrator rejects and discards a coder commit that touches the Starter Template's protected files (`.github/`, `fly.toml`, `fly/`, the flag wrapper `feature-flags.ts`, `INTAKE.md`, and the lint and formatter config `eslint.config.mjs`, `.prettierrc.json`, `.prettierignore`), since the workflows hold the Fly token and the lint config is how a check reaches every app: owning it means the coder cannot loosen a rule to make a check pass. When template sync changes that config it is committed locally after the run's base and pushed with the coder's first reviewed work (a push of the config alone could turn the app's Test Gate red), and the coder, and only the coder, fixes what the new rules report, through the same Update App Intake as everything else; the Orchestrator also names any `eslint-disable`, `@ts-ignore` or `@ts-nocheck` a diff adds as a minor finding.
 
 **Roles**
-- **Coder**: implements the task from the Intake issue (target: from its child ticket, STEP 4.1), committing to `main` for the Orchestrator to push. Every change goes behind a feature flag recorded in `flags.json` (the Orchestrator names and creates it) unless it has no user-visible effect ([STANDARDS-FEATURE-FLAGS.md](STANDARDS-FEATURE-FLAGS.md)). Its model is set in [agents/profiles.yml](agents/profiles.yml) (currently DeepSeek-V4.1-Flash, see [Model serving](#model-serving)).
+- **Coder**: implements the task from the Intake issue (target: from its child ticket, STEP 4.1), committing to `main` for the Orchestrator to push. Every change goes behind a feature flag recorded in `flags.json` (the Orchestrator names and creates it) unless it has no user-visible effect ([Feature-flag infrastructure](#feature-flag-infrastructure)). Its model is set in [agents/profiles.yml](agents/profiles.yml) (currently DeepSeek-V4.1-Flash, see [Model serving](#model-serving)).
 - **Reviewer**: read-only on code. Reviews the coder's commit **before it is pushed** (so code it blocks never reaches `main` or the deploy) and emits a structured JSON verdict with findings, plus any `improvements` it suggests for the system (below). On an update, a user-facing change with no flag around it is a top-priority finding, but a first build is never faulted for lacking flags; it wraps nothing itself and sends the finding back to the coder. **The Orchestrator derives the verdict from the findings and their structure** (`banded_findings`): every finding carries a `category` and an `evidence_kind` (`repro`, `cited` or `opinion`), and one the reviewer called blocking blocks only if its category can block (not style, duplication or other) and it has a repro or a cited file and line; otherwise it is minor, with the reason recorded. A document without that structure is refused and the reviewer is asked again, so a label is never trusted alone. Two flag checks need no judgement and are made by the Orchestrator itself (`flag_findings`, always minor): a flag no code outside the tests reads, and a flag description with no issue reference. The Orchestrator ignores the model's own `verdict` field: in testing the model wrote "clean" on every diff, even while listing blocking findings. When the reviewer is asked for structured output, the schema must put analysis and findings before the verdict, because generation follows property order and a verdict-first schema approved every diff, including an obvious command injection. Its model should differ from the coder's, since a clean review releases to everyone and a shared model shares blind spots. **Known deviation:** both currently run DeepSeek-V4.1-Flash (chosen on speed and cost, see [Model serving](#model-serving)), so the reviewer shares the coder's blind spots until one of them changes; revisit when the model-upgrade benchmark exists.
 - **Tester**: runs after the push, against the deployed app, and exercises the dark feature using the Preview Token. It also runs the repository's own tests that apply to the release, and spot-checks that what was live before still works. Every check ends in one of four states, `passed`, `failed`, `blocked` or `not_run`, and only `passed` lets a change release (a check marked `passed` whose own evidence admits it was not observed, such as "unable to observe logs in production", counts as `not_run`, because the first real run on an unobservable requirement passed on exactly such a claim; for things not visible from outside the tester reports the repository's own test of it, or marks the check `not_run`); the tester also lists what it could not test or clean up (`limitations`). It works with tagged synthetic records, declares and avoids real side effects, stays bounded, and deletes what it created. On a first build with no flags it exercises the live app against the Intake spec instead. For HTTP checks the tester does not judge answers itself: it writes the requests and expectations (status, JSON subset, headers) as data and runs them with the Factory's `orchestrator/api_check.py`, which observes, compares mechanically and logs every result; the Orchestrator then lets the helper's log outrank the report (a result citing a failed check cannot be `passed`, and a failure the report left out is added). The helper reads the Preview Token from its environment, scrubs it from the log and calls only the app's base URL. **Each result says what it is about**: `scope: new` (the flagged change, or a first build's spec) or `scope: existing` (behaviour that was live before). The Orchestrator derives what a failure means (`test_impact`): a failed `new` check is `dark_only` and is fixed forward; a failed `existing` check that an `api-check` or `ui-check` helper observed is a `regression` (the model's word alone is not enough). Only a check the tester saw **fail** goes to the coder: one that was `blocked` or `not_run` cannot be fixed by it, so the tester looks again at the same deployed commit (`limits.test_retries`, default 1) and a run that still cannot verify stops for a person as `needs_human`, with no coder round spent. Like the reviewer it also suggests `improvements`. Can't push. Runs on the pinned model.
 - **Planner** (STEP 2.1): a read-only Agent that turns an Intake into requirements, assumptions, blocking questions and ordered change sets, each with its own acceptance criteria, verification and flag. `orchestrator/planning/validate_plan.py` is the deterministic gate on its plan: every requirement covered, dependencies acyclic, criteria and verification present, a flag per update change set, each change set sized S or M (L is split) with at most 6 criteria and no mention of another change set it does not depend on, a new app's first change set being the `staging` one, at most 8 change sets, and any blocking question sent to a person instead of guessed. Planning is its own process (`plan.yml`, `orchestrator/planning/plan_run.py`, switch `limits.planner_enabled`), started when an intake label is applied and before any coding, for a New App Intake as well as an Update App Intake: it files at least one child ticket per Intake, each a complete set of coding instructions sized so that one flag can roll it back (see [Intake](#intake)), and the Build Run never plans.
@@ -52,25 +50,27 @@ Open-weight model inference is consumed via a pay-per-token API, not self-hosted
 **Reviewer model: `deepseek-ai/DeepSeek-V4.1-Flash`** (issue #41), as a single-call reviewer (the Orchestrator assembles the diff, changed files, `INTAKE.md` and flag usage into one prompt) that falls back to the exploring Agent when the change is too big or the call fails. It replaced `deepseek-ai/DeepSeek-V4-Pro-0813` (the #25 pick: MIT, 1M context, $1.30 in / $2.60 out per 1M tokens), which spent 7 to 20 minutes per review in real Build Runs; Flash scored 50/50 on the smoke fixtures against Pro's 48/50 at about 10 s a review. The #25 reasoning, a different lab than the coder so a clean review isn't a shared blind spot, no longer holds while the coder is also DeepSeek-V4.1-Flash (see [Agents and Build Run stages](#agents-and-build-run-stages)). The smoke test for the #25 pick ([#33](https://github.com/ojones/ai-factory/issues/33), `agents/smoke/`): `usage.estimated_cost` is returned, tool calls and structured output work, it found all four seeded bugs (off-by-one, command injection, missing flag, flag default `true`) in 3 of 3 trials and passed a clean diff in 2 of 3 (one false positive), and it reviewed correctly end to end through OpenHands. A full 5-fixture, 3-trial pass costs about $0.02. No code-review benchmark covering open-weight models exists, so beyond this smoke test the quality case rests on owner-reported agentic-coding numbers.
 → [issue #25](https://github.com/ojones/ai-factory/issues/25), [research](https://github.com/ojones/ai-factory/blob/research/reviewer-model/.scratch/orchestrator-spec/research/reviewer-model.md)
 
-**Models, prompts, and limits are config, not architecture.** Every per-role model, the provider endpoint, each role's prompt, and the review-round limit live in [agents/](agents/README.md), so any of them can be switched or tuned without editing this document.
-→ [issues/02](.scratch/orchestrator-spec/issues/02-model-serving-api-not-selfhosted.md), [issues/08](.scratch/orchestrator-spec/issues/08-which-model-provider.md)
+**Models, prompts, and limits are config, not architecture.** Every per-role model, the provider endpoint, each role's prompt, and the review-round limit live in [agents/](agents/profiles.yml), so any of them can be switched or tuned without editing this document.
+→ [issues/02](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/02-model-serving-api-not-selfhosted.md), [issues/08](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/08-which-model-provider.md)
+
+A model is only eligible for a role if the provider serves it on an OpenAI-compatible API and returns per-response `usage.estimated_cost`, because the cost guardrail depends on that field; smoke-test a new model before pinning it. `agents/smoke/` (reviewer), `agents/smoke-coder/` and `agents/smoke-tester/` replay fixtures through the real prompts and score them as the Orchestrator would; rerun them after changing a prompt or model, with at least 5 trials per fixture because results vary a lot (about $0.05 to $0.20 a run). `docs/benchmark-protocol.md` holds the whole-run benchmark that decides a model swap. `limits.stuck_rounds` ends a run early when that many rounds in a row leave the same checks failing and the same findings open; the `limits.watchdog_*` values control the watch after a release (see Feature-flag infrastructure); both live in `profiles.yml`, and 0 turns either off.
 
 ## Orchestrator host
 
 The Orchestrator runs as ephemeral compute during a Build Run, not an always-on service — pay only while a Build Run is active.
 
 **Platform: GitHub Actions** (GitHub-hosted runners). Native scheduling (`on.schedule`), secrets, and run logging with zero extra infrastructure; clears the 6-hour-per-job duration bar for an overnight run. Runner-up: Fly Machines.
-→ [issues/03](.scratch/orchestrator-spec/issues/03-orchestrator-host-ephemeral.md), [issues/09](.scratch/orchestrator-spec/issues/09-which-compute-platform.md)
+→ [issues/03](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/03-orchestrator-host-ephemeral.md), [issues/09](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/09-which-compute-platform.md)
 
 ## Deploy target for Managed Apps
 
 Deployment pins one default hosting target for v1 simplicity, but the mechanism must stay swappable per project — never hardcode an assumption the target is fixed forever.
 
 **Default: [Fly.io](https://fly.io)**. Cheapest at low-traffic scale, lowest-friction GitHub Actions deploy flow. Runner-up: Railway.
-→ [issues/04](.scratch/orchestrator-spec/issues/04-deploy-target-default-swappable.md), [issues/10](.scratch/orchestrator-spec/issues/10-which-deploy-target.md)
+→ [issues/04](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/04-deploy-target-default-swappable.md), [issues/10](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/10-which-deploy-target.md)
 
 **IaC approach: `fly.toml`** (checked into each Managed App's repo) as the sole declarative app-config, paired with a thin, checked-in, idempotent provisioning script for what it can't express (secrets, DNS/certs, registry auth). Fly's own current recommendation — their official Terraform provider is archived and un-recommended by Fly.io itself.
-→ [issues/15](.scratch/orchestrator-spec/issues/15-which-iac-approach.md)
+→ [issues/15](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/15-which-iac-approach.md)
 
 ## Cost guardrails
 
@@ -83,14 +83,14 @@ The spec requires a budget cap + hard stop exist and are enforced; concrete doll
 **Worst-case overshoot** is one call's cost, because the crossing call completes (normally fractions of a cent; a very large-context call to the reviewer model could be a few tenths of a dollar). The DeepInfra account-level spend cap remains the last-resort ceiling. Each JWT is masked in logs, lives in the single Build Run job, and expires after the configured lifetime (default 6 hours, the Actions job limit); a compromised dependency in an Agent's environment could spend at most the JWT's remaining budget on that role's model.
 
 **Numbers are config** in `agents/profiles.yml` (`limits`): the default cap (**$2.00**), the ceiling an Intake override may request (**$10.00**, enforced at Intake), and the JWT lifetime. They are starting values to revise after the first real multi-agent run.
-→ [issues/05](.scratch/orchestrator-spec/issues/05-cost-guardrails-mechanism-not-numbers.md), [issues/14](.scratch/orchestrator-spec/issues/14-cost-guardrail-design.md)
+→ [issues/05](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/05-cost-guardrails-mechanism-not-numbers.md), [issues/14](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/14-cost-guardrail-design.md)
 
 ## Visibility
 
 A minimum observability/reporting requirement for unattended Build Runs is part of the architecture.
 
 **Mechanism**: a **Build Run Summary** written to `GITHUB_STEP_SUMMARY` (status, what changed, test results, cost spent, deploy outcome + a link to that deployment's Fly log viewer). The raw OpenHands `--json` JSONL event stream is uploaded as a build artifact for deep-dive debugging. A curated, machine-readable **Build Run Report** (same fields as the Summary) is produced alongside it for future tooling. The Summary also leads with the verification counts for the last round, its limitations, and a per-round scoreboard (checks passed / failed / blocked / not run, and open blocking findings); the same data is in the Report and in `artifacts/progress.json`. The Summary has a row per stage (Agent, rounds used, cost, verdict, and the context numbers below) plus the release outcome, and each Agent invocation uploads its own JSONL artifact; the Report carries the same fields. **OpenHands is pinned in `agents/openhands-version.txt` (installed by every workflow that runs it), so an upstream release cannot change the CLI under an unattended run; changing the pin is a deliberate edit, tested with the smoke and replay suites first. **Tracing is off on purpose:** an experiment with `openhands` 1.16.0 (SDK 1.21.0) found that setting the `OTEL_EXPORTER_OTLP_*` variables does export spans to an OTLP endpoint, but the run then failed in the SDK's tracing code (`observe() got an unexpected keyword argument 'rollout_entrypoint'`) before making a model call, while the same run without the variables worked. Revisit with a newer pin. The same experiment confirmed the CLI will talk to any OpenAI-compatible endpoint set in `LLM_BASE_URL`, so a local stub model can stand in for DeepInfra in orchestration tests. **Context tracking**: each Agent invocation is one fresh LLM conversation, and the Orchestrator reads OpenHands' persisted state after it to record LLM calls, input (and cached) and output tokens, condenser calls, and the **peak context**, the largest prompt in any single call. The Summary shows these per stage and the run's highest peak; `limits.context_goal_tokens` in `agents/profiles.yml` (100,000) is a goal, not a limit, and stages over it are flagged. First measurement ([#32](https://github.com/ojones/ai-factory/issues/32), a small notes API): peaks of 29k to 54k, the coder highest. If peaks cross the goal on real Intakes, the planned response is to split the coder into planned steps, each its own invocation. On failure — a crash, the cost/time budget exhausted before CI went green, or the review-round limit reached without a clean verdict — an explicit workflow step auto-creates a GitHub Issue in the Managed App's repo, distinguishing which.
-→ [issues/06](.scratch/orchestrator-spec/issues/06-visibility-in-scope.md), [issues/13](.scratch/orchestrator-spec/issues/13-visibility-standard-design.md)
+→ [issues/06](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/06-visibility-in-scope.md), [issues/13](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/13-visibility-standard-design.md)
 
 ## Secrets
 
@@ -103,11 +103,11 @@ Every Build Run, released or not, is a chance to improve the system, not only to
 1. **Facts**: a deterministic record of the run (outcome, per-round blocking findings and which recurred, time and cost per stage, the improvements the reviewer and tester suggested), uploaded as `retrospective-facts.json`.
 2. **Lesson issue**: one `factory-learning` issue in ai-factory per distinct failure. The title carries a fingerprint (outcome plus the first meaningful words of the recurring findings) so a repeat comments on the open issue ("Happened again") instead of opening a new one. Each open minor finding also becomes a suggestion issue in the Managed App's own repo and a `factory-learning` issue in ai-factory.
 3. **Bugs and improvements**: the tester only notes which checks failed (`bugs`). They belong to the Managed App's own story, so the retrospective adds them to the Update App Intake that started the run (a comment, the `bug` label) instead of opening an issue, and the fix that follows carries the bugs among its requirements (target: the fix child; today: the retry puts the start label back on that same issue, bounded by `fix_request_max_attempts`). Only a Factory-side cause opens a new issue. The reviewer and tester each also end their JSON with `improvements` (target `managed_app` or `factory`, a one-line summary, evidence). They only suggest. The retrospective files them, capped per run: a `managed_app` one is a suggestion in the app's own repo, a `factory` one is a `factory-learning` issue. (Built, ticket 15b: the Retrospective judges each one as a failure event and no suggestion issue is filed in the app's repo; a `fix` verdict becomes a bug Intake once ticket 15d is built.) **Before opening any issue it looks at the open ones**: a title that shares most of its content words with an open issue (`similar_open_issue`, reworded repeats still match) gets a comment with the new context instead of a duplicate. Having the Orchestrator file them keeps the run short (the Agents make no extra calls and hold no GitHub credential) and keeps a noisy model from flooding the trackers.
-4. **Retrospective Agent** (`agents/prompts/retrospective.md`): runs only when there is something new to look at. It names a root-cause category (`prompt_gap`, `template_gap`, `orchestrator_gap`, `spec_ambiguity`, `model_limit`, `infra`) and makes the smallest change that would stop the problem for every future Managed App. It acts on the first occurrence; it makes no change for `infra`, `spec_ambiguity` or `model_limit`.
+4. **Retrospective Agent** (`agents/prompts/retrospective.md`): runs only when there is something new to look at. It names a root-cause category (`prompt_gap`, `template_gap`, `orchestrator_gap`, `plan_gap` (the planner split or classified a change wrongly; a Factory cause fixed in the planner prompt or checker), `spec_ambiguity`, `model_limit`, `infra`) and makes the smallest change that would stop the problem for every future Managed App. It acts on the first occurrence; it makes no change for `infra`, `spec_ambiguity` or `model_limit`.
 5. **Pull request**: the Orchestrator, not the Agent, keeps only changes under `agents/`, `templates/starter/`, `orchestrator/` and the docs (never `.github/` or the Starter Template's protected files), runs the unit tests, pushes a `learning/run-<id>` branch with the PAT and opens a PR for a human to review. The Agent holds no credential and runs outside the Build Run's cost cap, bounded by `retrospective_timeout_minutes`.
 6. **Report on the story**: a short summary (outcome, passes and cost, dark feature or regression, what was filed) is commented on the issue that started the run, once per run, whether it released or not.
 
-The "no branches, no PRs" rule in [STANDARDS-CODING.md](STANDARDS-CODING.md#git-workflow) applies to Managed Apps; changes to the Factory itself go through PRs.
+The "no branches, no PRs" rule in [Git workflow](#git-workflow) applies to Managed Apps only; changes to the Factory repo itself go through PRs.
 
 **Built since** (unit-tested; none of the GitHub, Agent or workflow parts has run yet):
 - **More lessons than stuck runs.** `lessons_from` also records a release the watchdog switched off, a clean run that needed 3 or more review passes, a first test pass the coder had to fix, a run that spent 70% or more of its cap, and a stage over 15 minutes, at most 3 per run, each a `factory-learning` issue with a stable fingerprint.
@@ -158,7 +158,7 @@ Still open: nothing yet stops a second `proceed-with-change` on an issue whose B
 
 **Secrets pushed into the new repo**: `FLY_API_TOKEN` (the single shared Fly org-level token), `GROWTHBOOK_CLIENT_KEY` (see [Feature-flag infrastructure](#feature-flag-infrastructure)), and `PREVIEW_TOKEN`. The preview token is derived as `HMAC(master secret held in ai-factory, app slug)` rather than stored per app, because GitHub secrets are write-only: the Build Run recomputes it to exercise a dark feature, with no per-app storage. No DeepInfra credential is pushed: the Build Run workflow lives in ai-factory, checks out the Managed App repo with the PAT, and mints each run's capped credential in the same job, so the DeepInfra parent key never leaves ai-factory and never reaches an agent's environment.
 
-**Fly app**: not created by App Staging. `fly/provision.sh` creates it idempotently on first deploy, deriving the name from the repo name. Fly app names are unique across all of Fly, not just this account, so a common name can already be taken by a stranger and the first deploy would fail mid-Build Run. App Staging therefore checks the name up front with a read-only call to the Fly Machines API (`GET /v1/apps/<name>`: 200 ours, 404 free, 403 taken by someone else) and refuses on a collision, before creating the repo or anything else; the Intake Issue Form warns about this too ([STANDARDS-DEPLOYMENT.md](STANDARDS-DEPLOYMENT.md#starter-template-contents-workflows-and-fly-config)).
+**Fly app**: not created by App Staging. `fly/provision.sh` creates it idempotently on first deploy, deriving the name from the repo name. Fly app names are unique across all of Fly, not just this account, so a common name can already be taken by a stranger and the first deploy would fail mid-Build Run. App Staging therefore checks the name up front with a read-only call to the Fly Machines API (`GET /v1/apps/<name>`: 200 ours, 404 free, 403 taken by someone else) and refuses on a collision, before creating the repo or anything else; the Intake Issue Form warns about this too ([Deployment contents of a Managed App](#starter-template-contents-workflows-and-fly-config)).
 
 **Idempotency**: every step is check-then-act, so App Staging is safely re-runnable after a partial failure (by re-adding `proceed-with-change` to the staging child). Repo ownership is proven by a marker in the repo description, `Intake: ojones/ai-factory#<N>`, `<N>` the parent Intake. A rerun adopts an existing repo only if the marker matches that Intake; any other pre-existing repo with that name (including `ai-factory` itself) is a hard stop, with an explanatory comment on the Intake issue, and nothing is ever overwritten. Any failed or refused run comments on the staging child and removes its start label (`proceed-with-change`), since re-adding a label that is still present would not fire the workflow. The seed push is also the first deploy: it triggers the new repo's Test Gate and Build (in parallel), then Deploy once both are green, so its secrets and kill switch are created first.
 
@@ -170,13 +170,213 @@ Still open: nothing yet stops a second `proceed-with-change` on an issue whose B
 ## Feature-flag infrastructure
 
 **Tool: [GrowthBook](https://www.growthbook.io)** (MIT core), with Managed App code written against **OpenFeature** rather than GrowthBook's SDK directly. Runner-up: Unleash.
-→ [issues/16](.scratch/orchestrator-spec/issues/16-which-feature-flag-tool.md)
+→ [issues/16](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/16-which-feature-flag-tool.md)
 
 **Hosting**: one shared, always-on GrowthBook instance — not one per Managed App — backed by a managed MongoDB Atlas free-tier cluster (GrowthBook requires MongoDB, not Postgres). The Orchestrator holds one manually-created, admin-scoped GrowthBook Personal Access Token (a one-time setup exception to full automation, since GrowthBook's API can't create admin keys itself).
 
 **Per-Managed-App isolation**: self-hosted GrowthBook's free/OSS tier caps at 1 project per organization — confirmed empirically (`402` on a second `POST /v1/projects` call) and corroborated by GrowthBook's own pricing page. Every Managed App shares that one project; App Staging no longer creates a project per app. Multi-org mode (`IS_MULTI_ORG`) was considered and rejected: its self-hosted licensing status is unresolved in GrowthBook's own docs (described as a free env var, yet "Multi-tenant Mode" is marketed Self-Hosted-Enterprise-only), and — decisively — GrowthBook exposes no REST API to create organizations programmatically, only a manual/UI join flow, which would break one-call automation regardless of licensing. Paid Self-Hosted Enterprise was rejected as sales-quote-only with no disclosed price. Running a separate GrowthBook instance per Managed App was rejected: the Factory wants one shared data source, and per-app instances aren't free (each needs its own running service + MongoDB cluster). Switching feature-flag tools entirely was rejected too: every other self-hostable OSS alternative (Unleash, Flagsmith, PostHog) converges on the same 1-project-per-free-instance cap, and the one exception found (Flipt) carries a non-OSI "Fair Source" license, a worse tradeoff than GrowthBook's MIT core plus this app-naming workaround. → [Decide GrowthBook per-Managed-App flag isolation (#22)](https://github.com/ojones/ai-factory/issues/22).
 
-Isolation between Managed Apps is therefore by **flag-key naming only**, not by any GrowthBook access boundary — every Managed App's SDK connection key can technically fetch every other app's flag payload. This is an accepted tradeoff for this personal project, not an oversight. See [STANDARDS-FEATURE-FLAGS.md](STANDARDS-FEATURE-FLAGS.md#code-wiring) for the naming convention this forces.
+Isolation between Managed Apps is therefore by **flag-key naming only**, not by any GrowthBook access boundary — every Managed App's SDK connection key can technically fetch every other app's flag payload. This is an accepted tradeoff for this personal project, not an oversight. See [Code wiring](#code-wiring) for the naming convention this forces.
 
-During App Staging, the Orchestrator calls GrowthBook's REST API once to create an app-scoped, read-only SDK connection key, named for the app, against the single shared project (no project creation call anymore), and pushes it into the new repo's secrets alongside the Fly token. On a rerun after a partial failure, any existing key with that name is revoked and a fresh one minted and re-pushed. There is no app-wide kill switch: the lever is the flag of the change (STANDARDS-FEATURE-FLAGS.md). One key per Managed App is still minted — it buys no isolation, but keeps revocation, rotation, and GrowthBook's own per-connection usage view organized per app.
-→ [issues/18](.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [#22](https://github.com/ojones/ai-factory/issues/22)
+During App Staging, the Orchestrator calls GrowthBook's REST API once to create an app-scoped, read-only SDK connection key, named for the app, against the single shared project (no project creation call anymore), and pushes it into the new repo's secrets alongside the Fly token. On a rerun after a partial failure, any existing key with that name is revoked and a fresh one minted and re-pushed. There is no app-wide kill switch: the lever is the flag of the change (see Feature-flag infrastructure). One key per Managed App is still minted — it buys no isolation, but keeps revocation, rotation, and GrowthBook's own per-connection usage view organized per app.
+→ [issues/18](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [#22](https://github.com/ojones/ai-factory/issues/22)
+
+### Flagging policy
+
+A flag protects `main`. All work lands directly on a single `main` with no branches ([Git workflow](#git-workflow)), so a flag is what keeps a change that is not yet proven from reaching users. The policy follows from that:
+
+- **Staging needs no flag; every change set after it does.** Staging a new app (repository, deploy, flag service, secrets) is verified by deterministic checks and has no business logic to protect. Every change set built on it goes behind a flag of its own, from the first one, so a new app is built the way an existing app is changed.
+- **Every later update to an existing app that changes behaviour a user can see or reach is protected by a flag.** Changes with no user-visible effect (internal refactors, dependency bumps, a bug fix that only restores documented behaviour without altering what a user can reach) may ship unflagged; see [Release and retirement](#release-and-retirement). If in doubt, flag it: a flag is cheap and the rollback lever is the point. An update ships dark behind a flag of its own, and is released only after review and tests pass. Each update gets its own flag, separate from earlier updates', so one can be turned off without touching the others.
+- **A flag covers the change, not each route or screen.** One flag around everything the change encompasses is enough. Neither the coder nor the reviewer needs a flag per endpoint or UI piece, though finer flags are allowed where they help.
+- **What the Intake asks for stands.** If it names a flag, the flag is a requirement like any other.
+
+This is the production safety net, and also the review gate, compensating for the direct-push-to-main, no-branch git workflow.
+→ [issues/18](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md)
+
+### Code wiring
+
+All Managed Apps share one GrowthBook project (see [ARCHITECTURE.md](#feature-flag-infrastructure) — the free self-hosted tier caps at 1 project), with no GrowthBook-level boundary between apps. The flag-key naming convention carries the only isolation that exists, and so is app-scoped: **`<app-slug>.feature.<slug>`** for per-feature flags. The app slug is derived live by the Managed App's own code (e.g. from its repo name, the same env/derivation already used for the Fly app name per [#21](https://github.com/ojones/ai-factory/issues/21)) — never injected or persisted by App Staging, keeping the Starter Template's flag-handling code unmodified per app.
+
+A single OpenFeature client is initialized once at app startup from the SDK connection key env var — not re-derived per feature. The client polls for live flag updates (`pollingInterval`) rather than using SSE streaming, which GrowthBook's own docs confirm is cloud/proxy-only, not available to a bare self-hosted instance.
+→ [issues/18](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [build ticket #14](https://github.com/ojones/ai-factory/issues/14), [#22](https://github.com/ojones/ai-factory/issues/22)
+
+### Resilience
+
+Every OpenFeature call site must supply a real, sensible default value. Resilience against a GrowthBook outage comes from OpenFeature's own spec guarantee (flag evaluation always returns the default value on abnormal execution, never throws) — not from any GrowthBook-specific caching behavior.
+
+**That default must always be `false` for a boolean flag — never `true`.** Confirmed live against `@openfeature/growthbook-provider@0.1.2`: GrowthBook represents an "off" boolean as `value: null`, and this provider's `translateResult` unconditionally substitutes the caller's default for any `null` value, with no way to distinguish "off" from "not found." Passing `true` makes a flag's off state permanently unobservable — the flag could never actually turn anything off, defeating its entire purpose. The real tradeoff this forces: "intentionally off" and "GrowthBook unreachable" become indistinguishable, so every flag fails *closed* on an outage, not open, for as long as this library bug stands. Revisit this note if a future `@openfeature/growthbook-provider` release fixes it.
+→ [issues/18](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/18-feature-flag-standards-content.md), [build ticket #14](https://github.com/ojones/ai-factory/issues/14)
+
+### Flag manifest
+
+Every new flag is recorded in `flags.json` at the repo root — an array of `{slug, description}` entries — in the same commit that introduces it in code. (The slug is the `<slug>` part of the key; the release step prefixes the app slug. No added-in commit is recorded: a commit can't contain its own hash.) The release step reads the manifest to know what a Build Run introduced. A flag need not exist in GrowthBook for code to ship dark: a missing flag evaluates to `false`. But the release step never creates one: for an update the Orchestrator creates the story's flag, off, before the coder starts (see Release and retirement), and a flag that is missing at release is a failure to report, not something to make up.
+→ [issue #24](https://github.com/ojones/ai-factory/issues/24)
+
+### Preview
+
+Every Managed App's flag wrapper honors a **Preview Token** so the tester can exercise a dark feature in the real deployment. A request carrying the token — as an `X-Preview-Token` header, or a `?preview=<token>` query parameter that sets an HttpOnly cookie for browser sessions — evaluates every `feature.*` flag as on. The token is compared against the `PREVIEW_TOKEN` env var. The override never applies to the global kill switch, and it works when GrowthBook is unreachable. Without a valid token the feature stays dark to everyone.
+→ [issue #24](https://github.com/ojones/ai-factory/issues/24)
+
+### Release and retirement
+
+**Release** is the flag being enabled for all users. It is performed by a deterministic Orchestrator step after review and tests are clean, never by an Agent, and leaves every flag that already exists in GrowthBook exactly as it is, with one exception: the flag of the issue itself, created off by an earlier attempt of that same issue, is switched on once the gates pass.
+
+**A flag has one job**: to stage a change dark and release it when it is safe. It belongs to the release pipeline end to end; nobody flips it by hand for any other purpose, and the Orchestrator may rely on that. It is short-lived by design.
+
+**Retirement** — deleting a flag's check and its line in `flags.json`, keeping the behaviour on — is automatic, under the owner's standing approval recorded here, and it never costs a run of its own: it rides along in an Update App Intake's Build Run that is already coming in for the same app. At the start of that run the Orchestrator picks every flag (up to `limits.flag_retirement.piggyback_max`, 5, oldest first, so a backlog clears) that was released, was never switched off by the watchdog, is still in the manifest, was released on an earlier day, and has a **later Build Run that also ended `released`** after it (a run that ended `nothing_to_release` does not count). The coder removes each flag's check in a separate commit, the tester checks the behaviour is still on for an ordinary visitor, the Orchestrator rejects the commit while code (not a comment) still mentions a retiring slug, and when the run ends well the retired flags are archived in GrowthBook. The newest release therefore always keeps its flag. A fix child retires nothing. Agents still never decide to retire a flag themselves. A flag the watchdog switched off is not retired: its child is fixed through a bug Intake and runs again behind its own flag (below).
+
+**Story and flag.** One issue (the story) and one flag stay together for the whole life of a change. When an update's flag is released, the Orchestrator labels the issue `flag:<slug>`, adds `[flag: <slug>]` to its title and comments the full key; the GrowthBook feature carries the issue link in its description and an `intake-<n>` tag; the flag's entry in `flags.json` starts its description with the issue reference; the App State issue links each flag to its story; and when the flag is retired the story gets a comment saying so.
+
+**A failure keeps its story.** When a child fails, or a release breaks and the watchdog switches its flag off, the story stays open and its flag stays off. The failed child gets a bug Intake (STEP 7.1), with exactly one child, an ordinary child with a flag of its own that goes through the same gates; the failed child waits for it and is never started again unchanged. When the fix closes, the failed child runs again behind its own flag and the release step switches that flag on when the gates pass. If it cannot be fixed within `fix_attempts_max` (2) fix children, the issue stays open, labelled `needs-human` and `dark-broken`, attached to its flag (a `flag:<slug>` label), which stays off. Its code stays in `main`, dark. That is a **dark feature**: it is tracked by its story issue and the flag, not by `flags.json`, and it is removed only when a person adds `approve-retire` to the story, which files an Update App Intake that deletes the flag, its code and its tests.
+
+**Mechanics.** The numbered mechanics of the lifecycle (naming, creation, dark-mode tests, retirement, bug fixing) are in [flow-spec.md](docs/flow-spec.md#flag-lifecycle-mechanics).
+
+**Built to be removed.** One change set has one flag, checked at the single entry point of the change with a plain string literal, so retiring it is deleting that one check. The reviewer flags a flag scattered across unrelated places.
+
+Unflagged changes (bug fixes, refactors, dependency bumps, retiring a flag) go live on deploy, so the reviewer checks them before they are pushed and the Test Gate and the tester check them after. They are fixed forward if they fail; nothing is ever reverted in git, and the only thing taken back is the live deployment, rolled back through CI to the previous version, and only for a regression the tester observed (see ARCHITECTURE.md: Nothing is reverted in git). On an update, a user-facing change with no flag around it is a blocking finding; on a first build it is not.
+→ [issue #24](https://github.com/ojones/ai-factory/issues/24)
+
+## Code layout
+
+A domain is a plain Python folder under `orchestrator/` that holds one part of the [flow spec](docs/flow-spec.md) (steps are cited as `STEP n.m`): its code, its tests and its entry points. Nothing is installed or versioned separately; the file inventory is the folder itself, and the reasons behind individual modules are in [docs/module-notes.md](docs/module-notes.md).
+
+| Domain (folder) | Steps | Role |
+|---|---|---|
+| Request (`request/`) | 1.1 to 1.3 | read the Intake forms, file automated Intakes |
+| Planning (`planning/`) | 2.1 to 2.6 | the Planner, plan validation, child tickets |
+| Staging (`staging/`) | 3.1, 3.2 | stage a new app and verify its infrastructure |
+| Build Run (`build_run/`) | 4.1 to 4.14 | one `BuildRun` class whose steps are mixins, one file each |
+| Flag Lifecycle (`flag_lifecycle/`) | 5.1 to 5.7 | flag names, creation, release, watchdog, retirement |
+| Retrospective (`retrospective/`) | 6.1 to 6.7 | close a child, name the cause, judge events, learn |
+| Try Fix (`try_fix/`) | 7.1 to 7.6 | failure events, bug tickets, Factory fix requests |
+| Bugs (`bugs/`) | 8.1 to 8.4 | production errors and escaped defects |
+| Factory Change (`factory_change/`) | 9.1 to 9.13 | take an `orchestrator_gap` ticket to a merged Factory PR: tiers, vetting, reproduction, pause |
+| Maintenance (`maintenance/`) | none | template sync and dependency updates |
+| Monitoring (`monitoring/`) | none | benchmark, canary, dashboard, Fly audit |
+| Shared (`shared/`) | none | what two or more domains use; imports no domain |
+
+### Rules
+
+- **Imports** (checked by `boundary_test.py`; a new edge is added to its `ALLOWED` and here only if deliberate): `shared` imports no domain; every domain may import `shared`; `planning`, `build_run`, `maintenance`, `bugs`, `flag_lifecycle`, `factory_change` and `try_fix` may import `request`; `build_run` may import `flag_lifecycle`; `retrospective` may import `try_fix`; `factory_change` may import `build_run` (the single-call review), `planning`, `retrospective` and `try_fix`; `try_fix` may import `planning`; `monitoring` imports only `request` (benchmark files issues in the form's shape, fly audit checks the factory marker); no cycles. Anything else is a deliberate edit to the test and this page.
+- **Talking through GitHub.** Domains mostly run as separate workflows, so they communicate through the `factory-plan` marker, labels, native dependencies and the App State record, not through Python calls.
+- **Entry points.** A workflow sets `PYTHONPATH=orchestrator` and runs `python -m <domain>.<command>`. A command file is named for the command.
+- **Tests** sit beside the code, named for the behaviour they check (`name_test.py`), and run per domain (`python -m unittest discover -s orchestrator/planning -t orchestrator`) or all together. `invariants_test`, `style_test`, `flow_spec_test` and `boundary_test` stay at the top of `orchestrator/`.
+- **Moves.** A move is its own commit with behaviour unchanged. No re-export shim or old path is left behind; the workflow's command changes in the same commit.
+
+### Imports that cross domains today
+
+These are the couplings the domain tickets remove or put behind a named function:
+
+- `staging` imports `try_fix` (the failure event for a failed check). `build_run` imports `planning` (until ticket 13) and `try_fix` (the fix note for a fix child), so Planning still runs inside Build Run; Retrospective no longer does (finalize and the retrospective are separate workflow steps). `retrospective` imports `try_fix`, `flag_lifecycle` and `request`, never `build_run`.
+- `bugs` imports `request` and `try_fix` (the failure event) and talks to the Retrospective and Try Fix through files in `production-feedback.yml`. `maintenance/` and `monitoring/` no longer import any flat module.
+
+### Workflows by trigger
+
+- **An issue label:** `update-app-intake.yml`, `app-staging.yml`, `approve-retire.yml`, `factory-run.yml`, `factory-change.yml` (a Factory Change child started with `proceed-with-change`). `plan.yml` also runs on the two intake labels and on `factory-change` (planning).
+- **Manual (`workflow_dispatch`):** `build-run.yml`, `benchmark.yml`, `flag-set.yml`, `reviewer-replay.yml`, `smoke-reviewer-model.yml`, `teardown.yml`, `verify-secrets.yml`, `isolation-probe.yml`.
+- **Scheduled (and manual):** `canary.yml`, `dashboard.yml`, `fly-audit.yml`, `maintenance.yml`, `production-feedback.yml`, `template-sync.yml`, `factory-change-promote.yml`, `factory-change-watch.yml` (also on a merged Factory Change PR).
+- **Pull request:** `factory-checks.yml` (with the `factory-change-gate` and `factory-change-merge` jobs for `factory-change/` branches); on a merged learning PR, `resume-failed-child.yml`.
+
+Today there are 24 workflows, `plan.yml` and `resume-failed-child.yml` included.
+
+### The child ticket contract (`shared/child_tickets.py`)
+
+A child ticket is a sub-issue of the Intake it was planned from. Planning writes it; the Build Run, the Retrospective and Try Fix read it. The sub-issue shape lives only in `ChildTickets` (create then add by numeric id, blockers, readiness, parent lookup with its 404).
+
+The hidden `<!-- factory-plan:{...} -->` marker at the top of the body holds: `parent` (the Intake's number), `cs` (the change set id), `kind` (`staging` or `update`), `flag` (yes or no; the slug is always `issue-<n>`), `internal_only`, `size` (`S` or `M`), `requirements`, `secrets` (names and purposes, never values) and, for now, `depends_on`. **Decision (ticket 09):** the native GitHub blockers are the source of truth for order, because the UI shows them and readiness is judged from each blocker's state; the marker's `depends_on` is a temporary copy of issue numbers for the label-based `update_intake.advance`, and the Retrospective ticket (10) removes it when it advances by blockers. The body below the marker is the Update App Intake form with the complete instructions (acceptance criteria, how each is checked, out of scope, the flag sentence), so a child needs nothing else to be built.
+
+Filing is all or nothing and idempotent: a parent that already has children is left alone; if any call fails, the children made are removed from the parent and closed, and the error is raised, so the Intake can be planned again with no orphan. A child's parent is looked up with `parent_of` (None for an issue with no parent, which the Build Run refuses as unplanned).
+
+## Managed app standards
+
+The conventions a Managed App's own code follows, per [GLOSSARY.md](GLOSSARY.md). What an Agent needs while coding is in the Starter Template's `AGENTS.md`, which travels with every app; this section keeps the reasoning.
+
+### Stack
+
+Every Managed App is **Express (backend) + React (frontend), both in TypeScript** — one Node.js codebase, frontend built via Vite to static assets served directly by Express's `express.static()`. Not re-derived per project: only JS/TS pairs a competitive backend framework with a genuine frontend-framework ecosystem, and Express/React are each their ecosystem's dominant, most battle-tested choice. Runner-up: FastAPI (Python) + React — loses on forcing a second language into every Managed App.
+→ [issues/20](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/20-which-application-stack.md)
+
+### Starter Template
+
+Every new Managed App is seeded from a fixed **Starter Template** (directory structure, CI config, boilerplate) rather than built from scratch each Build Run — cheaper in agent tokens, keeps every Managed App structurally identical.
+→ [issues/11](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
+
+### Test gate
+
+A hard gate in the deployment pipeline, not Agent judgment: unit tests for business logic, plus one minimal boot/health-check smoke test. No coverage-percentage threshold.
+
+If the gate fails after a push, the same Build Run keeps watching the GitHub Actions run (a Pipeline Agent diagnoses, the coder fixes — see [ARCHITECTURE.md](#agents-and-build-run-stages)) until green, bounded by the cost guardrail ([ARCHITECTURE.md](#cost-guardrails)) — never a fire-and-forget push that can leave `main` broken indefinitely.
+→ [issues/11](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
+
+### Style
+
+Purely mechanical — checks are the style guide, not prose. The Starter Template ships Prettier (`npm run format`) and ESLint (`npm run lint`, part of `npm run check` and so of the Test Gate); formatting itself is not a gate, so an old file is never failed for its layout, but the coder runs `npm run format` first, before the build and the tests. No prose conventions (naming philosophy, comment density) for an Agent to probabilistically get wrong. Beyond formatting, the lint config carries the Factory's own rules for what recurring review findings showed (a test must not assert on source text or on `flags.json`, no committed `.only`, a test must make an assertion, and one whose only assertions are `toBeTruthy`/`toBeDefined` is a warning; anything named `expect*`, `assert*`, `verify*` or `should*` counts as an assertion, so a helper such as `expectStatus` is fine); each has failing and passing cases in `agents/lint-fixtures/cases.json`. The lint and formatter config belongs to the Orchestrator: the coder cannot edit it or suppress a rule to get past it, it fixes the code. New rules arrive through template sync and the coder fixes what they report in that Update App Intake.
+→ [issues/11](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
+
+### Git workflow
+
+Only the coder Agent pushes, and it pushes directly to `main` — no branches, no PRs. Review happens after the push, on `main`, while the new feature is still dark behind its feature flag ([Release and retirement](#release-and-retirement)). The flag is the gate for going public, the test gate is the gate for a healthy build, and a self-merged PR would add a step without adding safety.
+→ [issues/11](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
+
+### Data and migrations
+
+A feature flag hides code, not data. A deploy applies any change to stored data to every user at once, while the feature is still dark, and switching the flag off cannot undo it. So a change that touches how data is stored is **additive**: add a new field, table or index and keep writing and reading the old shape until the new code has been released and is permanent. Never drop, rename or retype something the previous version still reads in the same change; do that in a later, separate update (expand, then contract) once nothing reads the old shape. A migration must be safe to run twice and must leave the previous version of the app working. The reviewer treats a non-additive change to stored data as blocking.
+
+### Secrets and configuration
+
+All runtime config/secrets via env vars only, documented via a committed `.env.example`. Zero hardcoded values.
+→ [issues/11](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
+
+### Dependencies
+
+Default to free/OSS/self-hostable packages; avoid paid SaaS SDKs unless a task genuinely requires one.
+→ [issues/11](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/11-coding-standards-content.md)
+
+### Rule discovery
+
+`AGENTS.md` at the repo root: OpenHands auto-loads it into its system prompt. The Starter Template seeds it with everything an Agent needs to follow these standards (stack, structure, commands, flags, rules), and Agents extend it with project-specific notes. The Standards are not copied into a Managed App repo, so anything a coder must follow belongs in that file or in a check.
+
+### Logging
+
+Managed App code emits structured (JSON) logs to stdout, picked up by Fly.io's native log aggregation — no extra infrastructure.
+→ [issues/13](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/13-visibility-standard-design.md)
+
+### Error handling
+
+A global uncaught-exception/unhandled-rejection handler is required, logging the full error/stack trace (not just the message string) before the process exits — never a silent crash.
+→ [issues/13](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/13-visibility-standard-design.md)
+
+### Deployment contents of a Managed App
+
+What a Managed App's own repo must contain. Orchestrator-side provisioning is under Deployment provisioning below.
+
+#### Containerization
+
+One container per Managed App — the backend serves the built frontend's static assets itself; no separate frontend container or second Fly app. Standard multi-stage Docker build, minimal base image, non-root user, pinned base image digest.
+→ [issues/12](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/12-deployment-standards-content.md)
+
+#### Registry
+
+GHCR, images tagged by git commit SHA (`ghcr.io/<org>/<app>:<sha>`), plus a floating `latest` tag for convenience that moves only when a commit has passed both the Test Gate and the build. SHA tags are immutable, so the deploy step always references an unambiguous image.
+→ [issues/12](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/12-deployment-standards-content.md)
+
+#### Workflow split
+
+Two separate GitHub Actions workflow files: `build.yml` (target-agnostic: checkout, build the image with a layer cache, tag by SHA, push to GHCR) and `deploy-fly.yml` (target-specific: `flyctl deploy`, driven by `fly.toml` + a thin provisioning script). `build.yml` runs in parallel with the Test Gate on every push to `main`, not after it; `deploy-fly.yml` starts when either finishes and proceeds only for the run that finds both green for the commit, so nothing deploys unless the Test Gate and the build both pass. The Test Gate installs, type-checks and tests; the image build does the real compile and bundle.
+
+**Swappability** is expressed structurally: the build workflow never changes across targets; moving a Managed App to a different host means replacing only `deploy-fly.yml` (and its referenced native config) with a new deploy workflow — a single, isolated file change by construction.
+→ [issues/12](https://github.com/ojones/ai-factory/blob/archive/pre-purge-2026-10-21/.scratch/orchestrator-spec/issues/12-deployment-standards-content.md)
+
+#### Starter Template contents: workflows and Fly config
+
+`build.yml`, `deploy-fly.yml`, and the Test Gate workflow (`test-gate.yml`, triggered on push to `main`) ship as **permanent, unmodified Starter Template content** — every Managed App gets byte-identical copies; App Staging never generates or mutates their YAML.
+
+The one value that varies per Managed App — the Fly app name — is never injected or persisted by App Staging either. Intake already fixes the repo name to the Managed App's name ([ARCHITECTURE.md's Intake section](#intake)), so every reference to the Fly app name derives it live from the repo's own name instead of having App Staging template or persist a separate value. Concretely, `fly.toml` has **no `app` field** (a static file can't derive it); `deploy-fly.yml` sets `FLY_APP_NAME` from the repository name and passes `--app` to every `flyctl` call, and `fly/provision.sh` reads `FLY_APP_NAME` from its environment.
+
+**Name collisions**: Fly app names are unique across all of Fly, so the Managed App's name (and therefore its repo name) must be globally free, not merely unused in the Factory's account. App Staging checks this before creating anything and refuses a taken name; pick something distinctive (e.g. prefix with the owner's handle).
+→ [issue #21](https://github.com/ojones/ai-factory/issues/21)
+
+#### GHCR to Fly image handoff
+
+New container packages on GHCR are private by default, and changing a package's visibility is UI-only (no API), so unattended App Staging can't make them public. Fly can't authenticate to pull a private GHCR image. So `deploy-fly.yml` — the Fly-specific file — pulls the SHA-tagged image from GHCR using the job's own token, re-pushes it to `registry.fly.io/<app>:<sha>`, and deploys from there. GHCR stays the registry of record and `build.yml` is unchanged, so swappability is preserved. If a package does turn out to inherit its public repo's visibility, this step is redundant but harmless.
+→ [GitHub docs on package visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility), [issue #30](https://github.com/ojones/ai-factory/issues/30)

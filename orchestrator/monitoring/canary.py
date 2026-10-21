@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-import json
 import os
 import sys
 
-from shared import config, github, provider, run_stops, shell
+from shared import alert_issue, config, github, provider, run_stops
 
 LABEL = "model-drift"
 
@@ -28,8 +27,7 @@ def render(found, checked):
     return "\n".join(lines)
 
 
-def main():
-    cfg = config.load()
+def model_status_cache(cfg):
     base, key = cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"]
     cache = {}
 
@@ -40,21 +38,18 @@ def main():
             except run_stops.ProviderBlocked:
                 cache[model] = "unknown"
         return cache[model]
+    return status_of, cache
 
+
+def main():
+    cfg = config.load()
+    status_of, cache = model_status_cache(cfg)
     found = drift(cfg, status_of)
     body = render(found, len(cache))
     print(body)
     repo, token = os.environ["GITHUB_REPOSITORY"], os.environ["FACTORY_GH_TOKEN"]
     github.ensure_label(repo, LABEL, token, "b60205", "A configured model is no longer served")
-    env = {**os.environ, "GH_TOKEN": token}
-    open_issues = json.loads(shell.sh(["gh", "issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--json", "number,body"], env=env).stdout or "[]")
-    if not found:
-        for i in open_issues:
-            shell.sh(["gh", "issue", "close", str(i["number"]), "--repo", repo, "--comment", "Every configured model answers again."], env=env, check=False)
-    elif not open_issues:
-        shell.sh(["gh", "issue", "create", "--repo", repo, "--label", LABEL, "--title", "A configured model is no longer served", "--body", body], env=env, check=False)
-    elif (open_issues[0].get("body") or "").strip() != body.strip():
-        shell.sh(["gh", "issue", "edit", str(open_issues[0]["number"]), "--repo", repo, "--body", body], env=env, check=False)
+    alert_issue.sync_alert_issue(repo, token, LABEL, found, body, "A configured model is no longer served", "Every configured model answers again.")
     return 0
 
 

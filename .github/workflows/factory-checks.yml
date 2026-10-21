@@ -102,3 +102,56 @@ jobs:
           # The PAT, not the Actions token: a merge made with the Actions token starts no workflow, and `resume-failed-child.yml` runs when this PR closes.
           GH_TOKEN: ${{ secrets.FACTORY_PAT }}
         run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --squash --delete-branch
+
+  factory-change-gate:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'factory-change/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: The reproduction fails on main and passes here, and the change is within scope and limits
+        working-directory: head
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: origin/${{ github.base_ref }}...HEAD
+        run: PYTHONPATH=orchestrator python -m factory_change.gate prove ../main .
+
+  factory-change-merge:
+    needs: [unit, starter, reviewer-smoke, factory-change-gate]
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'factory-change/') &&
+      contains(github.event.pull_request.labels.*.name, 'factory-change-auto')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Do all the files still merge on green, recomputed from the diff?
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: origin/${{ github.base_ref }}...HEAD
+        run: PYTHONPATH=orchestrator python -m factory_change.gate merge-check .
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --squash --delete-branch

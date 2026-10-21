@@ -49,7 +49,7 @@ npm run test:file -- src/__tests__/health.test.ts   # one test file (path relati
 npm run verify                 # check + full test, without the Vite bundle
 ```
 
-The test gate (per root STANDARDS-CODING.md) requires unit tests for
+The Test Gate requires unit tests for
 business logic plus one boot/health-check smoke test — see
 `backend/src/__tests__/health.test.ts` for the smoke-test pattern to extend.
 
@@ -80,27 +80,19 @@ business logic plus one boot/health-check smoke test — see
 - Preview: requests carrying `PREVIEW_TOKEN` (header `X-Preview-Token`, or
   `?preview=`) see every feature flag as on, so reviewers can test dark
   features. This is wired in `feature-flags.ts`; don't build another bypass.
-- Every call site must pass a real default value to `getBooleanValue()` (or
-  the equivalent for other types) — that default is what OpenFeature falls
-  back to if the GrowthBook instance is ever unreachable, per
-  STANDARDS-FEATURE-FLAGS.md's resilience rule.
+- Every call site passes `false` as the default of a boolean flag, never
+  `true`: GrowthBook's "off" reads as the default, so a `true` default makes
+  the flag impossible to turn off. A flag therefore fails closed if GrowthBook
+  is unreachable.
 - `GROWTHBOOK_CLIENT_KEY` (required) is the per-Managed-App SDK
   connection key, and `PREVIEW_TOKEN` the preview secret; both are pushed as
   repo secrets by the Orchestrator.
 
 ## Rules
 
-This is a scaffold, not the full rulebook. Full Standards (style, git
-workflow, secrets/config, dependency policy, deployment, logging/error
-handling, feature flags) live at the root of the `ai-factory` repo this
-template was seeded from:
-
-- `STANDARDS.md` (index)
-- `STANDARDS-CODING.md`
-- `STANDARDS-DEPLOYMENT.md`
-- `STANDARDS-VISIBILITY.md`
-- `STANDARDS-FEATURE-FLAGS.md`
-
-If this repo was seeded into a new Managed App, those files may not
-be physically present here — treat this section as a pointer back to the
-Factory's canonical copies.
+- **Config and secrets.** Environment variables only, nothing hardcoded; document every variable in the committed `.env.example`. A secret the task names is already in `process.env.<NAME>`: list its name and purpose in `secrets.json`, and never write a value anywhere (code, tests, logs).
+- **Dependencies.** Use an existing dependency before adding one. Prefer free, open-source, self-hostable packages; no paid SaaS SDK unless the task requires one.
+- **Stored data is additive.** A flag hides code, not data, and switching it off cannot undo a write. Add a field, table or index and keep reading and writing the old shape; never drop, rename or retype something the previous version still reads in the same change. A migration must be safe to run twice.
+- **Logging and errors.** Structured JSON logs to stdout. A global `uncaughtException` and `unhandledRejection` handler logs the full stack before the process exits; never crash silently.
+- **Git.** Commit to your local `main`, staging only the files you meant to change. Never push, never rewrite history.
+- **Not yours.** `.github/`, `Dockerfile`, `fly.toml`, `fly/`, the lint and formatter config and `backend/src/feature-flags.ts` belong to the Starter Template; commits that change them are discarded.

@@ -14,6 +14,8 @@ from shared import (
 from shared.console import log
 from shared.shell import sh
 
+UNREADABLE = object()
+
 
 class WriteCode:
     def coder(self, label, task, findings_path):
@@ -61,28 +63,36 @@ class WriteCode:
                 return problem
         return None
 
-    def secret_problem(self, base, head):
-        kinds = triage.diff_secrets(self.git("diff", f"{base}..{head}", check=False).stdout)
-        if kinds:
-            self.git("reset", "-q", "--hard", base)
-            return (f"Your commit added {' and '.join(kinds)}. The repository is public and secrets never go in code. It was discarded. Read the value "
-                    "from process.env at runtime and, in tests, use an obviously fake placeholder.")
-        listed = self.git("show", f"{head}:secrets.json", check=False)
-        if listed.returncode != 0:
+    def secret_names_in(self, ref):
+        shown = self.git("show", f"{ref}:secrets.json", check=False)
+        if shown.returncode != 0:
             return None
         try:
-            names = [x.get("name") for x in json.loads(listed.stdout).get("secrets", [])]
+            return [x.get("name") for x in json.loads(shown.stdout).get("secrets", [])]
         except (ValueError, AttributeError):
+            return UNREADABLE
+
+    def secret_value_problem(self, base, head):
+        kinds = triage.diff_secrets(self.git("diff", f"{base}..{head}", check=False).stdout)
+        if not kinds:
+            return None
+        self.git("reset", "-q", "--hard", base)
+        return (f"Your commit added {' and '.join(kinds)}. The repository is public and secrets never go in code. It was discarded. Read the value "
+                "from process.env at runtime and, in tests, use an obviously fake placeholder.")
+
+    def secret_problem(self, base, head):
+        value_problem = self.secret_value_problem(base, head)
+        names = self.secret_names_in(head)
+        if value_problem or names is None:
+            return value_problem
+        if names is UNREADABLE:
             return "`secrets.json` is not valid JSON of the form {\"secrets\": [{\"name\": \"...\", \"purpose\": \"...\"}]}."
-        earlier = self.git("show", f"{base}:secrets.json", check=False)
-        try:
-            known = {x.get("name") for x in json.loads(earlier.stdout).get("secrets", [])} if earlier.returncode == 0 else set()
-        except (ValueError, AttributeError):
-            known = set()
-        declared = set(self.state.d.get("secrets") or []) | known
+        earlier = self.secret_names_in(base)
+        declared = set(self.state.d.get("secrets") or []) | (set(earlier) if isinstance(earlier, list) else set())
         bad = [n for n in names if n not in declared or triage.secret_name_problem(n)]
-        return (f"`secrets.json` lists {', '.join(map(str, bad))}, which the plan did not declare. List only the secrets named in the request's Secrets note."
-                if bad else None)
+        if not bad:
+            return None
+        return f"`secrets.json` lists {', '.join(map(str, bad))}, which the plan did not declare. List only the secrets named in the request's Secrets note."
 
     def check_problem(self):
         try:

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 ORCHESTRATOR = Path(__file__).resolve().parent
-DOMAINS = ("request", "planning", "staging", "build_run", "flag_lifecycle", "retrospective", "try_fix", "bugs", "maintenance", "monitoring")
+DOMAINS = ("request", "planning", "staging", "build_run", "flag_lifecycle", "retrospective", "try_fix", "bugs", "maintenance", "monitoring", "factory_change")
 ALLOWED = {
     "request": set(),
     "planning": {"request"},
@@ -15,6 +15,7 @@ ALLOWED = {
     "bugs": {"request", "try_fix"},
     "maintenance": {"request"},
     "monitoring": {"request"},
+    "factory_change": {"build_run", "planning", "request", "retrospective", "try_fix"},
 }
 
 
@@ -68,7 +69,7 @@ class Boundaries(unittest.TestCase):
                 extra = (imported_tops(path) & (set(DOMAINS) | flat_modules())) - {domain, "shared"} - ALLOWED[domain]
                 if extra:
                     bad.append(f"{path.relative_to(ORCHESTRATOR)}: {sorted(extra)}")
-        self.assertEqual(bad, [], "add the edge to ALLOWED and docs/orchestrator-map.md only if it is deliberate")
+        self.assertEqual(bad, [], "add the edge to ALLOWED and ARCHITECTURE.md (Code layout) only if it is deliberate")
 
     def test_every_folder_under_orchestrator_is_a_domain_or_shared(self):
         folders = {p.name for p in ORCHESTRATOR.iterdir() if p.is_dir() and (p / "__init__.py").exists()}

@@ -24,28 +24,30 @@ TYPES = {
 }
 
 
+def object_mismatches(expected, observed, path):
+    if not isinstance(observed, dict):
+        return [f"{path}: expected an object, got {short(observed)}"]
+    out = []
+    for key, want in expected.items():
+        out += mismatches(want, observed[key], f"{path}.{key}") if key in observed else [f"{path}.{key}: missing"]
+    return out
+
+
+def array_mismatches(expected, observed, path):
+    if not isinstance(observed, list):
+        return [f"{path}: expected an array, got {short(observed)}"]
+    if len(expected) != len(observed):
+        return [f"{path}: expected {len(expected)} item(s), got {len(observed)}"]
+    return [m for i, (want, got) in enumerate(zip(expected, observed)) for m in mismatches(want, got, f"{path}[{i}]")]
+
+
 def mismatches(expected, observed, path="$"):
     if isinstance(expected, str) and expected in TYPES:
         return [] if TYPES[expected](observed) else [f"{path}: expected {expected[1:-1]}, got {short(observed)}"]
     if isinstance(expected, dict):
-        if not isinstance(observed, dict):
-            return [f"{path}: expected an object, got {short(observed)}"]
-        out = []
-        for key, want in expected.items():
-            if key not in observed:
-                out.append(f"{path}.{key}: missing")
-            else:
-                out += mismatches(want, observed[key], f"{path}.{key}")
-        return out
+        return object_mismatches(expected, observed, path)
     if isinstance(expected, list):
-        if not isinstance(observed, list):
-            return [f"{path}: expected an array, got {short(observed)}"]
-        if len(expected) != len(observed):
-            return [f"{path}: expected {len(expected)} item(s), got {len(observed)}"]
-        out = []
-        for i, (want, got) in enumerate(zip(expected, observed)):
-            out += mismatches(want, got, f"{path}[{i}]")
-        return out
+        return array_mismatches(expected, observed, path)
     if isinstance(expected, bool) or isinstance(observed, bool):
         return [] if expected is observed else [f"{path}: expected {short(expected)}, got {short(observed)}"]
     return [] if expected == observed else [f"{path}: expected {short(expected)}, got {short(observed)}"]
@@ -77,32 +79,33 @@ def substitute(value, captures):
     return value
 
 
-def compare(expect, status, body_text, body_json, headers):
-    problems = []
-    if "status" in expect:
-        want = expect["status"] if isinstance(expect["status"], list) else [expect["status"]]
-        if status not in want:
-            problems.append(f"status: expected {' or '.join(str(w) for w in want)}, got {status}")
-    if "json" in expect:
-        if body_json is None:
-            problems.append("json: the answer is not JSON")
-        else:
-            problems += mismatches(expect["json"], body_json)
-    for needle in expect.get("body_contains", []):
-        if needle not in body_text:
-            problems.append(f"body does not contain {short(needle)}")
-    for needle in expect.get("body_not_contains", []):
-        if needle in body_text:
-            problems.append(f"body contains {short(needle)}, which it must not")
+def status_problems(expect, status):
+    if "status" not in expect:
+        return []
+    want = expect["status"] if isinstance(expect["status"], list) else [expect["status"]]
+    return [] if status in want else [f"status: expected {' or '.join(str(w) for w in want)}, got {status}"]
+
+
+def json_problems(expect, body_json):
+    if "json" not in expect:
+        return []
+    return mismatches(expect["json"], body_json) if body_json is not None else ["json: the answer is not JSON"]
+
+
+def body_problems(expect, body_text):
+    missing = [f"body does not contain {short(n)}" for n in expect.get("body_contains", []) if n not in body_text]
+    return missing + [f"body contains {short(n)}, which it must not" for n in expect.get("body_not_contains", []) if n in body_text]
+
+
+def header_problems(expect, headers):
     lowered = {k.lower(): v for k, v in headers.items()}
-    for name, want in expect.get("headers", {}).items():
-        got = lowered.get(name.lower())
-        if got is None or want.lower() not in got.lower():
-            problems.append(f"header {name}: expected {short(want)}, got {short(got)}")
-    for name in expect.get("header_absent", []):
-        if name.lower() in lowered:
-            problems.append(f"header {name} is present, and must not be")
-    return problems
+    wrong = [(name, want, lowered.get(name.lower())) for name, want in expect.get("headers", {}).items()]
+    problems = [f"header {name}: expected {short(want)}, got {short(got)}" for name, want, got in wrong if got is None or want.lower() not in got.lower()]
+    return problems + [f"header {name} is present, and must not be" for name in expect.get("header_absent", []) if name.lower() in lowered]
+
+
+def compare(expect, status, body_text, body_json, headers):
+    return status_problems(expect, status) + json_problems(expect, body_json) + body_problems(expect, body_text) + header_problems(expect, headers)
 
 
 def validate(doc):
@@ -127,35 +130,46 @@ def validate(doc):
     return checks, None
 
 
+def request_body(request, captures, headers):
+    if "json" in request:
+        headers.setdefault("Content-Type", "application/json")
+        return json.dumps(substitute(request["json"], captures)).encode()
+    if "body" in request:
+        headers.setdefault("Content-Type", "application/json")
+        return str(substitute(request["body"], captures)).encode()
+    return None
+
+
+def send(req, url):
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return r.status, r.read(), dict(r.headers), None
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers), None
+    except (urllib.error.URLError, OSError) as e:
+        return 0, b"", {}, f"could not reach {url}: {e}"
+
+
+def parse_json(text):
+    try:
+        return json.loads(text) if text.strip() else None
+    except ValueError:
+        return None
+
+
 def do_request(base, request, captures, token):
-    method = str(request.get("method", "GET")).upper()
     url = base.rstrip("/") + substitute(request["path"], captures)
     headers = {k: str(substitute(v, captures)) for k, v in (request.get("headers") or {}).items()}
-    data = None
-    if "json" in request:
-        data = json.dumps(substitute(request["json"], captures)).encode()
-        headers.setdefault("Content-Type", "application/json")
-    elif "body" in request:
-        data = str(substitute(request["body"], captures)).encode()
-        headers.setdefault("Content-Type", "application/json")
+    data = request_body(request, captures, headers)
     if request.get("auth") == "preview":
         if not token:
             return 0, "", None, {}, "PREVIEW_TOKEN is not set in the environment, so an auth: preview check cannot be made"
         headers["X-Preview-Token"] = token
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            status, raw, hdrs = r.status, r.read(), dict(r.headers)
-    except urllib.error.HTTPError as e:
-        status, raw, hdrs = e.code, e.read(), dict(e.headers)
-    except (urllib.error.URLError, OSError) as e:
-        return 0, "", None, {}, f"could not reach {url}: {e}"
+    status, raw, hdrs, problem = send(urllib.request.Request(url, data=data, method=str(request.get("method", "GET")).upper(), headers=headers), url)
+    if problem:
+        return 0, "", None, {}, problem
     text = raw.decode(errors="replace")
-    try:
-        parsed = json.loads(text) if text.strip() else None
-    except ValueError:
-        parsed = None
-    return status, text, parsed, hdrs, None
+    return status, text, parse_json(text), hdrs, None
 
 
 def run_checks(checks, base, token, log_path=None):
@@ -193,24 +207,35 @@ def render(results):
     return "\n".join(lines)
 
 
-def main(argv):
+def read_args(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     base = os.environ.get("API_CHECK_BASE", "")
     if "--base" in argv:
         base = argv[argv.index("--base") + 1]
         args = [a for a in args if a != base]
-    if len(args) != 1 or not base.startswith(("http://", "https://")):
-        print("usage: api_check.py checks.json --base https://host   (or set API_CHECK_BASE)", file=sys.stderr)
-        return 2
+    return args, base
+
+
+def load_checks(path):
     try:
-        with open(args[0], encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             doc = json.load(f)
     except (OSError, ValueError) as e:
-        print(f"cannot read {args[0]}: {e}", file=sys.stderr)
-        return 2
+        print(f"cannot read {path}: {e}", file=sys.stderr)
+        return None
     checks, error = validate(doc)
     if error:
         print(f"unusable checks file: {error}", file=sys.stderr)
+    return checks
+
+
+def main(argv):
+    args, base = read_args(argv)
+    if len(args) != 1 or not base.startswith(("http://", "https://")):
+        print("usage: api_check.py checks.json --base https://host   (or set API_CHECK_BASE)", file=sys.stderr)
+        return 2
+    checks = load_checks(args[0])
+    if checks is None:
         return 2
     results = run_checks(checks, base, os.environ.get("PREVIEW_TOKEN"), os.environ.get("API_CHECK_LOG"))
     print(render(results))

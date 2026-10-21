@@ -36,7 +36,7 @@ jobs:
     # Job-level, so label events this job does not handle never queue behind a real one.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      ((github.event.label.name == 'update-app-intake' || github.event.label.name == 'new-app-intake') &&
+      ((github.event.label.name == 'update-app-intake' || github.event.label.name == 'new-app-intake' || github.event.label.name == 'factory-change') &&
       !contains(github.event.issue.body, 'factory-plan:') &&
       !contains(github.event.issue.labels.*.name, 'benchmark'))
     runs-on: ubuntu-latest
@@ -82,4 +82,8 @@ jobs:
           FACTORY_GH_TOKEN: ${{ github.token }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
-        run: PYTHONPATH=factory/orchestrator python -m planning.plan_run
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          module=planning.plan_run
+          if [ "$LABEL" = factory-change ]; then module=factory_change.plan; fi
+          PYTHONPATH=factory/orchestrator python -m "$module"

@@ -41,7 +41,7 @@ def render_fix_for(fix_for, origin_parent, attempt):
     return f"<!-- fix-for:{json.dumps(meta, separators=(',', ':'))} -->"
 
 
-KINDS = ("staging", "update")
+KINDS = ("staging", "update", "factory")
 
 
 class ChildTicketError(RuntimeError):

@@ -23,36 +23,62 @@ def lesson_fingerprint(kind, basis):
     return hashlib.sha1(json.dumps([kind, basis]).encode()).hexdigest()[:8]
 
 
-def lessons_from(facts):
-    outcome, ok = facts["outcome"], facts["outcome"] in outcomes.OK
-    found = []
+def lesson(kind, basis, detail, severe=False):
+    return [{"kind": kind, "severe": severe, "detail": detail, "title": f"Lesson [{kind}] {lesson_fingerprint(kind, basis)}"}]
 
-    def add(kind, basis, detail, severe=False):
-        found.append({"kind": kind, "severe": severe, "detail": detail,
-                      "title": f"Lesson [{kind}] {lesson_fingerprint(kind, basis)}"})
 
-    if facts.get("audit"):
-        add("audit_violation", sorted(a["rule"] for a in facts["audit"]),
-            "The run broke a design invariant: " + "; ".join(f"{a['rule']}: {a['detail']}" for a in facts["audit"]), severe=True)
-    if outcome == "watchdog_disabled":
-        add("watchdog_disabled", [], f"The watchdog switched a release off: {facts['message']}", severe=True)
+def audit_lessons(facts):
+    if not facts.get("audit"):
+        return []
+    broken = "; ".join(f"{a['rule']}: {a['detail']}" for a in facts["audit"])
+    return lesson("audit_violation", sorted(a["rule"] for a in facts["audit"]), "The run broke a design invariant: " + broken, severe=True)
+
+
+def watchdog_lessons(facts):
+    if facts["outcome"] != "watchdog_disabled":
+        return []
+    return lesson("watchdog_disabled", [], f"The watchdog switched a release off: {facts['message']}", severe=True)
+
+
+def flag_lessons(facts):
     for note in (facts.get("flag_notes") or [])[:1]:
-        add("flag_missing", [note.get("kind"), "named" if note.get("guess", "").startswith("the flag") else "other"],
-            f"A flag was missing at release ({note.get('kind')}): `{note.get('slug')}`. Likely cause: {note.get('guess')}.", severe=note.get("kind") != "missing_dark")
-    if ok and facts.get("review_passes", 0) >= EXTRA_ROUND_PASSES:
-        basis = facts["recurring_findings"] or sorted({tracker.normalize(s) for r in facts["rounds"] for s in r["blocking"]})
-        add("many_rounds", basis, f"It needed {facts['review_passes']} review passes. Blocking findings across the rounds: "
-            + "; ".join(sorted({s for r in facts["rounds"] for s in r["blocking"]}) or ["none recorded"]))
+        named = "named" if note.get("guess", "").startswith("the flag") else "other"
+        return lesson("flag_missing", [note.get("kind"), named],
+                      f"A flag was missing at release ({note.get('kind')}): `{note.get('slug')}`. Likely cause: {note.get('guess')}.", severe=note.get("kind") != "missing_dark")
+    return []
+
+
+def many_rounds_lessons(facts):
+    if facts["outcome"] not in outcomes.OK or facts.get("review_passes", 0) < EXTRA_ROUND_PASSES:
+        return []
+    blocking = sorted({s for r in facts["rounds"] for s in r["blocking"]})
+    basis = facts["recurring_findings"] or sorted({tracker.normalize(s) for s in blocking})
+    return lesson("many_rounds", basis, f"It needed {facts['review_passes']} review passes. Blocking findings across the rounds: " + "; ".join(blocking or ["none recorded"]))
+
+
+def first_pass_lessons(facts):
     first_test = facts["rounds"][0]["tester_blocking"] if facts["rounds"] else []
-    if ok and first_test:
-        add("first_pass_test_failure", sorted(tracker.normalize(s) for s in first_test),
-            "The first test pass failed and the coder had to fix: " + "; ".join(first_test))
-    if ok and facts.get("cap_usd") and (facts.get("spent_usd") or 0) >= BUDGET_SHARE * facts["cap_usd"]:
-        add("budget_high", [], f"It spent ${facts['spent_usd']:.2f} of its ${facts['cap_usd']:.2f} cap.")
-    for st in facts["stages"]:
-        if (st.get("seconds") or 0) > SLOW_STAGE_SECONDS:
-            add("slow_stage", [st["stage"]], f"The {st['stage']} stage (round {st['round']}) took {st['seconds']:.0f}s.")
-            break
+    if facts["outcome"] not in outcomes.OK or not first_test:
+        return []
+    return lesson("first_pass_test_failure", sorted(tracker.normalize(s) for s in first_test), "The first test pass failed and the coder had to fix: " + "; ".join(first_test))
+
+
+def budget_lessons(facts):
+    if facts["outcome"] in outcomes.OK and facts.get("cap_usd") and (facts.get("spent_usd") or 0) >= BUDGET_SHARE * facts["cap_usd"]:
+        return lesson("budget_high", [], f"It spent ${facts['spent_usd']:.2f} of its ${facts['cap_usd']:.2f} cap.")
+    return []
+
+
+def slow_stage_lessons(facts):
+    slow = next((st for st in facts["stages"] if (st.get("seconds") or 0) > SLOW_STAGE_SECONDS), None)
+    if not slow:
+        return []
+    return lesson("slow_stage", [slow["stage"]], f"The {slow['stage']} stage (round {slow['round']}) took {slow['seconds']:.0f}s.")
+
+
+def lessons_from(facts):
+    checks = (audit_lessons, watchdog_lessons, flag_lessons, many_rounds_lessons, first_pass_lessons, budget_lessons, slow_stage_lessons)
+    found = [x for check in checks for x in check(facts)]
     found.sort(key=lambda x: not x["severe"])
     return found[:MAX_LESSONS]
 

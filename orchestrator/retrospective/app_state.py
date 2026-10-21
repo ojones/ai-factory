@@ -22,40 +22,56 @@ def story_link(flag):
     return f"[#{flag['issue']}]({m.group(1)}/issues/{flag['issue']})" if m and flag.get("issue") else "-"
 
 
-def render_state(prev_body, d):
-    data = app_state_record.load(prev_body)
-    runs = data.get("runs", [])
-    runs.append({"date": day(d), "outcome": d.get("outcome"), "kind": d.get("build_kind") or "", "run_url": d.get("run_url") or "",
-                 "cost": round(d.get("spent_usd") or 0, 2), "rounds": d.get("review_passes") or 0,
-                 "released": (d.get("release") or {}).get("released") or []})
-    runs = runs[-MAX_RUNS:]
-    flags = {f["key"]: f for f in data.get("flags", [])}
+def run_entry(d):
+    return {"date": day(d), "outcome": d.get("outcome"), "kind": d.get("build_kind") or "", "run_url": d.get("run_url") or "",
+            "cost": round(d.get("spent_usd") or 0, 2), "rounds": d.get("review_passes") or 0, "released": (d.get("release") or {}).get("released") or []}
+
+
+def flag_entry(d, key, state):
+    return {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"), "state": state}
+
+
+def failed_flags_are_dark(d):
+    gone_wrong = d.get("outcome") not in outcomes.OK + ("refused", outcomes.PROVIDER_BLOCKED)
+    return bool(d.get("flags") and d.get("commits") and gone_wrong and d.get("outcome") != "watchdog_disabled")
+
+
+def updated_flags(d, flags):
     off = d.get("outcome") == "watchdog_disabled"
     for key in (d.get("release") or {}).get("released") or []:
-        flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"),
-                      "state": "switched off by the watchdog" if off else "released"}
-    if d.get("flags") and d.get("commits") and d.get("outcome") not in outcomes.OK + ("refused", outcomes.PROVIDER_BLOCKED) and not off:
+        flags[key] = flag_entry(d, key, "switched off by the watchdog" if off else "released")
+    if failed_flags_are_dark(d):
         for slug in d["flags"]:
             key = f"{d.get('app')}.feature.{slug}"
             if key not in flags or str(flags[key].get("state", "")).startswith("dark"):
-                flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"),
-                              "state": "dark (failed its checks; fixed forward by a fix child)"}
-    data = {"runs": runs, "flags": sorted(flags.values(), key=lambda f: f["date"])}
+                flags[key] = flag_entry(d, key, "dark (failed its checks; fixed forward by a fix child)")
+    return sorted(flags.values(), key=lambda f: f["date"])
+
+
+def run_rows(runs):
+    return [f"| {cell(r['date'])} | {cell(r['outcome'])} | {cell(r['kind'])} | {r['rounds']} | ${r['cost']:.2f} | "
+            f"{cell(', '.join(k.split('.feature.')[-1] for k in r['released']) or '-')} |" for r in reversed(runs)]
+
+
+def flag_rows(flags):
+    if not flags:
+        return ["None yet."]
+    rows = [f"| `{cell(f['key'])}` | {cell(f['date'])} | {cell(f['state'])} | {story_link(f)} |" for f in reversed(flags)]
+    return ["| Flag | Date | State | Story |", "|---|---|---|---|"] + rows
+
+
+def render_state(prev_body, d):
+    data = app_state_record.load(prev_body)
+    runs = (data.get("runs", []) + [run_entry(d)])[-MAX_RUNS:]
+    data = {"runs": runs, "flags": updated_flags(d, {f["key"]: f for f in data.get("flags", [])})}
     last = runs[-1]
     lines = [f"# {d.get('app')}: Factory state", "",
              "Kept up to date by the Orchestrator after every Build Run. Edit nothing here by hand; it is rewritten.", "",
              f"**Last Build Run**: {cell(last['outcome'])} on {cell(last['date'])} ([run]({last['run_url']}))", "",
              "## Recent Build Runs", "", "| Date | Outcome | Kind | Rounds | Cost | Released |", "|---|---|---|---|---|---|"]
-    lines += [f"| {cell(r['date'])} | {cell(r['outcome'])} | {cell(r['kind'])} | {r['rounds']} | ${r['cost']:.2f} | "
-              f"{cell(', '.join(k.split('.feature.')[-1] for k in r['released']) or '-')} |" for r in reversed(runs)]
-    lines += ["", "## Flags from Build Runs", "",
-              "The state is as of the release (or the watchdog); the owner may have changed a flag in GrowthBook since. A dark flag was never released: its story is labelled `dark-broken` once its retries are used up.", ""]
-    if data["flags"]:
-        lines += ["| Flag | Date | State | Story |", "|---|---|---|---|"]
-        lines += [f"| `{cell(f['key'])}` | {cell(f['date'])} | {cell(f['state'])} | {story_link(f)} |" for f in reversed(data["flags"])]
-    else:
-        lines.append("None yet.")
-    return "\n".join(lines) + "\n\n" + app_state_record.dump(data) + "\n"
+    lines += run_rows(runs) + ["", "## Flags from Build Runs", "",
+                               "The state is as of the release (or the watchdog); the owner may have changed a flag in GrowthBook since. A dark flag was never released: its story is labelled `dark-broken` once its retries are used up.", ""]
+    return "\n".join(lines + flag_rows(data["flags"])) + "\n\n" + app_state_record.dump(data) + "\n"
 
 
 def render_registry(prev_body, d, state_url):
@@ -74,36 +90,38 @@ def render_registry(prev_body, d, state_url):
     return "\n".join(lines) + "\n\n" + app_state_record.dump(data) + "\n"
 
 
+def gh_text(args, token):
+    return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=False).stdout
+
+
+def write_body_file(body):
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as f:
+        f.write(body)
+    return f.name
+
+
+def create_state_issue(repo, token, label, title, color, body):
+    gh_text(["label", "create", label, "--repo", repo, "--color", color, "--description", "Maintained by the Orchestrator"], token)
+    made = gh_text(["issue", "create", "--repo", repo, "--label", label, "--title", title, "--body-file", write_body_file(body)], token)
+    m = re.search(r"https://\S+/issues/(\d+)", made)
+    if m:
+        gh_text(["issue", "pin", m.group(1), "--repo", repo], token)
+    return m.group(0) if m else ""
+
+
+def upsert_state_issue(repo, token, label, title, color, render):
+    found = json.loads(gh_text(["issue", "list", "--repo", repo, "--label", label, "--state", "open", "--json", "number,body,url"], token) or "[]")
+    body = render(found[0]["body"] if found else "")
+    if not found:
+        return create_state_issue(repo, token, label, title, color, body)
+    gh_text(["issue", "edit", str(found[0]["number"]), "--repo", repo, "--body-file", write_body_file(body)], token)
+    return found[0]["url"]
+
+
 def update_state_issues(d, factory_repo, pat, factory_token):
     try:
-        owner, app = factory_repo.split("/")[0], d["app"]
-        app_repo = f"{owner}/{app}"
-
-        def gh(args, token):
-            return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=False).stdout
-
-        def upsert(repo, token, label, title, color, render):
-            found = json.loads(gh(["issue", "list", "--repo", repo, "--label", label, "--state", "open",
-                                   "--json", "number,body,url"], token) or "[]")
-            prev = found[0]["body"] if found else ""
-            body = render(prev)
-            if found:
-                number, url = found[0]["number"], found[0]["url"]
-                with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as f:
-                    f.write(body)
-                gh(["issue", "edit", str(number), "--repo", repo, "--body-file", f.name], token)
-                return url
-            gh(["label", "create", label, "--repo", repo, "--color", color, "--description", "Maintained by the Orchestrator"], token)
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as f:
-                f.write(body)
-            made = gh(["issue", "create", "--repo", repo, "--label", label, "--title", title, "--body-file", f.name], token)
-            m = re.search(r"https://\S+/issues/(\d+)", made)
-            if m:
-                gh(["issue", "pin", m.group(1), "--repo", repo], token)
-            return m.group(0) if m else ""
-
-        state_url = upsert(app_repo, pat, app_state_record.STATE_LABEL, "Factory: app state", "5319e7", lambda prev: render_state(prev, d))
-        upsert(factory_repo, factory_token, app_state_record.REGISTRY_LABEL, "Factory: Managed Apps", "5319e7",
-               lambda prev: render_registry(prev, d, state_url))
+        app_repo = f"{factory_repo.split('/')[0]}/{d['app']}"
+        state_url = upsert_state_issue(app_repo, pat, app_state_record.STATE_LABEL, "Factory: app state", "5319e7", lambda prev: render_state(prev, d))
+        upsert_state_issue(factory_repo, factory_token, app_state_record.REGISTRY_LABEL, "Factory: Managed Apps", "5319e7", lambda prev: render_registry(prev, d, state_url))
     except Exception as e:  # noqa: BLE001
         print(f"could not update the state issues: {type(e).__name__}", flush=True)

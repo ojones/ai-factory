@@ -14,7 +14,7 @@ from retrospective import agent_run, learning_pr, tracker  # noqa: E402
 
 class Paths(unittest.TestCase):
     def test_only_prompts_template_orchestrator_and_docs_are_allowed(self):
-        for ok in ("agents/prompts/coder.md", "templates/starter/AGENTS.md", "orchestrator/build_run.py", "STANDARDS.md"):
+        for ok in ("agents/prompts/coder.md", "templates/starter/AGENTS.md", "orchestrator/build_run.py", "ARCHITECTURE.md"):
             self.assertTrue(agent_run.allowed_path(ok), ok)
         for bad in (".github/workflows/build-run.yml", "templates/starter/.github/workflows/build.yml",
                     "templates/starter/fly/provision.sh", "templates/starter/fly.toml", "README.md",

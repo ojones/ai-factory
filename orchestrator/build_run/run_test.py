@@ -17,7 +17,7 @@ def finding(**over):
 
 class RoundLoop(unittest.TestCase):
 
-    def make(self, reviews, tests, pipeline_fix=False):
+    def bare_run(self):
         run = object.__new__(BuildRun)
         run.app, run.build_kind, run.plan_meta = "demo", "update", None
         run.task, run.retiring, run.fix_for = "do it", (), None
@@ -29,14 +29,17 @@ class RoundLoop(unittest.TestCase):
         run.calls, run.heads = [], iter(["c1", "c2", "c3", "c4"])
         run.setup = lambda: None
         run.coder = lambda label, task, path: (run.calls.append(f"coder{label}"), next(run.heads))[1]
-        reviews, tests = iter(reviews), iter(tests)
+        return run
 
+    def stub_review_and_push(self, run, reviews):
         def review(base, head, rnd):
             run.calls.append(f"review {head}")
             return next(reviews)
         run.review_before_push = review
         run.run_flags = lambda base, head: ["f"]
         run.push = lambda head: (run.calls.append(f"push {head}"), run.state.d["commits"].append(head))
+
+    def stub_pipeline_and_tests(self, run, tests, pipeline_fix):
         fixes = iter([pipeline_fix])
 
         def pipeline(sha):
@@ -51,6 +54,8 @@ class RoundLoop(unittest.TestCase):
             run.calls.append(f"test {head}")
             return next(tests)
         run.test_deployed = test
+
+    def stub_release(self, run):
         run.head = lambda: run.last
         run.record_round = lambda *a: None
         run.release = lambda flags, head: run.calls.append("release")
@@ -61,6 +66,12 @@ class RoundLoop(unittest.TestCase):
         run.archive_retired_flags = lambda base, head: None
         run.check_limits = lambda: None
         run.cap = 1.0
+
+    def make(self, reviews, tests, pipeline_fix=False):
+        run = self.bare_run()
+        self.stub_review_and_push(run, iter(reviews))
+        self.stub_pipeline_and_tests(run, iter(tests), pipeline_fix)
+        self.stub_release(run)
         return run
 
     def go(self, run):

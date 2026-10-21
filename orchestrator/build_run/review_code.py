@@ -108,31 +108,36 @@ REVIEW_SCHEMA = {
 FLAG_REF_RE = re.compile(r"^[\w.-]+/[\w.-]+#\d+:")
 
 
-def flag_findings(git, head, slugs):
-    try:
-        declared = {f["slug"]: f for f in json.loads(git("show", f"{head}:flags.json") or "[]") if isinstance(f, dict) and "slug" in f}
-    except ValueError:
-        return []
-    out = []
+def flag_finding(summary, entry, requirement, fix):
+    return {"severity": "minor", "category": "flag_misuse", "evidence_kind": "cited", "summary": summary, "evidence": entry,
+            "file": "flags.json", "line": "", "requirement": requirement, "suggested_fix": fix, "repro": "", "source": "orchestrator"}
 
-    def finding(slug, summary, entry, requirement, fix):
-        return {"severity": "minor", "category": "flag_misuse", "evidence_kind": "cited", "summary": summary, "evidence": entry,
-                "file": "flags.json", "line": "", "requirement": requirement, "suggested_fix": fix, "repro": "", "source": "orchestrator"}
-    for slug in slugs:
-        entry = declared.get(slug)
-        if entry is None:
-            continue
-        shown = json.dumps(entry)
-        hits = flag_usage.code_reads(git, head, slug)
-        if not hits:
-            out.append(finding(slug, f"Flag `{slug}` is declared in flags.json but no code outside the tests reads it", shown,
-                               "A declared flag must guard something, or it is released with nothing behind it.",
-                               "Check the flag with isFeatureEnabled(res, slug) at the change's entry point, or remove the entry."))
-        if not FLAG_REF_RE.match(str(entry.get("description") or "")):
-            out.append(finding(slug, f"Flag `{slug}` has no issue reference at the start of its description", shown,
-                               "A flag's description starts with the story it came from (`owner/repo#number:`).",
-                               "Start the description with the issue reference."))
+
+def declared_flags(git, head):
+    try:
+        return {f["slug"]: f for f in json.loads(git("show", f"{head}:flags.json") or "[]") if isinstance(f, dict) and "slug" in f}
+    except ValueError:
+        return None
+
+
+def single_flag_findings(git, head, slug, entry):
+    shown, out = json.dumps(entry), []
+    if not flag_usage.code_reads(git, head, slug):
+        out.append(flag_finding(f"Flag `{slug}` is declared in flags.json but no code outside the tests reads it", shown,
+                                "A declared flag must guard something, or it is released with nothing behind it.",
+                                "Check the flag with isFeatureEnabled(res, slug) at the change's entry point, or remove the entry."))
+    if not FLAG_REF_RE.match(str(entry.get("description") or "")):
+        out.append(flag_finding(f"Flag `{slug}` has no issue reference at the start of its description", shown,
+                                "A flag's description starts with the story it came from (`owner/repo#number:`).",
+                                "Start the description with the issue reference."))
     return out
+
+
+def flag_findings(git, head, slugs):
+    declared = declared_flags(git, head)
+    if declared is None:
+        return []
+    return [f for slug in slugs if declared.get(slug) is not None for f in single_flag_findings(git, head, slug, declared[slug])]
 
 
 SUPPRESSION_RE = re.compile(r"eslint-disable|@ts-ignore|@ts-nocheck")
@@ -192,27 +197,37 @@ def build_review_context(git, base, head, max_chars, spec=None):
     return text
 
 
-def single_call_review(base_url, key, model, system, user, timeout=300, attempts=4):
-    body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+def review_request_body(model, system, user):
+    return {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "response_format": {"type": "json_schema", "json_schema": {"name": "review_verdict", "schema": REVIEW_SCHEMA, "strict": True}}}
+
+
+def reply_to_verdict(r):
+    try:
+        doc = json.loads(r["choices"][0]["message"]["content"])
+        derive_review(doc)
+        return doc, r.get("usage") or {}, None
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        return None, None, f"unusable reply: {e}"
+
+
+def worth_retrying(status):
+    return status in (0, 429) or status >= 500 or status == 200
+
+
+def single_call_review(base_url, key, model, system, user, timeout=300, attempts=4):
+    body = review_request_body(model, system, user)
     last = None
     for attempt in range(1, attempts + 1):
         status, r = http_client.request("POST", f"{base_url}/chat/completions", key, body, timeout=timeout)
-        if status == 200 and isinstance(r, dict):
-            try:
-                doc = json.loads(r["choices"][0]["message"]["content"])
-                derive_review(doc)
-                return doc, r.get("usage") or {}
-            except (KeyError, IndexError, TypeError, ValueError) as e:
-                last = f"unusable reply: {e}"
-        else:
-            last = f"HTTP {status}: {str(r)[:200]}"
-            if status == 402:
-                raise run_stops.ProviderBlocked(provider.BLOCKED_MESSAGE)
-        if attempt < attempts and (status in (0, 429) or status >= 500 or status == 200):
-            time.sleep(5 * attempt)
-        else:
+        if status == 402:
+            raise run_stops.ProviderBlocked(provider.BLOCKED_MESSAGE)
+        doc, usage, last = reply_to_verdict(r) if status == 200 and isinstance(r, dict) else (None, None, f"HTTP {status}: {str(r)[:200]}")
+        if doc is not None:
+            return doc, usage
+        if attempt == attempts or not worth_retrying(status):
             break
+        time.sleep(5 * attempt)
     raise FastReviewFailed(last)
 
 
@@ -250,21 +265,24 @@ class ReviewCode:
     def note_improvements(self, doc, source):
         self.state.d["improvements"] = suggestions.merge_improvements(self.state.d.get("improvements") or [], suggestions.improvements_from(doc, source))
 
+    def single_call_or_none(self, base, head, rnd):
+        if self.cfg["roles"]["reviewer"].get("mode", "agent") != "single_call":
+            return None
+        try:
+            return self.fast_review(base, head, rnd)
+        except (ContextTooLarge, FastReviewFailed) as e:
+            log(f"Single-call review not possible ({e}); using the exploring reviewer.")
+            return None
+
+    def exploring_review(self, base, head, rnd):
+        values = {"base_sha": base, "head_sha": head, "verdict_path": self.work / f"verdict-{rnd}.json"}
+        return self.agent_json("reviewer", f"r{rnd}", values, self.work / f"verdict-{rnd}.json", check=lambda d: derive_review(d) and None,
+                               home=self.work / f"home-reviewer-{rnd}")
+
     def review_before_push(self, base, head, rnd):
         self.state.d["review_passes"] = rnd
         self.restore_tree()
-        role_mode = self.cfg["roles"]["reviewer"].get("mode", "agent")
-        doc = None
-        if role_mode == "single_call":
-            try:
-                doc, cost, usage = self.fast_review(base, head, rnd)
-            except (ContextTooLarge, FastReviewFailed) as e:
-                log(f"Single-call review not possible ({e}); using the exploring reviewer.")
-        if doc is None:
-            doc, cost, usage = self.agent_json(
-                "reviewer", f"r{rnd}", {"base_sha": base, "head_sha": head, "verdict_path": self.work / f"verdict-{rnd}.json"},
-                self.work / f"verdict-{rnd}.json", check=lambda d: derive_review(d) and None,
-                home=self.work / f"home-reviewer-{rnd}")
+        doc, cost, usage = self.single_call_or_none(base, head, rnd) or self.exploring_review(base, head, rnd)
         self.restore_tree()
         clean, blocking, minor = derive_review(doc)
         git = lambda *a: self.git(*a, check=False).stdout

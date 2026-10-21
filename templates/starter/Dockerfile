@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# Multi-stage build, per STANDARDS-DEPLOYMENT.md:
+# Multi-stage build, per ARCHITECTURE.md (Managed app standards):
 #   - one container total (backend serves the built frontend itself —
 #     no separate frontend container/app)
 #   - minimal base image, non-root user, base image pinned by digest

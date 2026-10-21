@@ -5,7 +5,7 @@ import type { RequestHandler, Response } from "express";
 
 /**
  * The app slug scopes every flag key, because all Managed Apps share one
- * GrowthBook project (STANDARDS-FEATURE-FLAGS.md). It is the Fly app name,
+ * GrowthBook project. It is the Fly app name,
  * which is the repo name — Fly sets FLY_APP_NAME at runtime, so nothing is
  * injected per app. APP_SLUG is the override for local runs and tests.
  */
@@ -76,7 +76,7 @@ function readCookie(header: string | undefined, name: string): string | undefine
 }
 
 /**
- * Preview Token support (STANDARDS-FEATURE-FLAGS.md#preview). A request
+ * Preview Token support. A request
  * carrying the token — `X-Preview-Token` header, `?preview=<token>` (which
  * also sets an HttpOnly cookie for browser sessions), or that cookie — sees
  * every `feature.*` flag as on, so a dark feature can be exercised in the

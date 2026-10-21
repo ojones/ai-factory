@@ -52,7 +52,7 @@ class FlowSpec(unittest.TestCase):
         self.assertEqual(used - declared, set(), "used but never declared")
         self.assertEqual(declared - used, set())
         groups = set(re.findall(r'subgraph (g\d+)\["', diagram()))
-        self.assertEqual(groups, {f"g{n}" for n in range(1, 9)})
+        self.assertEqual(groups, {f"g{n}" for n in range(1, 10)})
 
     def test_the_step_index_lists_exactly_the_diagram_steps(self):
         in_index = set()

@@ -136,34 +136,44 @@ def fetch(method, url, headers):
         return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read().decode("utf-8", "replace")
 
 
+class LiveProbes:
+    def __init__(self, env, app_repo, app):
+        self.pat, self.admin, self.app_repo, self.app = env["FACTORY_PAT"], env["GROWTHBOOK_ADMIN_PAT"], app_repo, app
+        self.api = f"{env.get('GROWTHBOOK_API_HOST', 'https://ai-factory-growthbook.fly.dev:3100')}/api/v1"
+
+    def runs(self, commit):
+        p = github.run(["run", "list", "--repo", self.app_repo, "--commit", commit, "--json", "workflowName,status,conclusion", "--limit", "30"], self.pat)
+        return [{"name": r["workflowName"], "status": r["status"], "conclusion": r["conclusion"]} for r in json.loads(p.stdout or "[]")]
+
+    def secret_names(self):
+        p = github.run(["secret", "list", "--repo", self.app_repo, "--json", "name"], self.pat)
+        return {x["name"] for x in json.loads(p.stdout or "[]")}
+
+    def flag_connection(self):
+        req = urllib.request.Request(f"{self.api}/sdk-connections?limit=100", headers={"Authorization": f"Bearer {self.admin}"})
+        found = json.loads(urllib.request.urlopen(req, timeout=30).read())
+        return any(c.get("name") == self.app for c in found.get("connections") or [])
+
+
+def declared_secret_names(repo, number, pat):
+    body = json.loads(github.run(["issue", "view", number, "--repo", repo, "--json", "body"], pat).stdout)["body"]
+    return [x["name"] for x in child_tickets.read_marker(body).get("secrets") or []]
+
+
+def publish_report(env, repo, number, text):
+    print(text)
+    with open(env.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
+        f.write(text + "\n")
+    github.run(["issue", "comment", number, "--repo", repo, "--body", text], env.get("GH_TOKEN", env["FACTORY_PAT"]))
+
+
 def main():
     e = os.environ
     repo, number, app, sha = e["FACTORY_REPO"], e["ISSUE_NUMBER"], e["APP_NAME"], e["SEED_SHA"]
-    pat, admin = e["FACTORY_PAT"], e["GROWTHBOOK_ADMIN_PAT"]
-    app_repo = f"{repo.split('/')[0]}/{app}"
-    api = f"{e.get('GROWTHBOOK_API_HOST', 'https://ai-factory-growthbook.fly.dev:3100')}/api/v1"
-
-    def runs(commit):
-        p = github.run(["run", "list", "--repo", app_repo, "--commit", commit, "--json", "workflowName,status,conclusion", "--limit", "30"], pat)
-        return [{"name": r["workflowName"], "status": r["status"], "conclusion": r["conclusion"]} for r in json.loads(p.stdout or "[]")]
-
-    def secret_names():
-        p = github.run(["secret", "list", "--repo", app_repo, "--json", "name"], pat)
-        return {x["name"] for x in json.loads(p.stdout or "[]")}
-
-    def flag_connection():
-        req = urllib.request.Request(f"{api}/sdk-connections?limit=100", headers={"Authorization": f"Bearer {admin}"})
-        found = json.loads(urllib.request.urlopen(req, timeout=30).read())
-        return any(c.get("name") == app for c in found.get("connections") or [])
-
-    declared = [x["name"] for x in child_tickets.read_marker(json.loads(github.run(["issue", "view", number, "--repo", repo, "--json", "body"], pat).stdout)
-                                                              ["body"]).get("secrets") or []]
-    results = verify(Deps(fetch, runs, secret_names, flag_connection), app, sha, preview_token.for_app(e["PREVIEW_MASTER_SECRET"], app), declared)
-    text = report(results)
-    print(text)
-    with open(e.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
-        f.write(text + "\n")
-    github.run(["issue", "comment", number, "--repo", repo, "--body", text], e.get("GH_TOKEN", pat))
+    probes = LiveProbes(e, f"{repo.split('/')[0]}/{app}", app)
+    declared = declared_secret_names(repo, number, e["FACTORY_PAT"])
+    results = verify(Deps(fetch, probes.runs, probes.secret_names, probes.flag_connection), app, sha, preview_token.for_app(e["PREVIEW_MASTER_SECRET"], app), declared)
+    publish_report(e, repo, number, report(results))
     if e.get("FAILURE_EVENTS_FILE"):
         event.dump(failure_events(app, number, results), Path(e["FAILURE_EVENTS_FILE"]))
     return 0 if all(r["ok"] for r in results) else 1

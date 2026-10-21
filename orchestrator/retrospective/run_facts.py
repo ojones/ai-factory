@@ -8,7 +8,7 @@ from shared import agent_output
 from retrospective import tracker
 
 
-def collect_facts(work, d):
+def read_rounds(work):
     rounds, seen, final_minor = [], {}, []
     for path in sorted(Path(work).glob("findings-*.json"), key=lambda p: p.name):
         doc = agent_output.load_json(path) or {}
@@ -20,18 +20,30 @@ def collect_facts(work, d):
         rounds.append(entry)
         for s in entry["blocking"]:
             seen.setdefault(tracker.normalize(s), []).append(entry["round"])
-    recurring = sorted(k for k, v in seen.items() if len(v) > 1)
-    stages = [{"stage": s["stage"], "round": s["round"], "verdict": s["verdict"], "cost_usd": s["cost_usd"],
-               "seconds": (s.get("usage") or {}).get("seconds"), "calls": (s.get("usage") or {}).get("calls")}
-              for s in d.get("stages", [])]
+    return rounds, sorted(k for k, v in seen.items() if len(v) > 1), final_minor
+
+
+def stage_summaries(d):
+    return [{"stage": s["stage"], "round": s["round"], "verdict": s["verdict"], "cost_usd": s["cost_usd"],
+             "seconds": (s.get("usage") or {}).get("seconds"), "calls": (s.get("usage") or {}).get("calls")} for s in d.get("stages", [])]
+
+
+def dict_entries(d, key, required):
+    return [x for x in d.get(key) or [] if isinstance(x, dict) and x.get(required)]
+
+
+def collect_facts(work, d):
+    rounds, recurring, final_minor = read_rounds(work)
     return {"app": d.get("app"), "outcome": d.get("outcome"), "message": d.get("message"),
             "run_url": d.get("run_url"), "issue_number": d.get("issue_number"), "spent_usd": d.get("spent_usd"),
             "commits": d.get("commits", []), "flags": d.get("flags") or [], "cap_usd": d.get("cap_usd"), "review_passes": d.get("review_passes") or 0,
-            "audit": d.get("audit") or [], "rollback": d.get("rollback"), "plan": d.get("plan"), "intake_kind": d.get("intake_kind"), "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
-            "rounds": rounds, "recurring_findings": recurring, "stages": stages,
+            "audit": d.get("audit") or [], "rollback": d.get("rollback"), "plan": d.get("plan"), "intake_kind": d.get("intake_kind"),
+            "final_blocking": [f.get("summary", "") for f in d.get("blocking", [])],
+            "rounds": rounds, "recurring_findings": recurring, "stages": stage_summaries(d),
             "final_minor": [{k: f.get(k, "") for k in ("summary", "evidence", "file", "line")} for f in final_minor],
-            "improvements": [i for i in d.get("improvements") or [] if isinstance(i, dict) and i.get("summary")],
-            "dark_broken": dark_feature.is_dark_broken(d), "flag_notes": d.get("flag_notes") or [], "unverified": [u for u in d.get("unverified") or [] if isinstance(u, dict) and u.get("check")], "bugs": [x for x in d.get("bugs") or [] if isinstance(x, dict) and x.get("check")]}
+            "improvements": dict_entries(d, "improvements", "summary"),
+            "dark_broken": dark_feature.is_dark_broken(d), "flag_notes": d.get("flag_notes") or [],
+            "unverified": dict_entries(d, "unverified", "check"), "bugs": dict_entries(d, "bugs", "check")}
 
 
 def fingerprint(facts):

@@ -39,6 +39,10 @@ def tester_view(r):
     return review_code.finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r)
 
 
+ENDING_OUTCOMES = ((endings.Regression, "regression"), (run_stops.FlagMissing, outcomes.FLAG_MISSING), (endings.Refused, "refused"),
+                   (endings.AwaitingSecret, "awaiting_secret"), (run_stops.ProviderBlocked, "provider_blocked"), (run_stops.BudgetExhausted, "budget_exhausted"))
+
+
 class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDeployedApp, ReleaseStep, TrackProgress):
     retiring = ()
     fix_for = None
@@ -49,36 +53,35 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
 
     def __init__(self):
         e = os.environ
-        self.app = e["APP_NAME"]
-        self.issue = e["ISSUE_NUMBER"]
+        self.app, self.issue = e["APP_NAME"], e["ISSUE_NUMBER"]
         if not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", self.app) or len(self.app) > 30 or not self.issue.isdigit():
             raise SystemExit(f"invalid inputs: app_name={self.app!r} issue_number={self.issue!r}")
+        self.name_repositories(e)
+        self.pat, self.factory_token = e["FACTORY_PAT"], e["FACTORY_GH_TOKEN"]
+        self.work, self.app_dir = Path(e["BUILD_RUN_DIR"]), Path(e["APP_DIR"])
+        self.art = self.work / "artifacts"
+        self.art.mkdir(parents=True, exist_ok=True)
+        self.cfg = config.load()
+        self.lim = self.cfg["limits"]
+        self.state = track_progress.State(self.work / "state.json", self.app, self.issue, self.run_url)
+        self.start_clock()
+        self.agent_user = e.get("AGENT_USER") or None
+        self.cap = self.meter = self._usage = self.preview = None
+        self.build_kind = "update"
+        self.auth_header = "Authorization: Basic " + base64.b64encode(f"x-access-token:{self.pat}".encode()).decode()
+        print(f"::add-mask::{self.auth_header.split()[-1]}", flush=True)
+
+    def name_repositories(self, e):
         self.factory_repo = e["GITHUB_REPOSITORY"]
         self.issue_url = f"https://github.com/{self.factory_repo}/issues/{self.issue}"
         self.owner = self.factory_repo.split("/")[0]
         self.app_repo = f"{self.owner}/{self.app}"
         self.run_id = e.get("GITHUB_RUN_ID", "0")
         self.run_url = f"{e.get('GITHUB_SERVER_URL', 'https://github.com')}/{self.factory_repo}/actions/runs/{self.run_id}"
-        self.pat = e["FACTORY_PAT"]
-        self.factory_token = e["FACTORY_GH_TOKEN"]
-        self.work = Path(e["BUILD_RUN_DIR"])
-        self.app_dir = Path(e["APP_DIR"])
-        self.art = self.work / "artifacts"
-        self.art.mkdir(parents=True, exist_ok=True)
-        self.cfg = config.load()
-        self.lim = self.cfg["limits"]
-        self.state = track_progress.State(self.work / "state.json", self.app, self.issue, self.run_url)
+
+    def start_clock(self):
         self.start = time.time()
         self.deadline = self.start + self.lim["time_limit_minutes"] * 60
-        self.cap = None
-        self.meter = None
-        self._usage = None
-        self.agent_user = e.get("AGENT_USER") or None
-        self.preview = None
-        self.build_kind = "update"
-        self.auth_header = "Authorization: Basic " + base64.b64encode(
-            f"x-access-token:{self.pat}".encode()).decode()
-        print(f"::add-mask::{self.auth_header.split()[-1]}", flush=True)
 
     def gh(self, args, token=None, check=True):
         return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token or self.pat}, check=check)
@@ -100,30 +103,23 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         self.state.save()
         return self.state.d["spent_usd"]
 
+    def ending_of(self, e):
+        for kind, outcome in ENDING_OUTCOMES:
+            if isinstance(e, kind):
+                return {"outcome": outcome, "message": str(e)}
+        if isinstance(e, run_stops.NeedsHuman):
+            outcome, message = endings.ending_for(e.kind, str(e), self.state.d.get("spent_usd"), self.cap)
+            return {"outcome": outcome, "message": message}
+        traceback.print_exc()
+        return {"outcome": "crash", "message": f"{type(e).__name__}: {e}"}
+
     def run(self):
         try:
             self.drive()
-        except endings.Regression as e:
-            self.state.d.update(outcome="regression", message=str(e))
-        except run_stops.FlagMissing as e:
-            self.state.d.update(outcome=outcomes.FLAG_MISSING, message=str(e))
-        except endings.Refused as e:
-            self.state.d.update(outcome="refused", message=str(e))
-        except endings.AwaitingSecret as e:
-            self.state.d.update(outcome="awaiting_secret", message=str(e))
-        except run_stops.ProviderBlocked as e:
-            self.state.d.update(outcome="provider_blocked", message=str(e))
-        except run_stops.BudgetExhausted as e:
-            self.state.d.update(outcome="budget_exhausted", message=str(e))
-        except run_stops.NeedsHuman as e:
-            outcome, message = endings.ending_for(e.kind, str(e), self.state.d.get("spent_usd"), self.cap)
-            self.state.d.update(outcome=outcome, message=message)
         except Exception as e:  # noqa: BLE001 - any crash must still reach finalize
-            traceback.print_exc()
-            self.state.d.update(outcome="crash", message=f"{type(e).__name__}: {e}")
+            self.state.d.update(self.ending_of(e))
         finally:
             self.state.save()
-        return
 
     def drive(self):
         self.setup()

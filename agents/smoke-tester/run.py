@@ -209,104 +209,144 @@ def load():
     return json.loads((HERE / "fixtures.json").read_text())
 
 
+def oracle_failures(base, data, fixture, tmp):
+    dest = Path(tmp) / fixture["id"]
+    build_checkout(base, data, fixture, dest)
+    app = RunningApp(dest)
+    try:
+        results = oracle(app.url)
+    finally:
+        app.stop()
+    return [name for name, good in results if not good]
+
+
+def fixture_is_sound(fixture, failing):
+    if fixture["expect"] == "pass":
+        return not failing
+    want = fixture.get("oracle_fails", [])
+    return (set(want) <= set(failing)) if want else not failing
+
+
 def validate():
     data, ok = load(), True
     with tempfile.TemporaryDirectory() as tmp:
         base = sc.prepare_base(Path(tmp))
         for fixture in data["fixtures"]:
-            dest = Path(tmp) / fixture["id"]
-            build_checkout(base, data, fixture, dest)
-            app = RunningApp(dest)
-            try:
-                results = oracle(app.url)
-            finally:
-                app.stop()
-            failing = [name for name, good in results if not good]
-            if fixture["expect"] == "pass":
-                good = not failing
-            else:
-                want = fixture.get("oracle_fails", [])
-                good = (set(want) <= set(failing)) if want else not failing
+            failing = oracle_failures(base, data, fixture, tmp)
+            good = fixture_is_sound(fixture, failing)
             ok &= good
-            print(f"{'OK  ' if good else 'FAIL'} {fixture['id']}: oracle fails {failing or 'nothing'}"
-                  + ("" if good else f"  (wanted {fixture.get('oracle_fails', 'nothing')})"))
+            wanted = "" if good else f"  (wanted {fixture.get('oracle_fails', 'nothing')})"
+            print(f"{'OK  ' if good else 'FAIL'} {fixture['id']}: oracle fails {failing or 'nothing'}{wanted}")
     sys.exit(0 if ok else 1)
 
 
-def one_run(job):
-    fixture, trial, data, base, root, key, base_url, model, timeout_min, prices = job
-    name = f"{fixture['id']}-{trial}"
-    result = {"fixture": fixture["id"], "trial": trial}
-    app = None
+def tester_prompt(data, fixture, app, head, report):
+    values = {"app_name": "smoke-app", "build_kind": "update", "spec": spec_for(data, fixture), "app_url": app.url, "head_sha": head,
+              "report_path": report, "previous_report": "none (this is the first test pass)", "api_check": verify_deployed_app.API_CHECK, "ui_section": ""}
+    return prompts.render(prompts.load_prompt(str(ROOT / "agents" / "prompts" / "tester.md")), values)
+
+
+def run_tester(prompt, dest, env, log_path, timeout_min):
     try:
-        dest, home = root / name, root / f"home-{name}"
-        head = build_checkout(base, data, fixture, dest)
-        app = RunningApp(dest)
-        report, api_log = root / f"report-{name}.json", root / f"api-check-{name}.jsonl"
-        prompt = prompts.render(prompts.load_prompt(str(ROOT / "agents" / "prompts" / "tester.md")), {
-            "app_name": "smoke-app", "build_kind": "update", "spec": spec_for(data, fixture), "app_url": app.url, "head_sha": head,
-            "report_path": report, "previous_report": "none (this is the first test pass)", "api_check": verify_deployed_app.API_CHECK, "ui_section": ""})
-        home.mkdir(parents=True, exist_ok=True)
-        env = {**sc.minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": base_url, "LLM_API_KEY": key, "RUNTIME": "process",
-               "PREVIEW_TOKEN": TOKEN, "API_CHECK_BASE": app.url, "API_CHECK_LOG": str(api_log)}
-        began = time.time()
-        try:
-            with open(root / f"agent-{name}.log", "w", encoding="utf-8") as log:
-                rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=dest, env=env,
-                                    stdout=log, stderr=subprocess.STDOUT, timeout=timeout_min * 60).returncode
-        except subprocess.TimeoutExpired:
-            rc = "timeout"
-        result.update(secs=round(time.time() - began, 1), exit=rc)
-        cost = 0.0
-        for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
-            cost = sc.cost_of(json.loads(state_file.read_text()), prices.get(model, {}))
-        result["cost"] = round(cost, 4)
-        doc = agent_output.load_json(report)
-        if doc is not None:
-            doc = verify_deployed_app.reconcile_api_checks(doc, verify_deployed_app.load_api_results(api_log))
-        result["helper_checks"] = len(verify_deployed_app.load_api_results(api_log))
-        result.update(judge(fixture, doc, data["flag"]))
-        result["json_problem"] = agent_output.json_problem(report) if doc is None else None
-        if doc is None:
-            tail = (root / f"agent-{name}.log").read_text(errors="replace")[-600:] if (root / f"agent-{name}.log").exists() else ""
-            result["agent_output_tail"] = re.sub(r"\s+", " ", tail).strip()
+        with open(log_path, "w", encoding="utf-8") as log:
+            return subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=dest, env=env,
+                                  stdout=log, stderr=subprocess.STDOUT, timeout=timeout_min * 60).returncode
+    except subprocess.TimeoutExpired:
+        return "timeout"
+
+
+def tester_cost(home, prices):
+    cost = 0.0
+    for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
+        cost = sc.cost_of(json.loads(state_file.read_text()), prices)
+    return round(cost, 4)
+
+
+def agent_output_tail(log_path):
+    tail = log_path.read_text(errors="replace")[-600:] if log_path.exists() else ""
+    return re.sub(r"\s+", " ", tail).strip()
+
+
+def judge_report(result, fixture, data, report, api_log, log_path):
+    doc = agent_output.load_json(report)
+    if doc is not None:
+        doc = verify_deployed_app.reconcile_api_checks(doc, verify_deployed_app.load_api_results(api_log))
+    result["helper_checks"] = len(verify_deployed_app.load_api_results(api_log))
+    result.update(judge(fixture, doc, data["flag"]))
+    result["json_problem"] = agent_output.json_problem(report) if doc is None else None
+    if doc is None:
+        result["agent_output_tail"] = agent_output_tail(log_path)
+
+
+def trial(job, result, started):
+    fixture, number, data, base, root, key, base_url, model, timeout_min, prices = job
+    name = f"{fixture['id']}-{number}"
+    dest, home = root / name, root / f"home-{name}"
+    head = build_checkout(base, data, fixture, dest)
+    started.append(RunningApp(dest))
+    app = started[0]
+    report, api_log, log_path = root / f"report-{name}.json", root / f"api-check-{name}.jsonl", root / f"agent-{name}.log"
+    home.mkdir(parents=True, exist_ok=True)
+    env = {**sc.minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": base_url, "LLM_API_KEY": key, "RUNTIME": "process",
+           "PREVIEW_TOKEN": TOKEN, "API_CHECK_BASE": app.url, "API_CHECK_LOG": str(api_log)}
+    began = time.time()
+    rc = run_tester(tester_prompt(data, fixture, app, head, report), dest, env, log_path, timeout_min)
+    result.update(secs=round(time.time() - began, 1), exit=rc, cost=tester_cost(home, prices.get(model, {})))
+    judge_report(result, fixture, data, report, api_log, log_path)
+
+
+def one_run(job):
+    result = {"fixture": job[0]["id"], "trial": job[1]}
+    started = []
+    try:
+        trial(job, result, started)
     except Exception as e:  # noqa: BLE001 - a broken run is a result, not a crash of the screen
         result.update(outcome="unusable", right_reason=None, failed=[], error=f"{type(e).__name__}: {e}")
     finally:
-        if app:
+        for app in started:
             app.stop()
     return result
 
 
-def main():
-    if "--validate" in sys.argv:
-        validate()
-    key = os.environ["DEEPINFRA_API_KEY"]
-    cfg = config.load()
-    model = os.environ.get("MODEL") or cfg["roles"]["tester"]["model"]
-    base_url = cfg["provider"]["base_url"]
-    data = load()
-    only = set(filter(None, os.environ.get("FIXTURES", "").split(",")))
-    fixtures = [f for f in data["fixtures"] if not only or f["id"] in only]
-    trials, workers, timeout_min = int(os.environ.get("TRIALS", "2")), int(os.environ.get("WORKERS", "3")), int(os.environ.get("TIMEOUT_MIN", "20"))
-    root = Path(tempfile.mkdtemp(prefix="smoke-tester-"))
-    base = sc.prepare_base(root)
-    prices = sc.fetch_prices()
-    jobs = [(f, i, data, base, root, key, base_url, model, timeout_min, prices) for f in fixtures for i in range(1, trials + 1)]
-    print(f"{len(jobs)} runs of {model}: {len(fixtures)} fixture(s) x {trials} trial(s), {workers} at a time", flush=True)
-    results = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for r in pool.map(one_run, jobs):
-            results.append(r)
-            print(f"{r['outcome']:<11} {r['fixture']}#{r['trial']}  {r.get('secs', '-')}s  ${r.get('cost', 0)}  "
-                  f"{'' if r.get('right_reason') in (True, None) else '(wrong reason) '}{(r.get('failed') or [''])[0][:110]}", flush=True)
-    summary = summarize(results, fixtures)
+def print_run(r):
+    reason = "" if r.get("right_reason") in (True, None) else "(wrong reason) "
+    print(f"{r['outcome']:<11} {r['fixture']}#{r['trial']}  {r.get('secs', '-')}s  ${r.get('cost', 0)}  {reason}{(r.get('failed') or [''])[0][:110]}", flush=True)
+
+
+def print_summary(summary):
     print("\nfixture | expect | runs | caught | right reason | missed | false alarm | inconclusive/unusable")
     for r in summary["rows"]:
         print(f"{r['fixture']}{' (hard)' if r['hard'] else ''} | {r['expect']} | {r['runs']} | {r['caught']} | {r['right_reason']} | "
               f"{r['missed']} | {r['false_alarm']} | {r['inconclusive']}/{r['unusable']}")
     print(f"\ndetection {summary['detection_rate']}  right reason {summary['right_reason_rate']}  false alarms {summary['false_alarm_rate']}  "
           f"inconclusive runs {summary['inconclusive_runs']}  cost ${summary['cost']}")
+
+
+def run_jobs(jobs, workers):
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for r in pool.map(one_run, jobs):
+            results.append(r)
+            print_run(r)
+    return results
+
+
+def main():
+    if "--validate" in sys.argv:
+        validate()
+    cfg = config.load()
+    model = os.environ.get("MODEL") or cfg["roles"]["tester"]["model"]
+    data = load()
+    only = set(filter(None, os.environ.get("FIXTURES", "").split(",")))
+    fixtures = [f for f in data["fixtures"] if not only or f["id"] in only]
+    trials, workers, timeout_min = int(os.environ.get("TRIALS", "2")), int(os.environ.get("WORKERS", "3")), int(os.environ.get("TIMEOUT_MIN", "20"))
+    root = Path(tempfile.mkdtemp(prefix="smoke-tester-"))
+    base, prices, key = sc.prepare_base(root), sc.fetch_prices(), os.environ["DEEPINFRA_API_KEY"]
+    jobs = [(f, i, data, base, root, key, cfg["provider"]["base_url"], model, timeout_min, prices) for f in fixtures for i in range(1, trials + 1)]
+    print(f"{len(jobs)} runs of {model}: {len(fixtures)} fixture(s) x {trials} trial(s), {workers} at a time", flush=True)
+    results = run_jobs(jobs, workers)
+    summary = summarize(results, fixtures)
+    print_summary(summary)
     Path("smoke-tester-results.json").write_text(json.dumps({"model": model, "summary": summary, "runs": results}, indent=2), encoding="utf-8")
     if not os.environ.get("KEEP"):
         shutil.rmtree(root, ignore_errors=True)

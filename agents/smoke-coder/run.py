@@ -119,38 +119,49 @@ def cost_of(state, price):
     return total
 
 
-def one_run(job):
-    model, task, trial, base, root, key, base_url, timeout_min, prices = job
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", model).strip("-")
-    workdir, home = root / f"{slug}-{task['id']}-{trial}", root / f"home-{slug}-{task['id']}-{trial}"
-    result = {"model": model, "task": task["id"], "trial": trial}
+def coder_prompt(task, findings):
+    values = {"app_name": "smoke-app", "round": "1", "task": task["task"], "findings_path": findings, "build_kind": task["build_kind"]}
+    return prompts.render(prompts.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), values)
+
+
+def run_coder(prompt, workdir, home, model, base_url, key, timeout_min):
+    env = {**minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": base_url, "LLM_API_KEY": key, "RUNTIME": "process"}
     try:
-        fresh_workdir(base, task, workdir)
-        base_sha = run(["git", "rev-parse", "HEAD"], workdir)[1].strip()
-        findings = root / f"findings-{slug}-{task['id']}-{trial}.json"
-        findings.write_text('{"blocking": [], "minor": []}')
-        prompt = prompts.render(prompts.load_prompt(str(ROOT / "agents" / "prompts" / "coder.md")), {
-            "app_name": "smoke-app", "round": "1", "task": task["task"], "findings_path": findings,
-            "build_kind": task["build_kind"]})
-        home.mkdir(parents=True, exist_ok=True)
-        env = {**minimal_env(home), "LLM_MODEL": "openai/" + model, "LLM_BASE_URL": base_url, "LLM_API_KEY": key,
-               "RUNTIME": "process"}
-        began = time.time()
-        try:
-            rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=workdir,
-                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=timeout_min * 60).returncode
-        except subprocess.TimeoutExpired:
-            rc = "timeout"
-        result["secs"] = round(time.time() - began, 1)
-        result["exit"] = rc
-        usage, cost = None, 0.0
-        for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
-            state = json.loads(state_file.read_text())
-            usage, cost = agent_usage.summarize_token_usage(state), cost_of(state, prices.get(model, {}))
-        result.update(calls=(usage or {}).get("calls", 0), llm_secs=(usage or {}).get("llm_seconds", 0),
-                      peak_context=(usage or {}).get("peak_context", 0), cost=round(cost, 4))
-        result["passed"], result["reason"] = (False, f"coder exited {rc}") if rc == "timeout" else score(workdir, task, base_sha)
+        return subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=workdir, env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout_min * 60).returncode
+    except subprocess.TimeoutExpired:
+        return "timeout"
+
+
+def read_usage(home, prices):
+    usage, cost = None, 0.0
+    for state_file in sorted((home / ".openhands" / "conversations").glob("*/base_state.json")):
+        state = json.loads(state_file.read_text())
+        usage, cost = agent_usage.summarize_token_usage(state), cost_of(state, prices)
+    return usage or {}, cost
+
+
+def trial(job, result):
+    model, task, number, base, root, key, base_url, timeout_min, prices = job
+    name = f"{re.sub(r'[^A-Za-z0-9]+', '-', model).strip('-')}-{task['id']}-{number}"
+    workdir, home = root / name, root / f"home-{name}"
+    fresh_workdir(base, task, workdir)
+    base_sha = run(["git", "rev-parse", "HEAD"], workdir)[1].strip()
+    findings = root / f"findings-{name}.json"
+    findings.write_text('{"blocking": [], "minor": []}')
+    home.mkdir(parents=True, exist_ok=True)
+    began = time.time()
+    rc = run_coder(coder_prompt(task, findings), workdir, home, model, base_url, key, timeout_min)
+    result["secs"], result["exit"] = round(time.time() - began, 1), rc
+    usage, cost = read_usage(home, prices.get(model, {}))
+    result.update(calls=usage.get("calls", 0), llm_secs=usage.get("llm_seconds", 0), peak_context=usage.get("peak_context", 0), cost=round(cost, 4))
+    result["passed"], result["reason"] = (False, f"coder exited {rc}") if rc == "timeout" else score(workdir, task, base_sha)
+
+
+def one_run(job):
+    result = {"model": job[0], "task": job[1]["id"], "trial": job[2]}
+    try:
+        trial(job, result)
     except Exception as e:  # noqa: BLE001 - a broken run is a result, not a crash of the screen
         result.update(passed=False, reason=f"harness error: {type(e).__name__}: {e}")
     return result
@@ -171,61 +182,80 @@ def summarize(results, models):
     return rows
 
 
+def reference_solution_scores(base, task, cache):
+    seed, fixed = cache / f"{task['id']}-seed", cache / f"{task['id']}-fixed"
+    fresh_workdir(base, task, seed)
+    overlay(task["dir"] / "accept", seed / "backend" / "src" / "__tests__" / "accept")
+    seed_code = run(["npm", "test"], seed)[0]
+    fresh_workdir(base, task, fixed)
+    base_sha = run(["git", "rev-parse", "HEAD"], fixed)[1].strip()
+    untouched = score(fixed, task, base_sha)
+    shutil.rmtree(fixed / "backend" / "src" / "__tests__" / "accept", ignore_errors=True)
+    overlay(task["dir"] / "solution", fixed)
+    if task.get("solution_mount"):
+        mount(fixed, task["solution_mount"])
+    run(["git", "add", "-A"], fixed)
+    run(["git", "commit", "-qm", "reference solution"], fixed)
+    solved, why = score(fixed, task, base_sha)
+    return seed_code, untouched, solved, why
+
+
+def validate_task(base, task, cache):
+    seed_code, untouched, solved, why = reference_solution_scores(base, task, cache)
+    good = seed_code != 0 and untouched == (False, "no commit") and solved
+    print(f"{'OK  ' if good else 'FAIL'} {task['id']}: seed tests {'fail' if seed_code != 0 else 'PASS (bad)'}, "
+          f"untouched scores {untouched[1]!r}, reference solution {'passes' if solved else 'FAILS: ' + why}")
+    return good
+
+
 def validate():
-    ok = True
     with tempfile.TemporaryDirectory() as tmp:
-        cache = Path(tmp)
-        base = prepare_base(cache)
-        for task in load_tasks():
-            seed, fixed = cache / f"{task['id']}-seed", cache / f"{task['id']}-fixed"
-            fresh_workdir(base, task, seed)
-            overlay(task["dir"] / "accept", seed / "backend" / "src" / "__tests__" / "accept")
-            seed_code = run(["npm", "test"], seed)[0]
-            fresh_workdir(base, task, fixed)
-            base_sha = run(["git", "rev-parse", "HEAD"], fixed)[1].strip()
-            untouched = score(fixed, task, base_sha)
-            shutil.rmtree(fixed / "backend" / "src" / "__tests__" / "accept", ignore_errors=True)
-            overlay(task["dir"] / "solution", fixed)
-            if task.get("solution_mount"):
-                mount(fixed, task["solution_mount"])
-            run(["git", "add", "-A"], fixed)
-            run(["git", "commit", "-qm", "reference solution"], fixed)
-            solved, why = score(fixed, task, base_sha)
-            good = seed_code != 0 and untouched == (False, "no commit") and solved
-            ok &= good
-            print(f"{'OK  ' if good else 'FAIL'} {task['id']}: seed tests {'fail' if seed_code != 0 else 'PASS (bad)'}, "
-                  f"untouched scores {untouched[1]!r}, reference solution {'passes' if solved else 'FAILS: ' + why}")
-    sys.exit(0 if ok else 1)
+        base = prepare_base(Path(tmp))
+        results = [validate_task(base, task, Path(tmp)) for task in load_tasks()]
+    sys.exit(0 if all(results) else 1)
+
+
+def print_run(r):
+    print(f"{'PASS' if r['passed'] else 'FAIL'}  {r['model']}  {r['task']}#{r['trial']}  {r.get('secs', '-')}s  "
+          f"${r.get('cost', 0)}  {r.get('calls', 0)} calls  {'' if r['passed'] else r['reason'][:120]}", flush=True)
+
+
+def print_rows(rows):
+    print("\nmodel | passed | median s | vs first | avg cost | avg calls")
+    for r in rows:
+        vs = "-" if r["faster_than_first"] is None else f"{r['faster_than_first']:+.0%} faster"
+        print(f"{r['model']} | {r['passed']}/{r['runs']} | {r['median_secs']} | {vs} | ${r['avg_cost']} | {r['avg_calls']}")
+
+
+def run_jobs(jobs, workers):
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for r in pool.map(one_run, jobs):
+            results.append(r)
+            print_run(r)
+    return results
+
+
+def configured_models(profiles):
+    default_model = ((profiles.get("roles") or {}).get("coder") or {}).get("model", "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo")
+    return [m for m in os.environ.get("MODELS", default_model).split(",") if m]
 
 
 def main():
     if "--validate" in sys.argv:
         validate()
-    key = os.environ["DEEPINFRA_API_KEY"]
     profiles = config.load()
-    default_model = ((profiles.get("roles") or {}).get("coder") or {}).get("model", "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo")
     base_url = ((profiles.get("provider") or {}).get("base_url")) or "https://api.deepinfra.com/v1/openai"
-    models = [m for m in os.environ.get("MODELS", default_model).split(",") if m]
-    only = set(filter(None, os.environ.get("TASKS", "").split(",")))
-    trials, workers = int(os.environ.get("TRIALS", "2")), int(os.environ.get("WORKERS", "3"))
-    timeout_min = int(os.environ.get("TIMEOUT_MIN", "20"))
-    tasks = load_tasks(only)
+    models = configured_models(profiles)
+    tasks = load_tasks(set(filter(None, os.environ.get("TASKS", "").split(","))))
+    trials, workers, timeout_min = int(os.environ.get("TRIALS", "2")), int(os.environ.get("WORKERS", "3")), int(os.environ.get("TIMEOUT_MIN", "20"))
     root = Path(tempfile.mkdtemp(prefix="smoke-coder-"))
-    base = prepare_base(root)
-    prices = fetch_prices()
+    base, prices, key = prepare_base(root), fetch_prices(), os.environ["DEEPINFRA_API_KEY"]
     jobs = [(m, t, i, base, root, key, base_url, timeout_min, prices) for m in models for t in tasks for i in range(1, trials + 1)]
     print(f"{len(jobs)} runs: {len(models)} model(s) x {len(tasks)} task(s) x {trials} trial(s), {workers} at a time", flush=True)
-    results = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for r in pool.map(one_run, jobs):
-            results.append(r)
-            print(f"{'PASS' if r['passed'] else 'FAIL'}  {r['model']}  {r['task']}#{r['trial']}  {r.get('secs', '-')}s  "
-                  f"${r.get('cost', 0)}  {r.get('calls', 0)} calls  {'' if r['passed'] else r['reason'][:120]}", flush=True)
+    results = run_jobs(jobs, workers)
     rows = summarize(results, models)
-    print("\nmodel | passed | median s | vs first | avg cost | avg calls")
-    for r in rows:
-        vs = "-" if r["faster_than_first"] is None else f"{r['faster_than_first']:+.0%} faster"
-        print(f"{r['model']} | {r['passed']}/{r['runs']} | {r['median_secs']} | {vs} | ${r['avg_cost']} | {r['avg_calls']}")
+    print_rows(rows)
     Path("smoke-coder-results.json").write_text(json.dumps({"summary": rows, "runs": results}, indent=2), encoding="utf-8")
     if not os.environ.get("KEEP"):
         shutil.rmtree(root, ignore_errors=True)

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-import json
 import os
 import sys
 import time
 from pathlib import Path
 
 from request import check_target_app  # noqa: E402
-from shared import app_state_record, config, github, http_client, shell
+from shared import alert_issue, app_state_record, config, github, http_client, shell
 
 LABEL = "fly-orphans"
 ALWAYS_OWNED = ("ai-factory-growthbook",)
@@ -52,15 +51,12 @@ def idle_report(rows):
     return "\n".join(lines)
 
 
-def main():
-    repo, org = os.environ["GITHUB_REPOSITORY"], os.environ.get("FLY_ORG") or "personal"
-    owner, pat, token = repo.split("/")[0], os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
-    infra = (config.load().get("limits") or {}).get("fly_infra_apps") or []
+def owned_by_factory(owner, repo, pat, name):
+    out = shell.sh(["gh", "api", f"repos/{owner}/{name}", "--jq", ".description"], env={**os.environ, "GH_TOKEN": pat}, check=False)
+    return out.returncode == 0 and check_target_app.is_factory_repo(out.stdout.strip(), repo)
 
-    def owned_repo(name):
-        out = shell.sh(["gh", "api", f"repos/{owner}/{name}", "--jq", ".description"], env={**os.environ, "GH_TOKEN": pat}, check=False)
-        return out.returncode == 0 and check_target_app.is_factory_repo(out.stdout.strip(), repo)
 
+def print_idle_report(repo, owner, pat, token):
     try:
         rows = []
         for app in app_state_record.managed_apps(repo, token):
@@ -72,21 +68,22 @@ def main():
             Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8").write(report + "\n")
     except Exception as e:  # noqa: BLE001
         print(f"idle report failed: {type(e).__name__}: {e}")
-    found = orphans(list_fly_apps(org, os.environ["FLY_API_TOKEN"]), infra, owned_repo)
-    env = {**os.environ, "GH_TOKEN": token}
+
+
+def sync_orphan_issue(repo, token, found, body):
     github.ensure_label(repo, LABEL, token, "b60205", "Fly apps nobody owns")
-    open_issues = json.loads(shell.sh(["gh", "issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--json", "number,body"],
-                                  env=env).stdout or "[]")
+    alert_issue.sync_alert_issue(repo, token, LABEL, found, body, "Fly apps nobody owns", "No orphaned Fly apps remain.", extra_labels=("needs-human",))
+
+
+def main():
+    repo, org = os.environ["GITHUB_REPOSITORY"], os.environ.get("FLY_ORG") or "personal"
+    owner, pat, token = repo.split("/")[0], os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
+    infra = (config.load().get("limits") or {}).get("fly_infra_apps") or []
+    print_idle_report(repo, owner, pat, token)
+    found = orphans(list_fly_apps(org, os.environ["FLY_API_TOKEN"]), infra, lambda name: owned_by_factory(owner, repo, pat, name))
     body = render(found, org)
     print(body)
-    if not found:
-        for i in open_issues:
-            shell.sh(["gh", "issue", "close", str(i["number"]), "--repo", repo, "--comment", "No orphaned Fly apps remain."], env=env, check=False)
-    elif not open_issues:
-        shell.sh(["gh", "issue", "create", "--repo", repo, "--label", LABEL, "--label", "needs-human", "--title",
-              "Fly apps nobody owns", "--body", body], env=env, check=False)
-    elif (open_issues[0].get("body") or "").strip() != body.strip():
-        shell.sh(["gh", "issue", "edit", str(open_issues[0]["number"]), "--repo", repo, "--body", body], env=env, check=False)
+    sync_orphan_issue(repo, token, found, body)
     return 0
 
 

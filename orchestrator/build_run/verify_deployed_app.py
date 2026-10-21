@@ -58,30 +58,41 @@ def _helper_ids(result, field):
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else ([ids] if isinstance(ids, str) else [])
 
 
+def helper_failure_text(found, ids):
+    return "; ".join(f"{i}: {'; '.join(found[i].get('problems') or ['failed'])}" for i in ids)
+
+
+def append_evidence(r, note):
+    return f"{r.get('evidence', '')} | {note}".strip(" |")
+
+
+def reconcile_cited_result(r, found, field, label):
+    ids = _helper_ids(r, field)
+    failing = [i for i in ids if i in found and not found[i].get("ok")]
+    unknown = [i for i in ids if i not in found]
+    if check_state(r) != "passed":
+        return
+    if failing:
+        r.update(status="failed", passed=False, evidence=append_evidence(r, f"the {label} helper observed otherwise: " + helper_failure_text(found, failing)))
+    elif unknown:
+        r.update(status="not_run", passed=False, evidence=append_evidence(r, f"cites {label} id(s) the helper never ran: " + ", ".join(unknown)))
+
+
+def unreported_failure(res, i, flag, field, label):
+    observed = res.get("observed") or {}
+    seen = f" (status {observed.get('status')})" if "status" in observed else ""
+    return {"flag": flag, "check": f"{label} {i}: {res.get('name', i)}", "status": "failed", "passed": False, field: [i],
+            "evidence": f"the {label} helper observed a failure the report did not mention: " + "; ".join(res.get("problems") or ["failed"]) + seen}
+
+
 def reconcile_helper_checks(doc, found, field, label):
     results = [dict(r) for r in (doc.get("results") if isinstance(doc, dict) else None) or [] if isinstance(r, dict)]
     cited = set()
     for r in results:
-        ids = _helper_ids(r, field)
-        cited.update(ids)
-        failing = [i for i in ids if i in found and not found[i].get("ok")]
-        unknown = [i for i in ids if i not in found]
-        if check_state(r) != "passed":
-            continue
-        if failing:
-            r.update(status="failed", passed=False, evidence=(f"{r.get('evidence', '')} | the {label} helper observed otherwise: "
-                     + "; ".join(f"{i}: {'; '.join(found[i].get('problems') or ['failed'])}" for i in failing)).strip(" |"))
-        elif unknown:
-            r.update(status="not_run", passed=False, evidence=(f"{r.get('evidence', '')} | cites {label} id(s) the helper never ran: "
-                     + ", ".join(unknown)).strip(" |"))
+        cited.update(_helper_ids(r, field))
+        reconcile_cited_result(r, found, field, label)
     flag = next((r.get("flag") for r in results if r.get("flag")), "")
-    for i, res in found.items():
-        if not res.get("ok") and i not in cited:
-            observed = res.get("observed") or {}
-            seen = f" (status {observed.get('status')})" if "status" in observed else ""
-            results.append({"flag": flag, "check": f"{label} {i}: {res.get('name', i)}", "status": "failed", "passed": False, field: [i],
-                            "evidence": f"the {label} helper observed a failure the report did not mention: "
-                                        + "; ".join(res.get("problems") or ["failed"]) + seen})
+    results += [unreported_failure(res, i, flag, field, label) for i, res in found.items() if not res.get("ok") and i not in cited]
     return {**doc, "results": results}
 
 
@@ -204,41 +215,59 @@ def verification_record(doc, expected_flags):
 
 
 class VerifyDeployedApp:
-    def test_deployed(self, base, head, rnd, flags):
-        tester_tree = self.work / f"tester-tree-{rnd}"
+    def app_url(self):
+        return f"https://{self.app}.fly.dev"
+
+    def wants_ui(self, base, head):
         changed_files = self.git("diff", "--name-only", base, head, check=False).stdout.split()
-        want_ui = bool(self.lim.get("ui_check", False)) and wants_ui_check(changed_files, getattr(self, "spec", None) or getattr(self, "task", ""))
+        return bool(self.lim.get("ui_check", False)) and wants_ui_check(changed_files, getattr(self, "spec", None) or getattr(self, "task", ""))
+
+    def tester_values(self, rnd, head, flags, want_ui):
+        return {"app_url": self.app_url(), "head_sha": head, "report_path": self.work / f"test-report-{rnd}.json",
+                "previous_report": track_progress.previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK),
+                "ui_section": ui_section(want_ui, getattr(self, "ui_check_path", UI_CHECK)),
+                "new_flags": ", ".join(f"`{f}`" for f in flags) or "none (no flag: check the spec's requirements)"}
+
+    def tester_env(self, rnd):
+        browsers = {"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {}
+        return {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": self.app_url(), "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl"),
+                "UI_CHECK_BASE": self.app_url(), "UI_CHECK_LOG": str(self.work / f"ui-check-{rnd}.jsonl"), "UI_CHECK_DIR": str(self.work), **browsers}
+
+    def ask_tester(self, rnd, head, flags, want_ui, tester_tree):
+        return self.agent_json("tester", f"t{rnd}", self.tester_values(rnd, head, flags, want_ui), self.work / f"test-report-{rnd}.json", self.tester_env(rnd),
+                               check=lambda doc: derive_test(doc, flags) and None, cwd=tester_tree, home=self.work / f"home-tester-{rnd}")
+
+    def report_from_failed_helpers(self, rnd):
+        tdoc = report_from_helper_failures(load_api_results(self.work / f"api-check-{rnd}.jsonl"), load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
+        if tdoc is not None:
+            log("The tester wrote no usable report; using what its helpers saw fail instead.")
+        return tdoc
+
+    def tester_report(self, rnd, head, flags, want_ui):
+        tester_tree = self.work / f"tester-tree-{rnd}"
         self.git("worktree", "add", "--detach", str(tester_tree), head)
         try:
-            try:
-                tdoc, cost, usage = self.agent_json(
-                    "tester", f"t{rnd}", {"app_url": f"https://{self.app}.fly.dev", "head_sha": head,
-                                          "report_path": self.work / f"test-report-{rnd}.json",
-                                          "previous_report": track_progress.previous_report(self.work, rnd), "api_check": getattr(self, "api_check_path", API_CHECK),
-                                          "ui_section": ui_section(want_ui, getattr(self, "ui_check_path", UI_CHECK)),
-                                          "new_flags": ", ".join(f"`{f}`" for f in flags) or "none (no flag: check the spec's requirements)"},
-                    self.work / f"test-report-{rnd}.json",
-                    {"PREVIEW_TOKEN": self.preview, "API_CHECK_BASE": f"https://{self.app}.fly.dev",
-                     "API_CHECK_LOG": str(self.work / f"api-check-{rnd}.jsonl"), "UI_CHECK_BASE": f"https://{self.app}.fly.dev",
-                     "UI_CHECK_LOG": str(self.work / f"ui-check-{rnd}.jsonl"), "UI_CHECK_DIR": str(self.work),
-                     **({"PLAYWRIGHT_BROWSERS_PATH": os.environ["PLAYWRIGHT_BROWSERS_PATH"]} if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else {})},
-                    check=lambda doc: derive_test(doc, flags) and None,
-                    cwd=tester_tree, home=self.work / f"home-tester-{rnd}")
-            except run_stops.NeedsHuman:
-                tdoc = report_from_helper_failures(load_api_results(self.work / f"api-check-{rnd}.jsonl"),
-                                                   load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
-                if tdoc is None:
-                    raise
-                log("The tester wrote no usable report; using what its helpers saw fail instead.")
-                cost, usage = 0.0, None
+            return self.ask_tester(rnd, head, flags, want_ui, tester_tree)
+        except run_stops.NeedsHuman:
+            tdoc = self.report_from_failed_helpers(rnd)
+            if tdoc is None:
+                raise
+            return tdoc, 0.0, None
         finally:
             self.git("worktree", "remove", "--force", str(tester_tree), check=False)
+
+    def reconciled_report(self, tdoc, rnd):
         tdoc = reconcile_api_checks(tdoc, load_api_results(self.work / f"api-check-{rnd}.jsonl"))
         tdoc = reconcile_ui_checks(tdoc, load_api_results(self.work / f"ui-check-{rnd}.jsonl"))
         try:
             (self.work / f"test-report-{rnd}.json").write_text(json.dumps(tdoc, indent=2))
         except OSError as e:
             log(f"could not rewrite the reconciled test report: {e}")
+        return tdoc
+
+    def test_deployed(self, base, head, rnd, flags):
+        tdoc, cost, usage = self.tester_report(rnd, head, flags, self.wants_ui(base, head))
+        tdoc = self.reconciled_report(tdoc, rnd)
         passed, failures = derive_test(tdoc, flags)
         impact = test_impact(failures)
         self.state.d["bugs"] = bugs_from(failures)

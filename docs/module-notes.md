@@ -210,6 +210,48 @@ LOC (a locator) is one of {"role": "button", "name": "Add"}, {"label": "New todo
 {"test_id": "..."}, with optional "exact": true. Role and label locators are preferred: they are what a user sees. Checks run in order,
 at most 30 per file and 20 steps per check, 8 seconds per action, and only the base URL's origin is ever requested.
 
+## orchestrator/factory_change/
+
+### tiers.py
+
+STEP 9.8 (FC-30 to FC-32): which paths an Agent may change and who merges them. Tier 2 is the Factory's own control path (the run loop, the Agent runner and its budget, the
+retrospective, Try Fix, this domain, `profiles.yml`): a broken change there could break the run that would fix it, so a person merges it. Anything outside Tier 1 and Tier 2
+(workflows, the checks, `pyproject.toml`, docs, the Starter) is `never`, so a path nobody listed is refused rather than allowed by default. The planner is told the Tier 2 list
+through `tier_two_paths_text`, which is the same patterns, so the prompt and the check cannot drift.
+
+### vet_change.py
+
+STEP 9.4 (INV-63): the structure of a diff is judged from `git diff` against `HEAD` in the Orchestrator's own checkout, never from what the Agent says it did. Over a limit is a
+refusal back to the ticket, not a partial PR, because a trimmed change is a change nobody planned. A model or cap line added to `profiles.yml` is refused even though that file is
+Tier 2: a person merging is not the same as an Agent being allowed to raise its own budget.
+
+### prove_reproduction.py
+
+STEP 9.7 (INV-64): a reproduction counts as failing on `main` only when unittest reports a `FAIL` or `ERROR` for it. A name that does not exist, a module that does not import and
+a run of zero tests all exit non-zero too, so they are told apart by the output; otherwise a typo in the ticket would pass as a reproduction. Names are matched against a strict
+dotted pattern before they reach the command line, so a ticket cannot pass an option.
+
+### pause.py
+
+STEP 9.12 (INV-65): the pause is an open GitHub issue with a label, not a file or a flag in a workflow, so a person clears it where they already look and the state survives a
+fresh runner. The breaker compares stages by name because a failure at an unrelated stage says nothing about a change.
+
+### gate.py
+
+STEP 9.7 and 9.9 (INV-64, INV-66): the same checks run twice, once by the Orchestrator before it opens the PR and once in `factory-checks.yml`, because the PR is the thing that merges and a label or a body marker can be edited by anyone. The reproduction is proven by copying the PR's changed test files into a checkout of the base branch: the test exists nowhere on `main`, so running it there unchanged would only say "missing". The tier in the body is compared with the tier recomputed from the diff, so a Tier 2 change cannot merge itself by carrying a Tier 1 label.
+
+### run.py
+
+STEP 9.3 to 9.10: the order is the cheapest refusal first. The scope check comes before the proof and the unit tests, because a change outside its scope is discarded whatever else is true, and a scope refusal is final (back to the ticket) while a failed proof, failed tests or a blocking finding go back to the coder for another round, up to `factory_change_review_rounds`. The snapshot of `main` is taken before the first coder round and never refreshed, so a later round cannot make its own failing test look pre-existing. The reviewer's verdict is derived from its findings (`review_code.derive_review`), not read from its `verdict` field.
+
+### watch_merged.py
+
+STEP 9.11, 9.12 (INV-65): a merged change is judged by whether its own finding comes back, because the Retrospective files a returning finding under the same fingerprint, which the Intake records as a "Seen again" comment; that stands in for "a failed Build Run at the same stage", which the Orchestrator does not record anywhere it could be read back. A `model-drift` alert opened after the merge counts as a canary regression. The revert goes through GitHub's `revertPullRequest`, so no Orchestrator code path commits a revert (INV-25 is about a Managed App's repository and stays as it is).
+
+### promote.py
+
+STEP 9.1: the cause is read from the `#### Cause` section Try Fix writes into a factory fix request, and the count of sightings is the first report plus its "Failed again" comments. The request is moved by filing a Factory Change Intake from its numbered requirements (already checked as checkable by Try Fix) and labelling it `moved-to-factory-change`; nothing in `try_fix` imports this domain, because `factory_change` imports `try_fix`.
+
 ## orchestrator/flag_lifecycle/
 
 ### missing_flag.py
@@ -225,7 +267,7 @@ missing flag is a sign something earlier went wrong. What it means depends on wh
 
 Flag retirement: a feature flag is short-lived, so once a change is proven in production its flag is removed, by itself.
 
-A flag exists for one job: to stage a change dark and release it when it is safe (STANDARDS-FEATURE-FLAGS.md). Nobody uses it for
+A flag exists for one job: to stage a change dark and release it when it is safe (ARCHITECTURE.md: Release and retirement). Nobody uses it for
 anything else, so once a *later* Build Run has also released something, the earlier release has been replaced by a newer one and its
 flag has done its job. A retirement is never a run of its own (that would spend a planner, reviewer, tester, CI and a deploy on a change
 that only deletes a check): the next Update App Intake for the same app carries it. At the start of that Build Run the Orchestrator picks
@@ -1218,7 +1260,7 @@ What the test files said about their scenarios, by file and test.
 ### orchestrator/boundary_test.py
 
 `module`
-- The import rules between domains (docs/orchestrator-map.md, Rules). A domain is a folder under orchestrator/; `shared` holds what two or more domains use and imports no domain. A new edge is a deliberate edit to ALLOWED here and to the map doc. Run: python3 -m unittest discover -p "*_test.py" orchestrator
+- The import rules between domains (ARCHITECTURE.md, Code layout). A domain is a folder under orchestrator/; `shared` holds what two or more domains use and imports no domain. A new edge is a deliberate edit to ALLOWED here and to the map doc. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 - until the planning process takes plan_change out of the Build Run (ticket 13)
 
 ### orchestrator/bugs/route_bug_test.py
@@ -1326,9 +1368,6 @@ What the test files said about their scenarios, by file and test.
 
 ### orchestrator/build_run/ui_check_test.py
 
-`module`
-- Tests for the ui-check helper: pure logic always, a real browser run only where Playwright is installed. Run: python3 -m unittest discover -p "*_test.py" orchestrator
-
 `Handler.do_GET`
 - a page that fills in after a network-sized delay
 
@@ -1430,23 +1469,12 @@ What the test files said about their scenarios, by file and test.
 `Invariants.test_inv58_every_failure_event_gets_a_verdict_a_failure_is_never_downgraded_and_a_warning_needs_a_reason`
 - "fix" without a reason is not a fix
 
-### orchestrator/maintenance/dependency_updates_test.py
-
-`module`
-- Tests for the maintenance pass. Run: python3 -m unittest discover -p "*_test.py" orchestrator
-
 ### orchestrator/maintenance/template_sync_test.py
-
-`module`
-- Tests for template sync. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 
 `Changes.test_protected_and_lock_files_are_not_applied`
 - the lint config is the Orchestrator's, not the coder's
 
 ### orchestrator/monitoring/benchmark_test.py
-
-`module`
-- Tests for the benchmark's pure logic. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 
 `Suite.test_the_shipped_suite_is_valid_and_its_oracles_are_real_api_checks`
 - the same file format the tester's helper reads
@@ -1457,16 +1485,6 @@ What the test files said about their scenarios, by file and test.
 `Planned.test_the_seed_flag_is_filled_into_a_request_and_the_estimate_counts_a_refusal_as_planning_only`
 - the planner is in every task's price
 
-### orchestrator/monitoring/canary_test.py
-
-`module`
-- Tests for the model canary. Run: python3 -m unittest discover -p "*_test.py" orchestrator
-
-### orchestrator/monitoring/fly_audit_test.py
-
-`module`
-- Tests for the Fly orphan audit. Run: python3 -m unittest discover -p "*_test.py" orchestrator
-
 ### orchestrator/planning/file_children_test.py
 
 `FilingChildren.test_a_fix_child_is_an_ordinary_child_that_keeps_the_planners_flag_decision_and_records_what_it_fixes`
@@ -1476,11 +1494,6 @@ What the test files said about their scenarios, by file and test.
 
 `ChangeSets.test_a_flagged_change_set_leaves_the_slug_for_the_run_to_fill_in_and_the_comment_says_so`
 - an older plan's own slug is kept
-
-### orchestrator/planning/triage_test.py
-
-`module`
-- Tests for triage: secrets in public text and infeasible requests. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 
 ### orchestrator/planning/validate_plan_test.py
 
@@ -1584,9 +1597,6 @@ What the test files said about their scenarios, by file and test.
 - An `attempt` that writes the next entry of `writes` (None = write nothing) and costs 0.1.
 
 ### orchestrator/shared/api_check_test.py
-
-`module`
-- Tests for the api-check helper (pure logic, plus a run against a throwaway local server). Run: python3 -m unittest discover -p "*_test.py" orchestrator
 
 `Handler.do_POST`
 - 200, not 201: a seeded bug

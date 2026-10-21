@@ -32,36 +32,45 @@ def note_bugs_on_story(repo, token, number, facts, carried):
     return True
 
 
-def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None, verdicts=()):
+def outcome_notes(facts, bugs):
     notes = []
     if facts.get("dark_broken"):
         notes.append("**Dark feature left behind**: its flag stays off and the next attempt fixes it forward.")
     if facts["outcome"] == "regression":
         notes.append("**Regression**: behaviour that was live before this change stopped working, so the live app was rolled back to the previous "
                      "version. The commits stay in `main`, behind a flag that is off, and are fixed forward.")
-    for x in bugs:
-        notes.append(f"Bug noted on this issue ({x['kind']}): {x['check']}")
+    notes += [f"Bug noted on this issue ({x['kind']}): {x['check']}" for x in bugs]
     if facts["recurring_findings"]:
         notes.append("Findings that came back across rounds: " + "; ".join(facts["recurring_findings"][:3]))
     if facts["final_minor"]:
         notes.append(f"{len(facts['final_minor'])} minor finding(s) shipped open and were recorded.")
-    for x in filed:
-        notes.append(f"Improvement for the {'app' if x['target'] == 'managed_app' else 'Factory'}: {x['summary']}" + (f" ({x['url']})" if x["url"] else ""))
-    for x in lessons:
-        notes.append(f"Lesson: {x['detail'][:160]}")
+    return notes
+
+
+def learning_notes(filed, lessons, result):
+    notes = [f"Improvement for the {'app' if x['target'] == 'managed_app' else 'Factory'}: {x['summary']}" + (f" ({x['url']})" if x["url"] else "") for x in filed]
+    notes += [f"Lesson: {x['detail'][:160]}" for x in lessons]
     if result and result.get("root_cause"):
         notes.append(f"Cause named ({result.get('category')}): {result['root_cause'][:200]}")
+    return notes
+
+
+def verdict_notes(facts, cause, verdicts):
+    notes = []
     if cause and cause["category"] and facts["outcome"] not in outcomes.OK:
         notes.append(f"Cause: `{cause['category']}`, handled as: {ROUTES[cause['route']]}.")
     for v in verdicts:
         if v["event"]["severity"] == "warning" or v["verdict"] == "fix":
             notes.append(f"Event {v['verdict']} ({v['event']['severity']}): {v['event']['summary'][:100]}. {v['reason']}")
-    if not notes:
-        notes.append("Nothing to improve was found.")
+    return notes
+
+
+def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None, verdicts=()):
+    notes = outcome_notes(facts, bugs) + learning_notes(filed, lessons, result) + verdict_notes(facts, cause, verdicts)
     head = [f"## Retrospective: `{facts['outcome']}`", "", f"{facts['message'] or ''} ([run]({facts['run_url']}))", "",
             f"{facts['review_passes']} review pass(es), ${facts['spent_usd'] or 0:.2f} of a ${facts['cap_usd'] or 0:.2f} cap, "
             f"{len(facts['commits'])} commit(s) pushed.", ""]
-    return "\n".join(head + [f"- {n}" for n in notes]) + "\n"
+    return "\n".join(head + [f"- {n}" for n in notes or ["Nothing to improve was found."]]) + "\n"
 
 
 def post_retrospective(repo, token, number, run_id, body):

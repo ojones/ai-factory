@@ -3,7 +3,7 @@ import { logger } from "./logger";
 import { initFeatureFlags } from "./feature-flags";
 
 /**
- * Required global error handler (STANDARDS-VISIBILITY.md): log the full
+ * Required global error handler: log the full
  * error — including stack trace, not just the message — before exiting.
  * A silent crash (or one that only logs `error.message`) loses the
  * information needed to debug it after the process is gone.

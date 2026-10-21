@@ -30,23 +30,29 @@ class Run:
 
 
 class Finalize(unittest.TestCase):
-    def run_finalize(self, repo, outcome="round_limit", extra=None, rollback=None):
+    def write_state(self, repo, outcome, extra):
         work = Path(tempfile.mkdtemp())
         state = {**repo.d, "app": "demo", "issue_number": "66", "run_url": "https://x/run/9", "outcome": outcome,
                  "message": "4 review rounds used without a clean pass", "cap_usd": 0.75, "spent_usd": 0.6, "review_passes": 4,
                  "stages": stages(), "blocking": [{"source": "reviewer", "summary": "still wrong"}], "build_kind": "update",
                  **(extra or {})}
         (work / "state.json").write_text(json.dumps(state))
+        return work
+
+    def finalize_env(self, work):
+        return {"BUILD_RUN_DIR": str(work), "APP_NAME": "demo", "ISSUE_NUMBER": "66", "GITHUB_REPOSITORY": "o/f", "GITHUB_RUN_ID": "9",
+                "FACTORY_PAT": "pat", "FACTORY_GH_TOKEN": "tok", "GITHUB_STEP_SUMMARY": str(work / "summary.md")}
+
+    def run_finalize(self, repo, outcome="round_limit", extra=None, rollback=None):
+        work = self.write_state(repo, outcome, extra)
         calls = []
 
         def fake_sh(cmd, cwd=None, env=None, check=True, timeout=None):
             calls.append(cmd)
             return mock.Mock(stdout="[]", returncode=0, stderr="")
 
-        env = {"BUILD_RUN_DIR": str(work), "APP_NAME": "demo", "ISSUE_NUMBER": "66", "GITHUB_REPOSITORY": "o/f", "GITHUB_RUN_ID": "9",
-               "FACTORY_PAT": "pat", "FACTORY_GH_TOKEN": "tok", "GITHUB_STEP_SUMMARY": str(work / "summary.md")}
         done = rollback or {"status": "rolled_back", "restored": "b" * 40, "deploy": "healthy"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(fin, "sh", fake_sh), mock.patch.object(close_child, "sh", fake_sh), mock.patch.object(shell, "sh", fake_sh), \
+        with mock.patch.dict(os.environ, self.finalize_env(work)), mock.patch.object(fin, "sh", fake_sh), mock.patch.object(close_child, "sh", fake_sh), mock.patch.object(shell, "sh", fake_sh), \
                 mock.patch.object(rollback_step, "rollback_deploy", return_value=done) as deploy, \
                 mock.patch.object(fin.spend_ledger, "record_spend_in_ledger"), mock.patch.object(fin.app_state, "update_state_issues"):
             code = fin.finalize()

@@ -36,6 +36,7 @@ def request_text(doc, verdict, run_url="", original=""):
              "#### What it would take to resolve", "", *[f"- {x}" for x in doc["what_it_takes"]], "",
              "#### Requirements", "", *[f"{i}. {r}" for i, r in enumerate(doc["requirements"], 1)], "",
              "#### Target", "", TARGET_TEXT.get(verdict.get("target"), TARGET_TEXT["managed_app"]), "",
+             *(["#### Cause", "", str(verdict["cause"]), ""] if verdict.get("target") == "factory" and verdict.get("cause") else []),
              "#### Failure and solution log", "", "_Comments on this issue record each failure and the solution._"]
     if original:
         lines += ["", f"#### {ORIGINAL}", "", original_instructions(original)]
