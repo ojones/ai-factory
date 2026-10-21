@@ -46,9 +46,9 @@ class ReadingTheIntake(unittest.TestCase):
         self.assertEqual((got["kind"], got["app"]), ("new", "notes"))
 
     def test_a_bug_intake_carries_its_fix_for_marker_and_an_ordinary_one_does_not(self):
-        marker = child_tickets.render_fix_for(12, 12, 5, True, 1)
+        marker = child_tickets.render_fix_for(12, 5, 1)
         got = plan_run.read_intake(issue(("update-app-intake", "bug"), marker + "\n\n" + FORM.format(cap="_No response_")), "o/f", info(), LIMITS)
-        self.assertEqual(got["fix_for"], {"fix_for": 12, "flag_story": 12, "origin_parent": 5, "flag": True, "attempt": 1})
+        self.assertEqual(got["fix_for"], {"fix_for": 12, "origin_parent": 5, "attempt": 1})
         self.assertIsNone(plan_run.read_intake(issue(), "o/f", info(), LIMITS)["fix_for"])
 
     def test_a_child_ticket_or_another_issue_is_skipped(self):
@@ -102,7 +102,7 @@ class Run(unittest.TestCase):
         self.assertIn("Plan: 2 change sets", self.comments[-1])
         self.assertIn("CS-2 (#101)", self.comments[-1])
 
-    FIX = {"fix_for": 12, "flag_story": 12, "origin_parent": 5, "flag": True, "attempt": 1}
+    FIX = {"fix_for": 12, "origin_parent": 5, "attempt": 1}
 
     def test_a_bug_intake_that_fixes_a_child_is_told_to_plan_one_change_set_and_files_it_with_the_fix(self):
         got = self.go(plan(1), fix=self.FIX)

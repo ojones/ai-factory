@@ -14,10 +14,10 @@ def split(missing, reads):
 
 def guess(slug, named_flag):
     # Why this flag may be missing, for whoever reads the note. `named_flag` is the flag the Orchestrator created for the story (None when the task
-    # gave no flag to name: a first build, a run with the planner off, or a plan filed before the Orchestrator named flags).
+    # gave no flag to name: a plan filed before the Orchestrator named flags).
     if named_flag is None:
-        return (f"the task gave the coder no flag to use, so it chose `{slug}` itself and nothing created it (a first build, a run with the planner "
-                "off, or a plan filed before the Orchestrator named flags)")
+        return (f"the task gave the coder no flag to use, so it chose `{slug}` itself and nothing created it (a plan filed before the Orchestrator "
+                "named flags)")
     if slug != named_flag:
         return f"the coder added `{slug}` besides the flag the Orchestrator created for the story (`{named_flag}`)"
     return f"the flag `{named_flag}` was created at the start of the run but is gone from GrowthBook now (deleted or archived)"

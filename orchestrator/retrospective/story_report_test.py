@@ -45,7 +45,7 @@ class Bugs(unittest.TestCase):
         body = comment[comment.index("--body") + 1]
         self.assertIn("**GET /api/notes answers 200** (behaviour that was live before this change stopped working)", body)
         self.assertIn("Repro: curl /api/notes", body)
-        self.assertIn("still dark" if False else "flag `pin`", body)
+        self.assertIn("flag `pin`", body)
 
     def test_a_retry_that_already_carries_the_bugs_gets_only_the_label_not_a_second_comment(self):
         calls = []

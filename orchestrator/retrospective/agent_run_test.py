@@ -35,7 +35,7 @@ class Isolation(unittest.TestCase):
     def test_changes_are_found_by_comparing_plain_trees_and_git_is_never_read(self):
         before = self.tree({"agents/a.md": "one", "orchestrator/x.py": "x", ".git/config": "[core]\n"})
         after = self.tree({"agents/a.md": "two", "orchestrator/y.py": "y", ".git/config": "[core]\n\tfsmonitor = evil\n"})
-        os.symlink("/etc/passwd", after / "templates-link")
+        (after / "templates-link").symlink_to("/etc/passwd")
         changes, links = agent_run.tree_changes(before, after)
         self.assertEqual(changes, {"agents/a.md": "M", "orchestrator/y.py": "A", "orchestrator/x.py": "D"})
         self.assertEqual(links, ["templates-link"])  # the .git difference is invisible, a symlink is reported and never followed
@@ -119,7 +119,7 @@ class Isolation(unittest.TestCase):
     def test_propose_does_nothing_more_when_no_agent_ran(self):
         with mock.patch.object(agent_run, "mint_agent", return_value=("k", object())), mock.patch.object(agent_run, "run_agent", return_value=False), \
                 mock.patch.object(agent_run, "record_agent_spend"), mock.patch.object(learning_pr, "open_pr") as open_pr, mock.patch.object(tracker, "gh") as gh:
-            result = learning_pr.propose(Path("."), {"limits": {}}, "o/f", "pat", "tok", "parent", Path("f"), Path(tempfile.mkdtemp()) / "r.json", [1], "9")
+            result = learning_pr.propose(Path(), {"limits": {}}, "o/f", "pat", "tok", "parent", Path("f"), Path(tempfile.mkdtemp()) / "r.json", [1], "9")
         self.assertIsNone(result)
         open_pr.assert_not_called()
         gh.assert_not_called()

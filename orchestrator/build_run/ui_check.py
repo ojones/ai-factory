@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 
 MAX_CHECKS, MAX_STEPS = 30, 20
 ACTION_TIMEOUT_MS, NAV_TIMEOUT_MS = 8000, 15000
@@ -249,9 +250,9 @@ def run_checks(checks, base, token, log_path=None, shot_dir=None):
                 problems = [scrub(f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}", token)]
             if problems and shot_dir:
                 try:
-                    os.makedirs(shot_dir, exist_ok=True)
+                    Path(shot_dir).mkdir(parents=True, exist_ok=True)
                     shot = f"ui-{re.sub(r'[^A-Za-z0-9_-]', '_', c['id'])}.png"
-                    page.screenshot(path=os.path.join(shot_dir, shot))
+                    page.screenshot(path=str(Path(shot_dir) / shot))
                 except Exception:  # noqa: BLE001
                     shot = None
             ctx.close()

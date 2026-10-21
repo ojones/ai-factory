@@ -9,8 +9,8 @@
 # change. The owner's standing approval is the standard; nobody reviews a retirement.
 #
 # A flag is a candidate when all of these hold, read from the app's State issue and `flags.json`:
-#   - it is in `flags.json` and the State issue records it as `released` (not one the watchdog switched off: that one is dead, and the fix
-#     request replaces it with a new flag);
+#   - it is in `flags.json` and the State issue records it as `released` (not one the watchdog switched off: that one is a dark-broken candidate
+#     and its fix is an ordinary child with a flag of its own, STEP 5.5);
 #   - a later Build Run of the app also released a flag (its run id is higher);
 #   - it was released on an earlier day than today (a soak of at least a day, so the production-feedback scans have looked at it).
 # The newest release therefore always keeps its flag, and a run that ended `nothing_to_release` retires nothing.
@@ -121,8 +121,8 @@ def app_flags(owner, app, pat):
 
 
 def choose(eligible, task, owner, app, pat, limits, head_flags_json, today):
-    # The proven flags that ride along with a run, and {slug: story number} for the flags the State issue knows: none picked for a first build or an
-    # automatic retry (`eligible` is false). A task that names flags itself (`retire-flag:` lines, from an owner's Intake) retires those too. Only
+    # The proven flags that ride along with a run, and {slug: story number} for the flags the State issue knows: none picked for a fix child
+    # (`eligible` is false). A task that names flags itself (`retire-flag:` lines, from an owner's Intake) retires those too. Only
     # flags still in the manifest at the run's base count. A failed lookup never stops the run.
     named = retirement_check.retire_slugs(task)
     picked, issues = [], {}

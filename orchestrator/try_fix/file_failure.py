@@ -1,5 +1,7 @@
 # What happens to the events the Retrospective judged worth fixing (STEP 6.2 to 7.x): for each, the target (the verdict's, else by the cause: try_fix/route.py), the
 # bug text (the Try Fix Agent, write_bug.py, one credential for the whole batch) and the filing (file_bug.py). An unchanged child is never started again. Never raises.
+import contextlib
+
 from shared.console import log
 
 from try_fix import file_bug, needs_human, route, write_bug
@@ -31,10 +33,8 @@ def file_failures(repo, token, pat, fixes, facts, result, rollback, cfg, key=Non
             log(f"could not file the bug for {v['key']}: {type(e).__name__}: {e}")
             story = v["event"].get("story")
             if story and v["event"]["severity"] == "failure":
-                try:
+                with contextlib.suppress(Exception):
                     needs_human.hold(repo, token, story, f"the bug ticket for it could not be filed ({type(e).__name__})")
-                except Exception:  # noqa: BLE001
-                    pass
             got = {"target": verdict["target"], "action": "needs_human", "number": None, "url": ""}
         out.append({"key": v["key"], "source": v["event"]["source"], "severity": v["event"]["severity"], **got})
     if budget and cred and record_spend:

@@ -11,7 +11,7 @@ DARK_BROKEN = "dark-broken"
 def is_dark_broken(d):
     # Whether the run left a dark feature behind: it pushed code behind a flag and ended without releasing it (or with the watchdog
     # having switched the release off, or the tester having found a regression and the deploy been rolled back). The code stays in `main`,
-    # behind a flag that is off, and is fixed forward. The flag is the identity of a dark feature, and its
+    # behind a flag that is off, and is fixed forward by a fix child. The flag is the identity of a dark feature, and its
     # story issue (`flag:<slug>`) carries this label; `flags.json` does not, because every edit to it deploys.
     return bool(d.get("flags") and d.get("commits")) and d.get("outcome") not in outcomes.OK + outcomes.ANSWERED + (outcomes.PROVIDER_BLOCKED,)
 
@@ -23,7 +23,7 @@ def label_dark_feature(d, repo, token):
     try:
         env = {**os.environ, "GH_TOKEN": token}
         if is_dark_broken(d):
-            github.ensure_label(repo, DARK_BROKEN, token, "b60205", "A dark feature that failed its checks; fixed forward behind its flag")
+            github.ensure_label(repo, DARK_BROKEN, token, "b60205", "A dark feature that failed its checks; fixed forward by a fix child")
             labels = [DARK_BROKEN] + [l for l in (story_link.flag_label(slug) for slug in d["flags"]) if l]  # the story names its flag, released or not
             for name in labels[1:]:
                 github.ensure_label(repo, name, token, "0e8a16", "The feature flag this story's change is behind")

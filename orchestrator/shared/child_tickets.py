@@ -1,5 +1,6 @@
 # The contract between the Planning process that files child tickets and every process that reads them (Build Run, Retrospective, Try Fix):
 # the hidden `factory-plan` marker in a child's body, and the labels a child carries. The sub-issue shape of a child lives only here.
+import contextlib
 import json
 import re
 
@@ -28,8 +29,8 @@ def render_marker(meta):
 
 
 def read_fix_for(body):
-    # The fix a bug Intake carries ({} for any other issue): `fix_for` (the failed child), `flag_story` (the story whose flag the fix reuses), `origin_parent`
-    # (the plan the failed child belongs to), `flag` (whether that child is behind a flag) and `attempt` (1 for the first fix of a story, 2 for a fix of that fix).
+    # The fix a bug Intake carries ({} for any other issue): `fix_for` (the failed child), `origin_parent`
+    # (the plan the failed child belongs to) and `attempt` (1 for the first fix of a story, 2 for a fix of that fix).
     m = FIX_RE.search(body or "")
     if not m:
         return {}
@@ -40,14 +41,14 @@ def read_fix_for(body):
     return meta if isinstance(meta, dict) and meta.get("fix_for") else {}
 
 
-def render_fix_for(fix_for, flag_story, origin_parent, flag, attempt):
-    meta = {"fix_for": int(fix_for), "flag_story": int(flag_story), "origin_parent": int(origin_parent), "flag": bool(flag), "attempt": int(attempt)}
+def render_fix_for(fix_for, origin_parent, attempt):
+    meta = {"fix_for": int(fix_for), "origin_parent": int(origin_parent), "attempt": int(attempt)}
     return f"<!-- fix-for:{json.dumps(meta, separators=(',', ':'))} -->"
 
 
 # The marker's fields. `parent`: the Intake issue's number. `cs`: the change set's id in the plan. `kind`: "staging" (stage the app and verify its
 # infrastructure; only the first child of a new app) or "update". `flag`: whether the child's change is behind a flag (the slug is `issue-<n>`).
-# `flag_story`: set only on a fix child, the number of the failed story whose flag it reuses; `fix_for`: the child it fixes; `fix_attempt`: which fix of that story it is (1, 2, ...). `internal_only`, `size` ("S" or "M"),
+# `fix_for`: set only on a fix child, the child it fixes; `fix_attempt`: which fix of that child it is (1, 2, ...). `internal_only`, `size` ("S" or "M"),
 # `requirements`: what the planner decided. `secrets`: [{name, purpose}] the request declared. Order is not in the marker:
 # a child's GitHub blockers are the source of truth (`ChildTickets.blockers`), because the UI shows them and readiness is judged from their state.
 KINDS = ("staging", "update")
@@ -57,17 +58,10 @@ class ChildTicketError(RuntimeError):
     pass
 
 
-def story_number(marker, issue_number):
-    # The number the child's flag is named after: its own, or the failed story's when it is a fix child.
-    return int(marker.get("flag_story") or issue_number)
-
-
-def marker_for(cs, parent, kind="update", secrets=None, flag_story=None, fix_for=None, fix_attempt=None):
+def marker_for(cs, parent, kind="update", secrets=None, fix_for=None, fix_attempt=None):
     # The marker for one change set of a plan, in a fixed field order.
     meta = {"parent": parent, "cs": cs["id"], "kind": kind, "flag": bool(cs.get("flag")), "internal_only": bool(cs.get("internal_only")),
             "size": cs.get("size"), "requirements": list(cs.get("requirements") or [])}
-    if flag_story:
-        meta["flag_story"] = int(flag_story)
     if fix_for:
         meta["fix_for"] = int(fix_for)
     if fix_attempt:
@@ -131,18 +125,14 @@ class ChildTickets:
     def withdraw(self, number, comment):
         # Takes a child back: removed from the parent (closing alone leaves it listed, and a parent with children counts as planned), then closed.
         for path, fields, method in ((f"issues/{self.parent}/sub_issue", [f"sub_issue_id={self._api(f'issues/{number}')['id']}"], "DELETE"),):
-            try:
+            with contextlib.suppress(ChildTicketError):
                 self._api(path, *fields, method=method)
-            except ChildTicketError:
-                pass
         self.close(number, comment)
 
     def close(self, number, comment):
         for path, fields, method in ((f"issues/{number}/comments", [f"body={comment}"], "POST"), (f"issues/{number}", ["state=closed"], "PATCH")):
-            try:
+            with contextlib.suppress(ChildTicketError):
                 self._api(path, *fields, method=method)
-            except ChildTicketError:
-                pass  # best effort: the error being raised is the one that matters
 
 
 def parent_info(repo, number, token, run=None):

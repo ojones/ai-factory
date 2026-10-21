@@ -34,9 +34,12 @@ Purely mechanical — checks are the style guide, not prose. The Starter Templat
 The Factory's own Python (`orchestrator/`, `agents/`) is linted with [ruff](https://docs.astral.sh/ruff/), configured in `pyproject.toml` (`ruff check`, a step of the `unit` job in `factory-checks.yml`). Rules are added there one at a time, so the set only grows.
 
 - **Test files** are named `<name>_test.py`, beside the module they test (`build_run/run.py` → `build_run/run_test.py`), never `test_<name>.py`. CI runs `python -m unittest discover -p "*_test.py" orchestrator`, which only finds that suffix, so a misnamed file would silently never run. Test methods inside a file keep the `test_` prefix, which `unittest` requires.
-- **Comments are `#` comments. No docstrings**, and no bare string standing in for a comment. Say what a module, class or function is for in `#` lines at the top of its body. Triple-quoted strings are fine as data (a prompt, a fixture), just not as a statement on their own. Code must not read `__doc__`.
+- **Functions are short.** Aim for 5 lines or fewer, 10 is fine, and over 10 fails the build. A line count runs from a body's first statement to its last. If a function wants a comment to explain a step, extract that step into a function whose name says it.
+- **Comments are avoided.** Name things so a comment is superfluous. No docstrings, no bare string standing in for a comment, and code must not read `__doc__`. `# noqa`, `# type:`, `# pragma` and a shebang are allowed. Triple-quoted strings are fine as data (a prompt, a fixture), just not as a statement on their own.
 
-`orchestrator/style_test.py` enforces both (ruff has no rule for either) and fails the build.
+- **The dignified-Python rules** ([docs/dignified-python-core.md](docs/dignified-python-core.md)). Ruff enforces pathlib over `os.path` (`PTH`), absolute imports (`TID252`), no useless re-export aliases (`PLC0414`), and no `try`/`except`/`pass` (`S110`, `SIM105`). `style_test.py` enforces the indentation limit. The reviewer enforces the rest on new code: look before you leap, O(1) properties, no backwards-compatibility shims, variables declared next to their use, no single-use destructuring.
+
+`orchestrator/style_test.py` enforces all of it (ruff has no rule for these) and fails the build. The numbers (`GOAL_LINES`, `MAX_LINES`, the allowed comment markers) are constants at its top. Code written before these rules is listed in `orchestrator/style_baseline.json`: a listed function may not grow, a file may not gain comments, and nothing new may be over the limit. When you shorten a function or drop comments the test asks you to tighten the baseline: `python3 orchestrator/style_test.py --update`. `--report` prints how far the codebase is from the goal.
 
 ## Git workflow
 

@@ -2,10 +2,10 @@
 # ticket is always an Intake, so the planner plans it like any other change and a fix has the same limits as any change:
 #
 #   dark story    the event belongs to a planned child that is still open and whose flag is not released (never released, off, or switched off by the watchdog,
-#                 STEP 5.5): the failure is commented on that story, and the bug Intake carries a `fix-for` marker, so planning makes exactly one child behind the SAME
-#                 flag. The failed child is blocked by the bug Intake and waits, so it resumes only when the Intake closes (retrospective/close_child.py) and is never started
-#                 again unchanged. A fix of a fix counts as the next attempt; after `fix_attempts_max` the failed child is held `needs-human`.
-#   released      the flag was released and is still on, or there is no story: a regression. A new bug Intake with no marker, so a fresh flag; the story is told where it is.
+#                 STEP 5.5): the failure is commented on that story, and the bug Intake carries a `fix-for` marker, so planning makes exactly one ordinary child. The failed
+#                 child is blocked by the bug Intake and waits, so it resumes only when the Intake closes (retrospective/close_child.py), behind its own flag, and is never
+#                 started again unchanged. A fix of a fix counts as the next attempt; after `fix_attempts_max` the failed child is held `needs-human`.
+#   released      the flag was released and is still on, or there is no story: a regression. A new bug Intake with no marker that nothing waits for; the story is told where it is.
 #   factory       the cause is the Factory's, or none was named: one fix-request issue in ai-factory from the same template. A planned child that failed is held
 #                 `needs-human` until the fix merges (resume_after_merge.py) or a person decides.
 #
@@ -87,13 +87,13 @@ def file_bug(repo, token, pat, verdict, doc, facts=None, max_attempts=2):
         number = create(repo, pat, title, render_bug.intake_body(app, doc, verdict, run_url), labels + [intake_labels.UPDATE_APP_INTAKE])
         if story and number:
             comment_once(repo, token, story, f"<!-- bug-filed:{verdict['key']} -->",
-                         f"A bug ticket was filed for this: #{number}. The flag was already released, so it is planned as a new change with its own flag.")
+                         f"A bug ticket was filed for this: #{number}. The flag was already released, so it is planned as a new change.")
         return {"target": target, "action": "bug_intake", "number": number, "url": f"https://github.com/{repo}/issues/{number}" if number else ""}
     attempt = int(marker.get("fix_attempt") or 0) + 1
     if attempt > max_attempts:
         needs_human.hold(repo, token, story, f"this story has used its {max_attempts} fix attempt(s) (`fix_attempts_max`); a person decides")
         return {"target": target, "action": "needs_human", "number": None, "url": ""}
-    fix = child_tickets.render_fix_for(story, child_tickets.story_number(marker, story), parent["number"], marker.get("flag"), attempt)
+    fix = child_tickets.render_fix_for(story, parent["number"], attempt)
     original = render_bug.original_instructions(read_form.form_section(failed["body"], "What should change?"))
     number = create(repo, pat, title, render_bug.intake_body(app, doc, verdict, run_url, original=original, fix_marker=fix), labels)  # no update-app-intake yet: planning starts last
     if not number:
@@ -108,6 +108,6 @@ def file_bug(repo, token, pat, verdict, doc, facts=None, max_attempts=2):
     github.run(["issue", "edit", str(story), "--repo", repo, "--add-label", child_tickets.WAIT, "--remove-label", needs_human.LABEL], token)
     github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", intake_labels.UPDATE_APP_INTAKE], pat)  # the PAT: this label starts planning
     comment_once(repo, token, story, f"<!-- bug-filed:{verdict['key']} -->",
-                 f"**Fix first.** This change set is not started again as it was. Bug #{number} was filed and will be planned into one change set behind the same flag; "
+                 f"**Fix first.** This change set is not started again as it was. Bug #{number} was filed and will be planned into one change set; "
                  "this one starts again after that closes.")
     return {"target": target, "action": "bug_intake", "number": number, "url": f"https://github.com/{repo}/issues/{number}"}

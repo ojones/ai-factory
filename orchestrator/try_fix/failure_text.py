@@ -49,7 +49,7 @@ def requirements(facts, result, rollback, app_side=False):
     elif outcome == "crash":
         reqs.append(f"The run no longer crashes (it stopped with: {message}).")
     elif outcome == "regression":
-        reqs.append(f"The regression is fixed ({message}): the behaviour the tester found broken works again with the change in place, behind the same flag, and a test covers it. The code is still in `main` (nothing was reverted), so fix it forward; the flag is released only after a clean pass.")
+        reqs.append(f"The regression is fixed ({message}): the behaviour the tester found broken works again with the change in place, and a test covers it. The code is still in `main` (nothing was reverted), so fix it forward; the flag is released only after a clean pass.")
     elif outcome == "flag_missing":
         notes = facts.get("flag_notes") or []
         slugs = ", ".join(f"`{n.get('slug')}`" for n in notes) or "the change's flag"

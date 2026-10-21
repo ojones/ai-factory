@@ -1,6 +1,6 @@
 # STEP 8.1, 8.2, 8.4: is a bug dark or released? The answer comes from the flag's state in the App State record (the issue in the app's repo that the Build Run
-# keeps, shared/app_state_record.py), never from a guess. A flag that was released and is still on is released (a bug now is a regression, a fresh flag); one that was
-# never released, is off, or was switched off by the watchdog is dark (the fix keeps the flag, the story stays open). An error with no flag in it cannot be tied to a
+# keeps, shared/app_state_record.py), never from a guess. A flag that was released and is still on is released (a bug now is a regression: an ordinary bug Intake, nothing waits); one that was
+# never released, is off, or was switched off by the watchdog is dark (the bug Intake carries `fix_for` and the story's open child waits). An error with no flag in it cannot be tied to a
 # story, so nothing is claimed about it (`released` stays unknown) and it is filed as a plain bug Intake. Pure, tested alone.
 import re
 

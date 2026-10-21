@@ -5,7 +5,7 @@ from shared import outcomes
 from retrospective import tracker
 
 # What each cause leads to, in words for the story.
-ROUTES = {"app": "a fix to the app's change, tried again behind the same flag", "factory": "a fix request for the Factory",
+ROUTES = {"app": "a fix to the app's change, the failed change runs again once it is fixed", "factory": "a fix request for the Factory",
           "info": "left for a person"}
 MAX_BUGS = 5
 
@@ -43,7 +43,7 @@ def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None
     # The short summary commented on the issue that started the run.
     notes = []
     if facts.get("dark_broken"):
-        notes.append("**Dark feature left behind**: its flag stays off and the next attempt fixes it forward behind the same flag.")
+        notes.append("**Dark feature left behind**: its flag stays off and the next attempt fixes it forward.")
     if facts["outcome"] == "regression":
         notes.append("**Regression**: behaviour that was live before this change stopped working, so the live app was rolled back to the previous "
                      "version. The commits stay in `main`, behind a flag that is off, and are fixed forward.")

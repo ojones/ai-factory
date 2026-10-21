@@ -54,7 +54,7 @@ def render_state(prev_body, d):
             key = f"{d.get('app')}.feature.{slug}"
             if key not in flags or str(flags[key].get("state", "")).startswith("dark"):
                 flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"),
-                              "state": "dark (failed its checks; fixed forward behind its flag)"}
+                              "state": "dark (failed its checks; fixed forward by a fix child)"}
     data = {"runs": runs, "flags": sorted(flags.values(), key=lambda f: f["date"])}
     last = runs[-1]
     lines = [f"# {d.get('app')}: Factory state", "",

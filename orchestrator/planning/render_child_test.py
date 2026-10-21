@@ -46,6 +46,13 @@ class ChangeSets(unittest.TestCase):
         for none in ("", None, "no marker", "<!-- factory-plan:{broken -->", "<!-- factory-plan:[1] -->"):
             self.assertEqual(child_tickets.read_marker(none), {})
 
+    def test_a_fix_childs_marker_names_the_child_it_fixes_and_which_attempt_it_is_and_no_flag_to_reuse(self):
+        marker = child_tickets.read_marker(render_child.child_body("notes", "do it", 7, {"id": "CS-1", "flag": True}, fix_for=12, fix_attempt=2))
+        self.assertEqual((marker["fix_for"], marker["fix_attempt"], marker["flag"]), (12, 2, True))
+        self.assertNotIn("flag_story", marker)
+        plain = child_tickets.read_marker(render_child.child_body("notes", "do it", 7, {"id": "CS-1"}))
+        self.assertNotIn("fix_for", plain)
+
     def test_children_keep_the_parents_cost_cap(self):
         self.assertIn("### Cost cap override (USD)\n\n1.00", render_child.child_body("notes", "t", 7, {"id": "CS-1"}, "1.00"))
         self.assertIn("### Cost cap override (USD)\n\n_No response_", render_child.child_body("notes", "t", 7, {"id": "CS-1"}))

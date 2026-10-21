@@ -15,7 +15,7 @@ class AgentCalls:
 
     def invoke(self, role, label, values, extra_env=None, cwd=None, home=None, note=None):
         # One headless OpenHands invocation of `role`, with its prompt rendered for this run. Returns (exit status, cost, token usage).
-        prompt = prompts.render(prompts.load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app, "build_kind": self.build_kind,
+        prompt = prompts.render(prompts.load_prompt(self.cfg["roles"][role]["prompt"]), {"app_name": self.app,
                                                                          "spec": getattr(self, "spec", None) or getattr(self, "task", ""), **values})
         return self.runner.run(role, label, agent_output.retry_prompt(prompt, note), extra_env, cwd, home)
 

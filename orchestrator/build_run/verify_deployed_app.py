@@ -149,7 +149,7 @@ def ui_section(wanted, helper_path):
 def derive_test(doc, expected_flags):
     # (passed, failures). passed is derived from the results, and every new flag needs a result.
     # Only a check in the `passed` state passes: `failed`, `blocked` (something outside the app stopped
-    # the check) and `not_run` all keep the change from releasing. With no new flags (a first build)
+    # the check) and `not_run` all keep the change from releasing. With no new flags (an internal change)
     # the results test the Intake's requirements, and there must be at least one.
     results = doc.get("results") if isinstance(doc, dict) else None
     if not isinstance(results, list):
@@ -240,8 +240,8 @@ def verification_record(doc, expected_flags):
 
 class VerifyDeployedApp:
     def test_deployed(self, base, head, rnd, flags):
-        # The tester drives the deployed app (dark behind its flag, via the Preview Token; a first build without flags is tested against
-        # the Intake) and says what a failure means: `regression`, `dark_only` or `ok` (`test_impact`). It has its own HOME for OpenHands
+        # The tester drives the deployed app (dark behind its flag, via the Preview Token; a change without flags is tested against
+        # the child's requirements) and says what a failure means: `regression`, `dark_only` or `ok` (`test_impact`). It has its own HOME for OpenHands
         # and its own checkout of `head`. Returns (passed, failures, impact).
         tester_tree = self.work / f"tester-tree-{rnd}"
         changed_files = self.git("diff", "--name-only", base, head, check=False).stdout.split()

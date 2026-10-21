@@ -11,7 +11,7 @@ def inferred_category(category, outcome, has_bugs=False):
     if outcome in ("budget_exhausted", "time_limit") and category in (None, "", "prompt_gap", "infra", "unknown", "model_limit"):
         return "model_limit"
     if outcome in ("watchdog_disabled", "regression") and category not in FACTORY_CATEGORIES:
-        return "regression"  # the change broke production: the story is retried, fixing the code behind the same flag
+        return "regression"  # the change broke production: the story is retried after a fix
     if has_bugs and category not in FACTORY_CATEGORIES and category != "spec_ambiguity":
         return "regression"  # the tester saw checks fail: the story is retried on its own issue, with the bugs as notes
     return category or None

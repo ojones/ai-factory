@@ -44,9 +44,10 @@ class Filing(unittest.TestCase):
         bug = got["number"]
         self.assertEqual(got["action"], "bug_intake")
         fix = child_tickets.read_fix_for(self.gh.issues[bug]["body"])
-        self.assertEqual(fix, {"fix_for": 12, "flag_story": 12, "origin_parent": 7, "flag": True, "attempt": 1})
+        self.assertEqual(fix, {"fix_for": 12, "origin_parent": 7, "attempt": 1})  # no flag fields: the planner gives the fix child its own flag decision
         self.assertEqual(self.gh.blocked, {12: [bug]})  # blocked by the Intake: it resumes only when the Intake closes
         self.assertIn("waiting-on-plan", self.labels(12))
+        self.assertFalse(any("same flag" in c for c in self.gh.comments[12]))  # the story is told nothing about a shared flag
         self.assertIn("Change set CS-1: Tags", self.gh.issues[bug]["body"])  # the failed child's own instructions travel with the fix
         self.assertEqual(render_bug.read_key(self.gh.issues[bug]["body"]), verdict()["key"])
 
@@ -74,15 +75,16 @@ class Filing(unittest.TestCase):
         self.assertEqual(len([n for n, i in self.gh.issues.items() if "[" in i.get("title", "")]), 1)
         self.assertTrue(any("Seen again" in c for c in self.gh.comments[first]))
 
-    def test_a_fix_of_a_fix_is_the_next_attempt_behind_the_original_storys_flag(self):
+    def test_a_fix_of_a_fix_is_the_next_attempt_along_the_fix_for_chain(self):
         first = self.file()["number"]
-        fixed = self.gh.add(30, body=child_tickets.render_marker({**MARKER, "flag_story": 12, "fix_for": 12, "fix_attempt": 1}) + "\n\n" + FORM,
+        fixed = self.gh.add(30, body=child_tickets.render_marker({**MARKER, "fix_for": 12, "fix_attempt": 1}) + "\n\n" + FORM,
                             labels=["update-app-intake"])
         self.gh.issues[fixed]["title"] = "demo: Fix tags"
         self.gh.subs[first] = [fixed]
         got = self.file(verdict(story=fixed, fp="again"))
         fix = child_tickets.read_fix_for(self.gh.issues[got["number"]]["body"])
-        self.assertEqual((fix["fix_for"], fix["flag_story"], fix["attempt"], fix["origin_parent"]), (fixed, 12, 2, first))
+        self.assertEqual((fix["fix_for"], fix["attempt"], fix["origin_parent"]), (fixed, 2, first))
+        self.assertNotIn("flag_story", fix)
 
     def test_after_the_last_attempt_the_failed_child_is_left_for_a_person_and_nothing_is_filed(self):
         self.gh.issues[12]["body"] = child_tickets.render_marker({**MARKER, "fix_attempt": 2}) + "\n\n" + FORM
@@ -93,7 +95,7 @@ class Filing(unittest.TestCase):
         self.assertIn("needs-human", self.labels(12))
         self.assertNotIn("waiting-on-plan", self.labels(12))
 
-    def test_a_flag_that_is_still_on_makes_a_regression_with_no_marker_and_a_fresh_flag(self):
+    def test_a_flag_that_is_still_on_makes_a_regression_with_no_marker_and_nothing_waits(self):
         got = self.file(verdict(released=True))
         body = self.gh.issues[got["number"]]["body"]
         self.assertEqual(child_tickets.read_fix_for(body), {})

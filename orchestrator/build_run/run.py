@@ -20,7 +20,6 @@ from flag_lifecycle import (
     retirement_selection,
 )
 from shared import (
-    child_tickets,
     config,
     outcomes,
     run_stops,
@@ -114,7 +113,7 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
             task = self.task + retirement_selection.retirement_block(self.retiring)
             self.spec = (getattr(self, "spec", None) or self.task) + retirement_selection.retirement_note(self.retiring)
             if self.fix_for:
-                self.spec += fix_note.fix_note(child_tickets.story_number(self.plan_meta, self.issue), self.fix_for)
+                self.spec += fix_note.fix_note(self.fix_for)
             if self.retiring:
                 log("retiring in passing: " + ", ".join(self.retiring))
                 self.state.d["retiring"] = list(self.retiring)
@@ -203,8 +202,6 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
                                               "same findings open; more fix rounds are not changing anything")
                 summary = "\n".join(review_code.describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
                 head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
-        except endings.NothingToDo as e:
-            self.state.d.update(outcome="nothing_to_release", message=str(e))
         except endings.Regression as e:
             self.state.d.update(outcome="regression", message=str(e))
         except run_stops.FlagMissing as e:

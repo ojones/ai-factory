@@ -45,6 +45,26 @@ class FilingChildren(unittest.TestCase):
         self.assertEqual([c[2] for c in starts], [str(numbers["CS-1"])])  # CS-3 has nothing to wait for either, but waits its turn
         self.assertIn(intake_labels.START, starts[0])
 
+    def test_a_fix_child_is_an_ordinary_child_that_keeps_the_planners_flag_decision_and_records_what_it_fixes(self):
+        one = [dict(sets()[0], flag=None, internal_only=True)]
+        flagged = [dict(sets()[0], flag=True)]
+        for plan, expected_flag in ((one, False), (flagged, True)):
+            gh = FakeIssues()
+            gh.add(7)
+            with mock.patch.object(github, "run", gh):
+                made = file_children.file_children("o/f", "pat", "notes", 7, plan, ["CS-1"], "req", tickets=child_tickets.ChildTickets("o/f", 7, "pat", gh),
+                                                   fix={"fix_for": 12, "origin_parent": 5, "attempt": 2})
+            marker = child_tickets.read_marker(gh.issues[made[0][1]]["body"])
+            self.assertEqual((marker["flag"], marker["fix_for"], marker["fix_attempt"]), (expected_flag, 12, 2))
+            self.assertEqual(set(marker) & {"flag_story", "origin_parent"}, set())  # the child names no one else's flag, and the chain is counted from the failed child
+            body = gh.issues[made[0][1]]["body"]
+            self.assertEqual("slug `" in body, expected_flag)
+
+    def test_an_ordinary_child_has_no_fix_markers(self):
+        made = self.file()
+        marker = child_tickets.read_marker(self.gh.issues[made[0][1]]["body"])
+        self.assertEqual(set(marker) & {"fix_for", "fix_attempt", "flag_story"}, set())
+
     def test_a_parent_that_already_has_children_is_not_planned_twice(self):
         first = self.file()
         again = self.file()

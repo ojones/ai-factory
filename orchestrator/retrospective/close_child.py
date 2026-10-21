@@ -38,7 +38,7 @@ def settle_fix(repo, pat, parent, run=None):
     if not fix:
         return []
     run(["issue", "comment", str(fix["fix_for"]), "--repo", repo, "--body",
-         f"The fix for this change set is done (#{parent} is closed). It starts again, now with the fix in `main`."], pat)
+         f"The fix for this change set is done (#{parent} is closed). It runs again behind its own flag, now with the fix in `main`."], pat)
     return advance_plan(repo, pat, fix["origin_parent"])["started"]
 
 

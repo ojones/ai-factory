@@ -28,11 +28,6 @@ class PipelineFix(Exception):
         self.head = head
 
 
-class NothingToDo(Exception):
-    # The request is already satisfied (for example, the flag it would retire is already gone): end clean, spend nothing.
-    pass
-
-
 NEAR_CAP = 0.9  # spend at or above this share of the cap makes an Agent's failure a budget ending
 
 

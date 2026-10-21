@@ -373,11 +373,10 @@ def run_task(repo, app, branch, issue):
 
 
 def read_report(repo, run_id):
-    import glob
     import tempfile
     d = tempfile.mkdtemp(prefix="bench-report-")
     gh(["run", "download", str(run_id), "--repo", repo, "-n", "build-run", "-D", d], check=False)
-    found = glob.glob(d + "/**/state.json", recursive=True)
+    found = sorted(Path(d).rglob("state.json"))
     return json.load(open(found[0])) if found else None
 
 

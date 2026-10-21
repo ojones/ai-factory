@@ -1,5 +1,6 @@
 # STEP 4.1 and the setup before it: read the child, record the flag, wire the secrets, sync the Starter's protected files, pick the flags to retire,
 # check the models, prepare the Agent account, install dependencies, and hold the daily cap and the capacity wait.
+import contextlib
 import json
 import os
 import re
@@ -54,7 +55,7 @@ class PrepareRun:
         issue = json.loads(out)
         self.plan_meta = read_child.identify_intake(issue, self.app, self.issue)
         self.locate_plan()
-        # A fix child (STEP 7.1) carries `fix_for` in its marker: the child it fixes. Its flag is the failed story's (`flag_story`).
+        # A fix child (STEP 7.1) carries `fix_for` in its marker: the child it fixes.
         self.fix_for = self.plan_meta.get("fix_for")
         if self.fix_for:
             self.state.d["fix_for"] = self.fix_for
@@ -110,19 +111,16 @@ class PrepareRun:
         self.parent = found["number"]
         self.state.d["parent"] = self.parent
 
-    def require_secrets(self, needed, record=False):
+    def require_secrets(self, needed):
         # Stop (AwaitingSecret) until every secret declared for this request exists as a GitHub Actions secret on the app's repository. The planning
         # process made the first check and left the declared names in a marker; this check runs again at the start of every Build Run, before any
-        # Agent is paid for (a retry, a child, a re-run). `record` also comments the request on the Intake; nothing here reads a value.
+        # Agent is paid for (a retry, a child, a re-run). Nothing here reads a value.
         try:
             have = secrets_check.present_names(lambda args: self.gh(args, check=False), self.app_repo)
         except secrets_check.SecretsUnreadable as e:
             raise run_stops.NeedsHuman("other", str(e))
         self.state.d["secrets"] = [x["name"] for x in needed]
         missing = secrets_check.missing_secrets(needed, have)
-        if record:
-            self.gh(["issue", "comment", str(self.issue), "--repo", self.factory_repo, "--body", secrets_check.request_comment(needed, missing, self.app_repo)],
-                    token=self.factory_token, check=False)
         if missing:
             raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, "add `proceed-with-change` again"))
 
@@ -150,10 +148,8 @@ class PrepareRun:
     def secret_names(self):
         # The secret names this app declares: in its committed `secrets.json`, and the plan's declared ones for this run.
         names = list(self.state.d.get("secrets") or [])
-        try:
+        with contextlib.suppress(OSError, ValueError, AttributeError):
             names += [x.get("name") for x in json.loads((self.app_dir / "secrets.json").read_text()).get("secrets", [])]
-        except (OSError, ValueError, AttributeError):
-            pass
         return names
 
     def stage_secret_wiring(self):
@@ -196,7 +192,7 @@ class PrepareRun:
     def choose_flags_to_retire(self):
         # The proven flags that ride along with this run (flag_lifecycle/retirement_selection.py).
         picked, issues = retirement_selection.choose(
-            not self.fix_for and self.build_kind == "update", self.task, self.app_repo.split("/")[0], self.app,
+            not self.fix_for, self.task, self.app_repo.split("/")[0], self.app,
             self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout,
             time.strftime("%Y-%m-%d", time.gmtime()))
         if issues:
@@ -320,12 +316,11 @@ class PrepareRun:
 
     def name_the_flag(self):
         # A flagged change set's task carries a placeholder for the flag's slug (flag_lifecycle/flag_slug.py). Fill it with the story's flag: `issue-<n>` of this
-        # issue, or of the failed story for a fix child. Create the GrowthBook feature (production off) and record
+        # issue. Create the GrowthBook feature (production off) and record
         # the flag in `flags.json` before the coder starts, so the coder only wraps code; the flag exists while it and the tester work.
         if flag_slug.SLOT not in (self.task or ""):
             return
-        # A fix child names the failed story's flag (`flag_story` in its marker); any other child, its own number.
-        slug = flag_slug.for_story(child_tickets.story_number(getattr(self, "plan_meta", None) or {}, self.issue))
+        slug = flag_slug.for_story(self.issue)
         self.task = flag_slug.name_in(self.task, slug)
         if getattr(self, "spec", None):
             self.spec = flag_slug.name_in(self.spec, slug)

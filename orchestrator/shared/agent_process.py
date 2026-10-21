@@ -91,7 +91,7 @@ def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0, user=None
             except subprocess.TimeoutExpired:
                 pass
             now = time.time()
-            current = os.path.getsize(out_path)
+            current = Path(out_path).stat().st_size
             if current != size:
                 size, last_change = current, now
             reason = "timeout" if now - began >= timeout_s else "stall" if silent_too_long(last_change, now, stall_s) else None

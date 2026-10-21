@@ -129,7 +129,7 @@ limits:
   maintenance:
     enabled: true
   # A proven flag is retired inside the next Update App Intake's Build Run for the same app, never in a run of its own: once a later Build Run
-  # has also released something and the flag is at least min_age_days old, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_retirement.py).
+  # has also released something and the flag is at least min_age_days old, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_lifecycle/retirement_selection.py).
   flag_retirement:
     min_age_days: 1
     piggyback_max: 5
@@ -143,7 +143,7 @@ limits:
   # stay under, so Agents work in the model's reliable range. Over-goal stages are flagged.
   context_goal_tokens: 100000
   # An Update App Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
-  # for one Intake. Set planner_enabled false to run an Update App Intake's request straight through as one change.
+  # for one Intake. Set planner_enabled false to switch planning off: plan.yml then plans nothing and the Intake stays as it is.
   planner_enabled: true
   # What the planning process may spend on one Intake, apart from the Build Runs of its children.
   planner_cost_cap_usd: 0.50
@@ -156,7 +156,7 @@ limits:
   # fixed by a later run.
   rollback_regressions: true
   rollback_timeout_minutes: 15
-  # Handle every child that ends badly (STEP 7): a cause in the app gets a bug Intake (planned into one fix child behind the same flag; the failed child waits for it), a cause in the Factory gets
+  # Handle every child that ends badly (STEP 7): a cause in the app gets a bug Intake (planned into one fix child with a flag of its own; the failed child waits for it), a cause in the Factory gets
   # a learning PR that starts the child again when it merges, anything else waits for a person. An unchanged child is never started again.
   fix_requests: true
   # How many fix attempts (bug Intakes along the `fix_for` chain) one story gets before it is left for a person (`needs-human`). Two: the first fix often meets a second problem the failure

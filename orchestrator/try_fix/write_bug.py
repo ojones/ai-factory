@@ -20,7 +20,7 @@ GUIDANCE = {
                        "choice as an assumption."),
     "model_limit": "The last attempt was too much for one pass. Do the smallest part that is independently valuable and keep it small.",
     "regression": ("The change broke something: the watchdog switched its flag off, or the tester saw checks fail (they are listed under the requirements). "
-                   "Find what is wrong (the error lines or the failing checks, the diff and the tests), fix the code behind the same flag, and add a test that "
+                   "Find what is wrong (the error lines or the failing checks, the diff and the tests), fix the code, and add a test that "
                    "fails without the fix. Do not remove the flag or the feature."),
 }
 

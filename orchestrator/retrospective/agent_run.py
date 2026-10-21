@@ -75,7 +75,7 @@ def listing(root):
             full = Path(dirpath) / name
             rel = full.relative_to(root).as_posix()
             if full.is_symlink():
-                links[rel] = os.readlink(full)
+                links[rel] = str(full.readlink())
             elif name in filenames:
                 files[rel] = full
     return files, links

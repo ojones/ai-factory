@@ -76,6 +76,15 @@ class Scan(unittest.TestCase):
         events, _ = self.go(log_of("TypeError", 4, flag="demo.feature.issue-20"), state=state)
         self.assertEqual((events[0]["story"], events[0]["released"], events[0]["flag"]), (20, False, "issue-20"))
 
+    def test_an_error_that_names_a_released_flag_is_a_released_story_event(self):
+        state = {"flags": [{"key": "demo.feature.issue-12", "state": "released"}]}
+        events, _ = self.go(log_of("TypeError", 4, flag="demo.feature.issue-12"), state=state)
+        self.assertEqual((events[0]["story"], events[0]["released"], events[0]["flag"]), (12, True, "issue-12"))
+
+    def test_an_error_with_no_app_state_is_filed_with_no_story(self):
+        events, _ = self.go(log_of("TypeError", 4, flag="demo.feature.issue-12"))
+        self.assertEqual((events[0]["story"], events[0]["released"]), (None, None))
+
     def test_one_events_file_is_written_and_a_switched_off_scan_writes_an_empty_one(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"GITHUB_REPOSITORY": "o/ai-factory", "FACTORY_GH_TOKEN": "t", "FACTORY_PAT": "p"}), \

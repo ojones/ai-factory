@@ -141,7 +141,7 @@ class SettleFix(unittest.TestCase):
         self.gh.add(12, labels=["update-app-intake", W])
         self.gh.add(13, labels=["update-app-intake", W])
         self.gh.subs[5] = [12, 13]
-        self.gh.add(50, body=child_tickets.render_fix_for(12, 12, 5, True, 1) + "\n\n### App name\n\ndemo\n")
+        self.gh.add(50, body=child_tickets.render_fix_for(12, 5, 1) + "\n\n### App name\n\ndemo\n")
         self.gh.add(51, labels=["update-app-intake", S])
         self.gh.subs[50] = [51]
         self.gh.blocked[12] = [50]
@@ -160,6 +160,35 @@ class SettleFix(unittest.TestCase):
         self.assertEqual(result["started"], [12])
         self.assertTrue(any("The fix for this change set is done" in c for c in self.gh.comments[12]))
         self.assertEqual([e[3] for e in edits], ["12"])  # only the failed child starts, never the sibling behind it
+
+    def test_the_story_hears_the_failed_child_runs_again_behind_its_own_flag(self):
+        self.close_fix()
+        said = " ".join(self.gh.comments[12])
+        self.assertIn("runs again behind its own flag", said)
+        self.assertNotIn("same flag", said)
+
+    def test_a_fix_that_itself_needed_a_fix_resumes_each_failed_child_in_turn_up_the_chain(self):
+        # Fix child 51 (under bug Intake 50) failed and waits for bug Intake 60, whose fix child is 61: closing 61 restarts 51, and 51 closing restarts 12.
+        self.gh.add(60, body=child_tickets.render_fix_for(51, 50, 2) + "\n\n### App name\n\ndemo\n")
+        self.gh.add(61, labels=["update-app-intake", S])
+        self.gh.subs[60] = [61]
+        self.gh.issues[51]["labels"] = [{"name": W}, {"name": "update-app-intake"}]
+        self.gh.blocked[51] = [60]
+        self.gh.issues[61]["state"] = "closed"
+        with mock.patch.object(close_child, "sh"), mock.patch.object(close_child.github, "run", self.gh):
+            first = close_child.advance("o/f", "pat", 61, child_tickets.ChildTickets("o/f", 60, "pat", self.gh))
+        self.assertEqual(first["started"], [51])
+        self.assertEqual(self.gh.issues[50]["state"], "open")  # the original bug Intake is not done until its own child is
+        self.gh.issues[51]["state"] = "closed"
+        with mock.patch.object(close_child, "sh") as sh2, mock.patch.object(close_child.github, "run", self.gh):
+            second = close_child.advance("o/f", "pat", 51, child_tickets.ChildTickets("o/f", 50, "pat", self.gh))
+        self.assertEqual(second["started"], [12])
+        self.assertEqual([c.args[0][3] for c in sh2.call_args_list], ["12"])
+
+    def test_a_regression_bug_has_no_marker_so_closing_it_resumes_nothing(self):
+        self.gh.add(70, body="### App name\n\ndemo\n")
+        self.assertEqual(close_child.settle_fix("o/f", "pat", 70, self.gh), [])
+        self.assertNotIn(12, self.gh.comments)
 
     def test_a_plan_that_is_not_a_bug_intake_settles_nothing(self):
         self.assertEqual(close_child.settle_fix("o/f", "pat", 5, self.gh), [])

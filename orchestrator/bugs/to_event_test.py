@@ -30,6 +30,14 @@ class ErrorEvent(unittest.TestCase):
         plain = to_event.error_event("todo", "abc12345", GROUP, "nothing", {20: "dark"})
         self.assertEqual((plain["story"], plain["flag"], plain["released"]), (None, None, None))
 
+    def test_an_error_in_a_released_story_is_marked_released_so_it_files_as_a_regression(self):
+        ev = to_event.error_event("todo", "abc12345", GROUP, "evaluating issue-12", {12: "released"})
+        self.assertEqual((ev["story"], ev["flag"], ev["released"]), (12, "issue-12", True))
+
+    def test_an_owner_reported_defect_is_tied_to_no_story(self):
+        ev = to_event.defect_event("todo", {"number": 5, "title": "t", "body": "issue-12 broke"})
+        self.assertEqual((ev["story"], ev["flag"], ev["released"]), (None, None, None))
+
 
 class DefectEvent(unittest.TestCase):
     def test_a_defect_is_one_event_per_issue_however_often_it_is_read(self):

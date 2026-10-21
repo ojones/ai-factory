@@ -37,7 +37,7 @@ class VerificationStates(unittest.TestCase):
             self.assertEqual(verify_deployed_app.check_state({"status": "passed", "evidence": ok}), "passed", ok)
         self.assertEqual(verify_deployed_app.check_state({"status": "failed", "evidence": "could not verify"}), "failed")  # only a pass is downgraded
 
-    def test_the_older_boolean_report_still_works_and_garbage_fails(self):
+    def test_a_result_with_no_recognised_status_falls_back_to_its_boolean_and_garbage_fails(self):
         self.assertEqual(verify_deployed_app.check_state({"passed": True}), "passed")
         self.assertEqual(verify_deployed_app.check_state({"passed": False}), "failed")
         self.assertEqual(verify_deployed_app.check_state({"status": "great"}), "failed")

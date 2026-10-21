@@ -12,10 +12,9 @@ FORM = "### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost c
 
 
 class Form(unittest.TestCase):
-    def test_a_task_both_parsers_agree_on(self):
+    def test_the_request_and_cap_are_read_from_the_child(self):
         body = FORM.format(app="a", task="Add search\nby title", cap="$3")
         self.assertEqual(read_child.parse_intake(body, 2.0, 10.0), ("Add search\nby title", 3.0))
-        self.assertEqual(read_child.parse_intake("### What should be built?\n\nA thing\n", 2.0, 10.0), ("A thing", 2.0))
         with self.assertRaises(run_stops.NeedsHuman):
             read_child.parse_intake(FORM.format(app="a", task="_No response_", cap=""), 2.0, 10.0)
 

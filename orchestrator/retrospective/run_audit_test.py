@@ -65,7 +65,6 @@ class Audit(unittest.TestCase):
     def test_an_ok_run_with_open_findings_or_an_update_with_no_commit_is_flagged(self):
         self.assertEqual(rules(good_run(blocking=[{"summary": "x"}])), ["A-04"])
         self.assertEqual(rules(good_run(commits=[])), ["A-05"])
-        self.assertEqual(rules(good_run(commits=[], build_kind="first build")), [])
 
     def test_the_summary_lists_violations_and_the_post_mortem_records_them_as_a_severe_lesson(self):
         d = good_run(spent_usd=3.0)

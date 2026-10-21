@@ -314,7 +314,7 @@ class Invariants(unittest.TestCase):
             return {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": "spec_ambiguity", "reason": "r", "event": ev}
 
         def fix_child(number, bug, attempt, of):
-            marker = {"parent": bug, "cs": "CS-1", "kind": "update", "flag": True, "flag_story": 12, "fix_for": of, "fix_attempt": attempt}
+            marker = {"parent": bug, "cs": "CS-1", "kind": "update", "flag": True, "fix_for": of, "fix_attempt": attempt}
             gh.add(number, body=child_tickets.render_marker(marker) + "\n\n" + form, labels=["update-app-intake"])
             gh.issues[number]["title"] = "demo: fix"
             gh.subs[bug] = [number]
@@ -452,21 +452,22 @@ class Invariants(unittest.TestCase):
         from retrospective import app_state
         self.assertIn("issues/9", app_state.story_link({"issue": 9, "run_url": "https://github.com/o/r/actions/runs/1"}))
         run = object.__new__(BuildRun)
-        run.update_intake, run.issue_title = False, "app"  # a first build's title is never touched
+        run.factory_repo, run.factory_token, run.issue, run.issue_title = "o/factory", "tok", "9", "app: a page"
+        run.app, run.run_id, run.run_url = "app", "1", "https://github.com/o/factory/actions/runs/1"
         calls = []
-        run.gh = lambda *a, **k: calls.append(a)
-        run.link_flags_to_issue(["x"])
-        self.assertEqual(calls, [])
+        run.gh = lambda args, **k: calls.append(args)
+        with mock.patch.object(github, "ensure_label"):
+            run.link_flags_to_issue(["issue-9"])
+        edits = [a for a in calls if a[:2] == ["issue", "edit"]]
+        self.assertIn("flag:issue-9", [a[a.index("--add-label") + 1] for a in edits if "--add-label" in a])
+        self.assertEqual(run.issue_title, "app: a page [flag: issue-9]")  # the title carries the flag
+        self.assertIn("app.feature.issue-9", next(a for a in calls if a[:2] == ["issue", "comment"])[-1])  # and a comment has the full key
 
-    def test_inv39_a_story_and_its_flag_live_and_die_together(self):
+    def test_inv39_a_fix_is_one_ordinary_child_that_the_failed_child_waits_for(self):
         from planning import fix_for
-        from shared import child_tickets
-        from try_fix import fix_note
-        self.assertEqual(child_tickets.story_number({"flag_story": 12, "fix_for": 20}, 31), 12)  # a fix child's flag is the failed story's
-        self.assertIn("`issue-12`", fix_note.fix_note(12, 20))
+        self.assertFalse(hasattr(fix_for, "apply"))  # the planner's flag decision stands: a fix child is an ordinary child
         self.assertEqual(fix_for.max_change_sets({"fix_for": 20}, 8), 1)  # a bug Intake that fixes a child plans exactly one change set
         self.assertEqual(fix_for.max_change_sets(None, 8), 8)
-        self.assertFalse(fix_for.apply({"flag": True}, {"flag": False})["flag"])  # and keeps the failed child's flag setting, not the planner's
         for fn in ("release", "disable_flags"):
             self.assertTrue(hasattr(BuildRun, fn))
 
@@ -493,7 +494,6 @@ class Invariants(unittest.TestCase):
         doc = yaml.safe_load(bm.candidate_profile(text, {"coder": "x/y"}))
         self.assertEqual((doc["roles"]["coder"]["model"], doc["limits"]["flag_retirement"]["piggyback_max"]), ("x/y", 0))
         run = object.__new__(BuildRun)
-        run.update_intake = False
         run.cfg = {"provider": {"base_url": "u"}, "roles": {"coder": {"model": "gone", "fallback_model": "ok"}}}
         run.state = track_progress.State(Path("/tmp/inv41-state.json"), "a", "1", "u")
         run.state.save = lambda: None
@@ -605,13 +605,12 @@ class Invariants(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=json.dumps(listed) if args[:2] == ["secret", "list"] else "")
         run.gh = gh
         need = [{"name": "WEATHER_API_KEY", "purpose": "forecast lookups"}]
-        with self.assertRaises(endings.AwaitingSecret):
-            run.require_secrets(need, record=True)
-        comment = next(a for a in sent if a[:2] == ["issue", "comment"])[-1]
-        self.assertIn("gh secret set WEATHER_API_KEY -R o/app", comment)
+        with self.assertRaises(endings.AwaitingSecret) as cm:
+            run.require_secrets(need)
+        self.assertIn("WEATHER_API_KEY", str(cm.exception))  # the command itself is posted by planning (plan_run.py), not here
         self.assertEqual(run.state.d["secrets"], ["WEATHER_API_KEY"])
         listed.append({"name": "WEATHER_API_KEY"})
-        run.require_secrets(need, record=True)  # all present: the build may go on
+        run.require_secrets(need)  # all present: the build may go on
         # every later start checks the recorded names before any Agent is paid for: a retry, a re-run, a child issue
         from planning import render_child, secrets_marker
         marker = secrets_marker.secrets_marker(need)
@@ -624,8 +623,7 @@ class Invariants(unittest.TestCase):
         self.assertLess(src.index("require_secrets(self.declared_secrets)"), src.index("self.spec = self.task"))
         listed.clear()
         with self.assertRaises(endings.AwaitingSecret):
-            run.require_secrets(need, record=False)
-        self.assertEqual(sum(1 for a in sent if a[:2] == ["issue", "comment"]), 2)  # the early check posts nothing more
+            run.require_secrets(need)
         self.assertIn("awaiting_secret", outcomes.ANSWERED)
         self.assertNotIn("awaiting_secret", outcomes.OK)  # INV-24: an OK ending closes the Intake
         self.assertFalse(lesson_records.wants_fix_request({"outcome": "awaiting_secret"}, {}))
@@ -740,13 +738,11 @@ class Invariants(unittest.TestCase):
 
     def test_inv55_a_build_run_starts_only_for_a_planned_child_of_an_open_plan(self):
         from build_run import read_child
-        from shared import child_tickets
         marker = {"parent": 7, "cs": "CS-1", "kind": "update"}
         self.assertIsNone(read_child.planned_problem(marker, {"number": 7, "state": "OPEN"}))
         for bad in (({}, {"number": 7, "state": "OPEN"}), (marker, None), (marker, {"number": 7, "state": "CLOSED"}), (marker, {"number": 8, "state": "OPEN"})):
             self.assertTrue(read_child.planned_problem(*bad), bad)
         self.assertTrue(read_child.planned_problem({"parent": 7, "kind": "staging"}, {"number": 7, "state": "OPEN"}))  # a staging child is never a Build Run
-        self.assertEqual(child_tickets.story_number({"flag_story": 9}, 12), 9)
 
     def test_inv56_planning_is_its_own_process_that_files_a_child_and_can_always_be_retried(self):
         from planning import plan_run
@@ -821,7 +817,7 @@ class Invariants(unittest.TestCase):
         self.assertEqual(form["labels"], ["bug", "update-app-intake"])  # a bug is planned like any Update App Intake
 
 
-    def test_inv60_a_bug_is_dark_or_released_by_the_flags_state_and_only_a_dark_story_keeps_its_flag(self):
+    def test_inv60_a_bug_is_dark_or_released_by_the_flags_state_and_only_a_dark_story_makes_its_child_wait(self):
         from bugs import route_bug
         from shared import child_tickets
         from try_fix import event, file_bug
@@ -830,7 +826,7 @@ class Invariants(unittest.TestCase):
         self.assertEqual((states[12], states[20]), ("released", "dark"))  # a flag the watchdog switched off is dark (STEP 5.5)
         form = "### App name\n\ndemo\n\n### What should change?\n\nChange set CS-1: T\n"
         doc = {"how_found": "a", "root_cause": "b", "what_it_takes": ["c"], "requirements": ["POST /api/todos answers 400 for blank text"], "source": "agent"}
-        for released, keeps_flag in ((False, True), (True, False)):
+        for released, waits in ((False, True), (True, False)):
             gh = FakeIssues()
             gh.add(7)
             gh.add(20, body=child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "update", "flag": True}) + "\n\n" + form)
@@ -840,8 +836,8 @@ class Invariants(unittest.TestCase):
             verdict = {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": None, "reason": "r", "event": ev}
             with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
                 got = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
-            self.assertEqual(bool(child_tickets.read_fix_for(gh.issues[got["number"]]["body"])), keeps_flag)  # dark: fix_for and the same flag; released: a fresh flag
-            self.assertEqual(bool(gh.blocked), keeps_flag)
+            self.assertEqual(bool(child_tickets.read_fix_for(gh.issues[got["number"]]["body"])), waits)  # dark: fix_for and the failed child waits; released: a regression, no marker, nothing waits
+            self.assertEqual(bool(gh.blocked), waits)
 
     def test_inv61_a_child_is_routed_by_the_kind_in_its_marker_to_staging_or_to_a_build_run_never_both(self):
         from shared import child_tickets

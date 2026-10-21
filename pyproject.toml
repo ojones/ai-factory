@@ -6,6 +6,6 @@ line-length = 160
 extend-exclude = [".scratch", ".wayfinder", "templates", ".claude"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B", "I"]
+select = ["E", "F", "W", "B", "I", "PTH", "TID252", "PLC0414", "S110", "SIM105"]
 # Style-only rules the existing code does not follow; add them back one at a time when the code is ready.
-ignore = ["E501", "E741", "E731", "B904", "B905"]
+ignore = ["E501", "E741", "E731", "B904", "B905", "PTH123"]

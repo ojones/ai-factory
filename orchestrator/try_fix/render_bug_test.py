@@ -18,6 +18,12 @@ LIMITS = {"cost_cap_usd_default": 2.0, "cost_cap_usd_ceiling": 10.0}
 
 
 class Bug(unittest.TestCase):
+    # Contract with real GitHub, checked read-only on 2026-10-20: `gh issue list --search "[<8 hex>] in:title"` found the one issue whose title carries that bracketed
+    # key (ai-factory#136, #133), so the bracketed key is findable by file_bug.open_bug.
+    def test_the_key_is_bracketed_hex_at_the_end_of_the_title_so_a_title_search_finds_it(self):
+        self.assertRegex(EV["key"], r"^[0-9a-f]{10}$")
+        self.assertTrue(render_bug.title(VERDICT, "demo").endswith(f"[{EV['key']}]"))
+
     def test_the_text_has_every_section_of_the_template_in_order(self):
         text = render_bug.request_text(DOC, VERDICT, "https://x/run/1")
         heads = [line[5:] for line in text.split("\n") if line.startswith("#### ")]
@@ -55,7 +61,6 @@ class Bug(unittest.TestCase):
     def test_the_title_names_the_app_and_is_cut(self):
         long = {**VERDICT, "event": {**EV, "summary": "x" * 200}}
         self.assertLessEqual(len(render_bug.title(long, "demo")), len("demo: ") + 80 + len(f" [{long['key']}]"))
-        self.assertTrue(render_bug.title(long, "demo").endswith(f"[{long['key']}]"))  # the key is what an open bug is found by
 
 
 if __name__ == "__main__":

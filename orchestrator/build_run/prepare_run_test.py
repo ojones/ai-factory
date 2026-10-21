@@ -50,10 +50,9 @@ class InstallDependencies(unittest.TestCase):
 
 
 class ModelFallback(unittest.TestCase):
-    def run_for(self, answers, roles=None, update=True):
+    def run_for(self, answers, roles=None):
         # A BuildRun whose provider answers per model id (status, body).
         run = object.__new__(BuildRun)
-        run.update_intake = update
         run.cfg = {"provider": {"base_url": "https://llm"}, "roles": roles or {
             "coder": {"model": "a/coder", "fallback_model": "z/fallback"}, "tester": {"model": "t/tester"}, "reviewer": {"model": "r/rev"}, "planner": {"model": "p/plan"}}}
         run.state = track_progress.State(Path("/tmp/x-state.json"), "app", "1", "u")
@@ -99,11 +98,10 @@ class ModelFallback(unittest.TestCase):
                 run.check_models()
 
     def test_the_planner_is_not_a_build_runs_model_the_planning_process_checks_its_own(self):
-        for update in (False, True):
-            run, asked, fake = self.run_for({}, update=update)
-            with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
-                run.check_models()
-            self.assertNotIn("p/plan", asked)
+        run, asked, fake = self.run_for({})
+        with mock.patch.object(http_client, "request", fake), mock.patch.dict(__import__("os").environ, {"DEEPINFRA_API_KEY": "k"}):
+            run.check_models()
+        self.assertNotIn("p/plan", asked)
 
     def test_the_status_of_a_model_is_read_from_the_answer(self):
         for answer, expected in (((200, {}), "ok"), ((404, "x"), "missing"), ((400, {"error": "model foo not found"}), "missing"),
@@ -115,9 +113,9 @@ class ModelFallback(unittest.TestCase):
 class ChoosingFlagsToRetire(unittest.TestCase):
     # BuildRun.choose_flags_to_retire with the State issue and manifest mocked.
 
-    def run_for(self, flags, *, update=True, fix=None, kind="update", task="Add a button", manifest="a,b,c,d", boom=False):
+    def run_for(self, flags, *, fix=None, task="Add a button", manifest="a,b,c,d", boom=False):
         run = object.__new__(BuildRun)
-        run.fix_for, run.build_kind, run.task = (fix or {}).get("origin"), kind, task
+        run.fix_for, run.task = (fix or {}).get("origin"), task
         run.app, run.app_repo, run.pat, run.lim = "app", "o/app", "pat", {"flag_retirement": {"min_age_days": 1, "piggyback_max": 5}}
         run.git = lambda *a, check=True: type("R", (), {"stdout": json.dumps([{"slug": s} for s in manifest.split(",")])})()
         patched = mock.patch.object(retirement_selection, "app_flags", side_effect=RuntimeError("down") if boom else None, return_value=(flags, set(manifest.split(","))))
@@ -129,7 +127,7 @@ class ChoosingFlagsToRetire(unittest.TestCase):
     def test_an_update_retires_the_whole_backlog_but_the_newest_release(self):
         self.assertEqual(self.run_for(self.flags), ["a", "b", "c"])
 
-    def test_a_first_build_and_an_automatic_retry_retire_nothing(self):
+    def test_a_fix_child_retires_nothing(self):
         self.assertEqual(self.run_for(self.flags, fix={"origin": 1, "attempt": 1}), [])
 
     def test_a_slug_gone_from_the_manifest_is_dropped_and_a_failed_lookup_does_not_stop_the_run(self):
@@ -137,7 +135,7 @@ class ChoosingFlagsToRetire(unittest.TestCase):
         self.assertEqual(self.run_for(self.flags, boom=True), [])
 
     def test_flags_the_owner_names_in_the_task_are_retired_too(self):
-        self.assertEqual(self.run_for(self.flags, task="Do it\nretire-flag: d\n", kind="update"), ["d", "a", "b", "c"])
+        self.assertEqual(self.run_for(self.flags, task="Do it\nretire-flag: d\n"), ["d", "a", "b", "c"])
 
 
 class NamingTheFlag(unittest.TestCase):
@@ -175,6 +173,22 @@ class NamingTheFlag(unittest.TestCase):
             run.spec = run.task
             run.name_the_flag()
             self.assertIn("issue-12", run.spec)
+
+    def test_an_issue_that_runs_again_keeps_the_flag_it_had_and_creates_and_commits_nothing(self):
+        # A failed child resumes after its fix closes: its flag exists, off, from the earlier attempt (and may already be in flags.json).
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_for(tmp)
+            run.gb.features = dict(getattr(run.gb, "features", {}))
+            run.name_the_flag()
+            first_manifest = (Path(tmp) / "flags.json").read_text()
+            again = self.run_for(tmp, flags_json=first_manifest)
+            again.gb = run.gb
+            again.name_the_flag()
+            self.assertIn("slug `issue-12`", again.task)
+            self.assertNotIn("created_flag", again.state.d)  # an existing feature is never touched
+            self.assertEqual(again.git_calls, [])  # nothing new to record
+            self.assertEqual((Path(tmp) / "flags.json").read_text(), first_manifest)
+            self.assertFalse(again.gb.production_enabled("app.feature.issue-12"))
 
     def test_a_task_with_no_placeholder_changes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,7 +273,7 @@ class SuppressionsAndLintConfig(unittest.TestCase):
 class LocatingThePlan(unittest.TestCase):
     MARKER = {"parent": 7, "cs": "CS-1", "kind": "update", "flag": True, "size": "S"}
 
-    def run_for(self, marker, parent_state="open", has_parent=True, require=False, update=True):
+    def run_for(self, marker, parent_state="open", has_parent=True):
         from shared.fake_issues import FakeIssues
         gh = FakeIssues()
         gh.add(7, state=parent_state)
@@ -267,8 +281,7 @@ class LocatingThePlan(unittest.TestCase):
         if has_parent:
             gh.subs[7] = [child]
         run = object.__new__(BuildRun)
-        run.update_intake, run.plan_meta, run.issue, run.factory_repo, run.factory_token = update, marker, str(child), "o/f", "tok"
-        run.lim = {"require_plan": require}
+        run.plan_meta, run.issue, run.factory_repo, run.factory_token = marker, str(child), "o/f", "tok"
         run.state = track_progress.State("/tmp/unused-state.json", "app", str(child), "u")
         run.gh = lambda args, token=None, check=True: gh(args, token)
         return run
@@ -310,15 +323,15 @@ class LocatingThePlan(unittest.TestCase):
             self.run_for(dict(self.MARKER, kind="staging")).locate_plan()
         self.assertIn("staging child", str(cm.exception))
 
-    def test_a_fix_child_names_the_failed_storys_flag_not_its_own(self):
+    def test_a_fix_child_names_its_own_flag_like_any_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = NamingTheFlag()
             run = t.run_for(tmp)
-            run.plan_meta = dict(self.MARKER, flag_story=9)
+            run.plan_meta = dict(self.MARKER, fix_for=4, fix_attempt=1)
             run.name_the_flag()
-            self.assertIn("slug `issue-9`", run.task)
-            self.assertEqual(run.state.d["flags"], ["issue-9"])
-            self.assertTrue(run.gb.production_enabled("app.feature.issue-9") is False)
+            self.assertIn("slug `issue-12`", run.task)
+            self.assertEqual(run.state.d["flags"], ["issue-12"])
+            self.assertTrue(run.gb.production_enabled("app.feature.issue-12") is False)
 
 
 if __name__ == "__main__":

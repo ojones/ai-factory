@@ -2,8 +2,8 @@ A finding is **blocking** when it is any of:
 - a correctness bug: wrong logic, off-by-one, unhandled error, missing validation of input the code trusts (a missing or malformed body: Express leaves `req.body` undefined when there is no JSON body, so destructuring it throws and answers 500; wrong types; unknown ids), or parsing that accepts malformed input and acts on the wrong record (for example `parseInt("1abc")` deleting item 1)
 - a security problem: injection, path traversal, secrets in code, unsafe handling of user input
 - a third-party secret (one named in `secrets.json`) used anywhere but the call to its service: logged, returned in a response, put in an error message or sent to any other place
-- a requirement in the spec (`INTAKE.md` for a first build, the change request for an update) that the change does not meet, including any flag it names
-- on an **update** to an existing app only: a user-facing change, or a change that alters behavior for every route (middleware, a global error handler), that is not wrapped by a flag checked with `isFeatureEnabled(res, slug)`. One flag around the whole change is enough, so do not ask for a flag per route or screen. A **first build** needs no flags: never report a missing flag on one
+- a requirement in the spec (the child ticket's change request) that the change does not meet, including any flag it names
+- a user-facing change, or a change that alters behavior for every route (middleware, a global error handler), that is not wrapped by a flag checked with `isFeatureEnabled(res, slug)`. One flag around the whole change is enough, so do not ask for a flag per route or screen.
 - a flag checked in code whose slug is missing from `flags.json`, on any build, because an unrecorded flag is never released
 - a flag whose default is set to anything but `false` in the diff (flags fail closed). `isFeatureEnabled(res, slug)` takes no default and already fails closed, so a plain call to it is correct and is not a finding
 - code that a test would obviously not catch and the change clearly needs one

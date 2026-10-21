@@ -22,7 +22,7 @@ class RoundLoop(unittest.TestCase):
 
     def make(self, reviews, tests, pipeline_fix=False):
         run = object.__new__(BuildRun)
-        run.app, run.build_kind, run.update_intake, run.plan_meta = "demo", "update", False, None
+        run.app, run.build_kind, run.plan_meta = "demo", "update", None
         run.task, run.retiring, run.fix_for = "do it", (), None
         run.lim = {"review_rounds": 3, "stuck_rounds": 0}
         run.work = Path(__import__("tempfile").mkdtemp(prefix="loop-test-"))

@@ -53,7 +53,7 @@ The first child ticket of a New App Intake (`kind: staging`): stages the app and
 _Avoid_: setup ticket
 
 **Bug Intake**:
-An `update-app-intake` labelled `bug`, written by the Try Fix Agent from the bug template and planned like any Intake. For a story whose flag is dark (never released, off, or switched off by the watchdog) it carries `fix_for` (the failed child) and `flag_story`: its plan is exactly one child, behind the same flag, and the failed child waits for it. After a release that is still on it is a regression with a fresh flag. (Built, ticket 15d. The one child it plans is called a **fix child**; it is filed under the bug Intake, not under the failed child's parent.)
+An `update-app-intake` labelled `bug`, written by the Try Fix Agent from the bug template and planned like any Intake. For a child that failed it carries `fix_for` (the failed child): its plan is exactly one child, and the failed child waits for it. For a story that is already released it is a regression: it carries no marker and nothing waits for it. (Built, ticket 15d. The one child it plans is called a **fix child**; it is filed under the bug Intake, not under the failed child's parent.)
 _Avoid_: retry, hotfix
 
 **Failure event**:
@@ -113,7 +113,7 @@ The hard gate in a Managed App's deployment pipeline: install, type-check and un
 _Avoid_: CI (when this specific gate is meant)
 
 **Flag slug**:
-The `<slug>` part of a flag's GrowthBook key `<app>.feature.<slug>`. `issue-<n>`, `<n>` the number of the story it belongs to (a retried story keeps its flag; a fix child uses the failed story's number). The Orchestrator names it; older flags keep the slug their planner chose.
+The `<slug>` part of a flag's GrowthBook key `<app>.feature.<slug>`. `issue-<n>`, `<n>` the number of the story it belongs to (an issue that runs again keeps its flag). The Orchestrator names it; older flags keep the slug their planner chose.
 _Avoid_: flag name, flag id
 
 **Flag manifest**:
@@ -132,7 +132,7 @@ The step that runs after every Build Run, whether it released or not. It records
 _Avoid_: post-mortem (it is not only for failures)
 
 **Dark feature**:
-A change whose flag has not been released. One that fails its checks stays dark and is fixed forward behind the same flag (by a fix child); it is tracked by its story issue (`flag:<slug>`, plus `dark-broken` once the run that built it could not get it through), not by `flags.json`. It is removed only after its fix attempts are used up and a person approves (`approve-retire`).
+A change whose flag has not been released. One that fails its checks stays dark and is fixed forward (by a fix child, then its own child runs again); it is tracked by its story issue (`flag:<slug>`, plus `dark-broken` once the run that built it could not get it through), not by `flags.json`. It is removed only after its fix attempts are used up and a person approves (`approve-retire`).
 _Avoid_: dead flag
 
 **Fix request**:

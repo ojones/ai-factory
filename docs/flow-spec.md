@@ -94,7 +94,7 @@ flowchart TD
         S5_2["<b>5.2 Released</b><br/>flag ON for everyone"]
         S5_3["<b>5.3 Eligible for retirement</b>"]
         S5_4["<b>5.4 Retired</b><br/>coder deletes the flag check, the flag-off tests<br/>and the flags.json line in its own commit; unwraps flag-on tests<br/>verifier rejects the commit while issue-N appears anywhere<br/>TESTER checks the behaviour is still on for an ordinary visitor<br/>flag archived in GrowthBook, story comment says so"]
-        S5_5["<b>5.5 Dark-broken candidate</b><br/>watchdog switched it off<br/>flag stays, Try Fix reuses the SAME flag"]
+        S5_5["<b>5.5 Dark-broken candidate</b><br/>watchdog switched it off<br/>flag stays off; its child is failed and waits for a fix, then runs again behind it"]
         S5_6["<b>5.6 Owner approves retirement</b><br/>adds approve-retire to the story"]
         S5_7["<b>5.7 Retirement intake</b><br/>update-app-intake, planned, one child, no flag<br/>deletes check, code, tests, flags.json line<br/>nothing removes a dark feature on its own"]
         S5_1 --> S5_2
@@ -136,7 +136,7 @@ flowchart TD
 
     subgraph g7["7. Try fix (fix first, never retry the unchanged child)"]
         S7_6["<b>7.6 Write the bug ticket</b><br/>Try Fix Agent, one job: a good ticket<br/>from the bug template: how it was found,<br/>root cause, what it takes to resolve,<br/>numbered checkable requirements<br/>never decides cause or target, never plans"]
-        S7_1["<b>7.1 File the bug Intake</b><br/>update-app-intake + bug, filed with the PAT<br/>planned by 2.1 like any Intake<br/>dark story: marker fix_for + flag_story,<br/>SAME flag, exactly one child, blocks the failed child<br/>released flag: no marker, fresh flag"]
+        S7_1["<b>7.1 File the bug Intake</b><br/>update-app-intake + bug, filed with the PAT<br/>planned by 2.1 like any Intake<br/>failed child: marker fix_for,<br/>exactly one child with a flag of its own, blocks the failed child<br/>released story: no marker, blocks nothing"]
         S7_2["<b>7.2 Factory fix request</b><br/>same bug template, in ai-factory<br/>factory-fix-request issue"]
         S7_3["<b>7.3 Learning PR</b><br/>auto-merge if additive lint/format,<br/>else a human"]
         S7_4["<b>7.4 Resume the failed child</b><br/>the bug Intake closes: the story gets a<br/>solution comment, the origin parent advances"]
@@ -157,10 +157,10 @@ flowchart TD
     S3_2 -->|"a check fails"| S6_7
 
     subgraph g8["8. Bugs found later"]
-        S8_1["<b>8.1 Bug while still dark</b><br/>flag never released, off,<br/>or switched off by the watchdog:<br/>failure comment on the same story,<br/>fix keeps the SAME flag"]
+        S8_1["<b>8.1 Bug while still dark</b><br/>flag never released, off,<br/>or switched off by the watchdog:<br/>failure comment on the same story,<br/>the open child waits for its fix"]
         S8_2["<b>8.2 Validated release</b><br/>flag released and still on:<br/>feature is fully released"]
         S8_3["<b>8.3 Watch production</b><br/>watchdog, production feedback<br/>Fly errors, escaped-defect issue<br/>each finding becomes an event"]
-        S8_4["<b>8.4 Regression</b><br/>a bug now is a REGRESSION:<br/>new bug Intake, fresh flag,<br/>comment on the story linking it"]
+        S8_4["<b>8.4 Regression</b><br/>a bug now is a REGRESSION:<br/>new bug Intake, nothing waits,<br/>comment on the story linking it"]
         S8_3 --> S8_1
         S8_3 --> S8_2
         S8_2 -->|"a bug now"| S8_4
@@ -169,7 +169,7 @@ flowchart TD
     S6_5 --> S8_3
     S8_3 -->|"events"| S6_7
     S8_1 -->|"how to file: fix_for"| S7_1
-    S8_4 -->|"how to file: fresh flag"| S7_1
+    S8_4 -->|"how to file: no marker"| S7_1
     S5_5 -.-> S8_1
 ```
 
@@ -228,6 +228,6 @@ One rule for every failure and warning, whatever found it (a failed child, a fai
 2. **A verdict (6.2, 6.7).** The Retrospective Agent alone names the cause and the target (`managed_app` or `factory`) and gives every event a verdict, `fix` or `record`, with a reason. A failure is always `fix`; a warning is `record` unless the Agent says why a fix is worth it. A scan with no Build Run is judged in one batch (6.7). `record` keeps today's learning record and files nothing; the Factory no longer files Suggestion issues in a Managed App's repo.
 3. **A ticket (7.6).** The Try Fix Agent writes one bug ticket from the bug template for each `fix` verdict. It does not decide the cause or target, and it does not plan or split work. If it fails or its output does not validate, the Orchestrator writes the ticket from the facts.
 4. **An Intake (7.1, 7.2).** The ticket is filed as an Intake and the planner plans it (2.1), so a fix has the same size and criteria limits as any change. An app fix is an `update-app-intake` labelled `bug`; a Factory fix is the same template in ai-factory.
-5. **Dark or released.** If the story's flag was never released, is off, or was switched off by the watchdog (8.1), the failure is added as a comment on the story, the bug Intake carries `fix_for` (the failed child) and `flag_story`, the plan has exactly one child, behind the same flag, and the failed child waits on it. If the flag was released and is still on (8.2), a bug is a regression (8.4): a new bug Intake with no marker and a fresh flag, and the story gets a comment linking it.
-6. **Closing the loop (7.4).** When the bug Intake closes, the story gets a solution comment and the origin parent advances; the failed child resumes through the normal advance.
+5. **Dark or released.** If the story's flag was never released, is off, or was switched off by the watchdog (8.1), the failure is added as a comment on the story, the bug Intake carries `fix_for` (the failed child), the plan has exactly one child, an ordinary child with a flag of its own (or none), and the failed child waits on it. If the flag was released and is still on (8.2), a bug is a regression (8.4): a new bug Intake with no marker that nothing waits for, and the story gets a comment linking it.
+6. **Closing the loop (7.4).** When the bug Intake closes, the story gets a solution comment and the origin parent advances; the failed child resumes through the normal advance and runs again behind its own flag, which already exists, off.
 7. **Bounded.** A fix that fails is handled like any failed child: a follow-up bug Intake whose `fix_for` is the failed fix. Attempts are counted along that chain back to the original story; after `fix_attempts_max` (2) the child is held `needs-human` and nothing more is filed. One bug per event key.

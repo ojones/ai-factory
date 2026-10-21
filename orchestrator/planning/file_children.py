@@ -4,7 +4,6 @@
 from request import intake_labels
 from shared import child_tickets, github
 
-from planning import fix_for
 from planning.render_child import child_body, one_line, render_change_set_task
 
 INHERITED = ("benchmark",)  # labels of the Intake that its children carry too
@@ -12,7 +11,7 @@ INHERITED = ("benchmark",)  # labels of the Intake that its children carry too
 
 def file_children(repo, pat, app, parent, change_sets, order, request, cap=None, secrets=None, tickets=None, fix=None, inherit=()):
     # Returns [(change set id, issue number)]. Raises ChildTicketError. `fix` is the bug Intake's fix-for marker (planning/fix_for.py): the one child is filed
-    # behind the failed story's flag with the markers that say so.
+    # as an ordinary child with the markers that say what it fixes.
     tickets = tickets or child_tickets.ChildTickets(repo, parent, pat)
     existing = tickets.children()
     if existing:
@@ -27,10 +26,11 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None,
     numbers, made = {}, []
     try:
         for cs_id in order:
-            cs = fix_for.apply(by_id[cs_id], fix)
+            cs = by_id[cs_id]
             deps = [numbers[d] for d in cs.get("depends_on") or []]
             task = render_change_set_task(cs, parent=parent)
-            body = child_body(app, task, parent, cs, cap, secrets, cs.get("kind") or "update", *((fix["flag_story"], fix["fix_for"], fix["attempt"]) if fix else ()))
+            body = child_body(app, task, parent, cs, cap, secrets, cs.get("kind") or "update",
+                              fix_for=fix["fix_for"] if fix else None, fix_attempt=fix["attempt"] if fix else None)
             numbers[cs_id] = tickets.file(f"{app}: {one_line(cs['title'])}", body,
                                           [intake_labels.UPDATE_APP_INTAKE, f"app:{app}", child_tickets.WAIT, *inherit])
             made.append((cs_id, numbers[cs_id]))

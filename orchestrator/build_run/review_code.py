@@ -205,8 +205,8 @@ def build_review_context(git, base, head, max_chars, spec=None):
     changed = [c for c in git("diff", "--name-only", "--diff-filter=d", base, head).split("\n") if c]
     shown = [c for c in changed if not c.endswith(SKIP_SUFFIXES)]
     extra = [f for f in REVIEW_CONTEXT_FILES if f not in shown]
-    # The spec is the original INTAKE.md for a first build; for an update it is the change being made now
-    # (INTAKE.md describes the app as first built, not this change).
+    # The spec is the change being made now (the child's task). INTAKE.md describes the app as first built, not this change,
+    # so it stands in only when no spec was given.
     parts = [f"# Change request (the spec for this change)\n{spec}" if spec else f"# INTAKE.md\n{git('show', f'{head}:INTAKE.md')}",
              f"# flags.json\n{git('show', f'{head}:flags.json')}",
              f"# Diff {base[:8]}..{head[:8]}\n{git('diff', base, head, '--', ':(exclude)*lock*')}"]
@@ -259,7 +259,7 @@ class ReviewCode:
         context = build_review_context(lambda *a: self.git(*a, check=False).stdout, base, head,
                                        self.lim.get("review_context_max_chars", 200000),
                                        spec=self.spec)
-        system = prompts.render(prompts.load_prompt(role["fast_prompt"]), {"app_name": self.app, "build_kind": self.build_kind, "base_sha": base[:8], "head_sha": head[:8]})
+        system = prompts.render(prompts.load_prompt(role["fast_prompt"]), {"app_name": self.app, "base_sha": base[:8], "head_sha": head[:8]})
         jwt = self.meter.mint(role["model"])
         start = time.time()
         try:
