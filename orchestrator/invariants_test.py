@@ -17,7 +17,7 @@ from build_run import read_child, ship_code
 from build_run import start_build as u
 from build_run import ui_check as uc
 from build_run.run_test import RoundLoop, finding
-from factory_change import file_change, gate, open_pr, pause, prove_reproduction, tiers, vet_change
+from factory_change import file_change, gate, open_pr, pause, prove_reproduction, tiers, vet_change, write_change
 from flag_lifecycle import flag_slug, missing_flag, release_features
 from flag_lifecycle.fake_growthbook import FakeGrowthBook
 from maintenance import dependency_updates as mt
@@ -874,6 +874,18 @@ class Registry(unittest.TestCase):
         self.assertIsNotNone(pause.breaker_reason("review", [{"failed": True, "stage": "review"}], 0))
         self.assertIsNotNone(pause.breaker_reason("review", [{"regression": True}], 0))
         self.assertIsNotNone(pause.breaker_reason("review", [], 2))
+
+    def test_inv67_no_pipeline_agent_edits_the_invariants_or_the_flow_spec(self):
+        for path in ("docs/invariants.md", "docs/flow-spec.md"):
+            self.assertFalse(agent_run.allowed_path(path), msg="the retrospective Agent cannot carry it over")
+            self.assertEqual(tiers.classify(path), tiers.NEVER, msg="a Factory Change cannot merge it")
+            self.assertIn(path, tiers.SPEC_PATHS)
+        factory, scratch = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        for root in (factory, scratch):
+            (root / "docs").mkdir()
+            (root / "docs" / "invariants.md").write_text("old", encoding="utf-8")
+        (scratch / "docs" / "invariants.md").write_text("new", encoding="utf-8")
+        self.assertEqual(write_change.spec_edits(factory, scratch), ["docs/invariants.md"])
 
     def test_the_table_and_the_tests_list_the_same_invariants(self):
         table = set(re.findall(r"^\| INV-(\d\d) \|", (ROOT / "docs/invariants.md").read_text(), re.M))
