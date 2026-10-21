@@ -54,9 +54,6 @@ TOKEN = "eval-preview-token"
 MOUNT = {"import": 'import { notesRouter } from "./routes/notes";', "use": "app.use(notesRouter());"}
 
 
-# --- pure logic (unit-tested) -------------------------------------------------
-
-
 def apply_edits(source, edits):
     # The base source with each [old, new] edit applied exactly once; an edit that does not apply is an error, so a
     # fixture cannot silently turn into the correct feature.
@@ -119,9 +116,6 @@ def summarize(results, fixtures):
             "cost": round(sum(r["cost"] for r in rows), 4)}
 
 
-# --- the app under test ---------------------------------------------------------
-
-
 def free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -177,7 +171,7 @@ class RunningApp:
         self.port = free_port()
         env = {**sc.minimal_env(), "PORT": str(self.port), "APP_SLUG": SLUG, "GROWTHBOOK_CLIENT_KEY": "sdk-eval",
                "GROWTHBOOK_API_HOST": self.stub.url, "PREVIEW_TOKEN": TOKEN}
-        self.log = open(workdir / "app.log", "w")
+        self.log = open(workdir / "app.log", "w", encoding="utf-8")
         self.proc = subprocess.Popen([str(workdir / "node_modules" / ".bin" / "tsx"), "src/index.ts"], cwd=workdir / "backend", env=env,
                                      stdout=self.log, stderr=subprocess.STDOUT)
         self.url = f"http://127.0.0.1:{self.port}"
@@ -245,9 +239,6 @@ def oracle(base):
     return out
 
 
-# --- the screen -------------------------------------------------------------------
-
-
 def load():
     return json.loads((HERE / "fixtures.json").read_text())
 
@@ -295,7 +286,7 @@ def one_run(job):
                "PREVIEW_TOKEN": TOKEN, "API_CHECK_BASE": app.url, "API_CHECK_LOG": str(api_log)}
         began = time.time()
         try:
-            with open(root / f"agent-{name}.log", "w") as log:  # kept: without it a run that quits at once cannot be diagnosed
+            with open(root / f"agent-{name}.log", "w", encoding="utf-8") as log:  # kept: without it a run that quits at once cannot be diagnosed
                 rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=dest, env=env,
                                     stdout=log, stderr=subprocess.STDOUT, timeout=timeout_min * 60).returncode
         except subprocess.TimeoutExpired:
@@ -351,7 +342,7 @@ def main():
               f"{r['missed']} | {r['false_alarm']} | {r['inconclusive']}/{r['unusable']}")
     print(f"\ndetection {summary['detection_rate']}  right reason {summary['right_reason_rate']}  false alarms {summary['false_alarm_rate']}  "
           f"inconclusive runs {summary['inconclusive_runs']}  cost ${summary['cost']}")
-    Path("smoke-tester-results.json").write_text(json.dumps({"model": model, "summary": summary, "runs": results}, indent=2))
+    Path("smoke-tester-results.json").write_text(json.dumps({"model": model, "summary": summary, "runs": results}, indent=2), encoding="utf-8")
     if not os.environ.get("KEEP"):
         shutil.rmtree(root, ignore_errors=True)
 

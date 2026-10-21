@@ -2,6 +2,7 @@
 import json
 import os
 import re
+from pathlib import Path
 
 from shared import (
     config,
@@ -48,17 +49,15 @@ def check_state(r):
 def load_api_results(path):
     # The api-check helper's own log (one JSON line per check it ran) as {id: result}; the last result for an id wins.
     out = {}
-    try:
-        with open(path) as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(r, dict) and isinstance(r.get("id"), str):
-                    out[r["id"]] = r
-    except OSError:
-        pass
+    if not Path(path).is_file():
+        return out
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and isinstance(r.get("id"), str):
+            out[r["id"]] = r
     return out
 
 

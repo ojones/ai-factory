@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from retrospective import agent_run
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared import spend_ledger  # noqa: E402
 
@@ -15,7 +17,6 @@ class RunSpendLedger(unittest.TestCase):
 
     def test_record_agent_spend_writes_one_ledger_line_and_never_raises(self):
 
-        from retrospective import agent_run
         budget = mock.Mock()
         budget.refresh.return_value = 0.21
         with mock.patch.object(agent_run.spend_ledger, "record_spend_in_ledger") as rec:

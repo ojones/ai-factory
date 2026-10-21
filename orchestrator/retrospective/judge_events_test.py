@@ -3,6 +3,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from shared import config
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -64,9 +67,7 @@ class Judge(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src, out = Path(tmp) / "e.json", Path(tmp) / "v.json"
             event.dump([FAIL, WARN], src)
-            from unittest import mock
 
-            from shared import config
             with mock.patch.object(config, "load", return_value=CFG), mock.patch.dict("os.environ", {}, clear=True):
                 self.assertEqual(judge_events.main(["x", str(src), str(out)]), 0)
             self.assertEqual([v["verdict"] for v in json.loads(out.read_text())], ["fix", "record"])

@@ -12,9 +12,6 @@ NOISE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 FRAME = re.compile(r"\(?((?:/|[A-Za-z]:)?[^\s()]*?[\w.-]+\.(?:ts|js|mjs|cjs|tsx|jsx)):\d+(?::\d+)?\)?")
 
 
-# --- pure logic (unit-tested) -------------------------------------------------
-
-
 def parse_events(log_text):
     # The error-level structured log entries in `flyctl logs` output. Lines carry a prefix (time, machine, region) before the JSON.
     out = []

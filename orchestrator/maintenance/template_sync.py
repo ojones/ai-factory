@@ -29,9 +29,6 @@ MAX_DIFF_CHARS = 20000
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-# --- pure logic (unit-tested) -------------------------------------------------
-
-
 def parse_name_status(text):
     # [(status, path)] with the template prefix removed, from `git diff --name-status -M` output.
     out = []
@@ -91,9 +88,6 @@ def sync_request(app, target, base, applicable, protected, diff_text, by_orchest
               f"Finally write the single line `{target}` to a file named `{STAMP}` at the repository root. This is a tooling change that "
               "users cannot see, so it needs no feature flag; do not add behaviour."]
     return "\n".join(parts)
-
-
-# --- git and GitHub (not unit-tested) -----------------------------------------
 
 
 def git(*args):

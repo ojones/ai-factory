@@ -1,5 +1,7 @@
 # Running an Agent as a process: as the unprivileged Agent account when isolation is on, with a self-check, a stall watch and a kill by process group.
+import contextlib
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -41,14 +43,11 @@ def run_isolation_probes(agent_user):
 
 def kill_agent(proc, user, pidfile):
     # Kill an Agent's whole process group, whether it runs as the runner or, through sudo, as the Agent user.
-    import signal
-    if user and pidfile:
-        try:
-            pgid = Path(pidfile).read_text().strip()
-            if pgid.isdigit():
+    if user and pidfile and Path(pidfile).is_file():
+        pgid = Path(pidfile).read_text(encoding="utf-8").strip()
+        if pgid.isdigit():
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
                 subprocess.run(["sudo", "-n", "kill", "-KILL", "--", f"-{pgid}"], capture_output=True, timeout=30)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except OSError:
@@ -80,7 +79,7 @@ def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0, user=None
     # Run an Agent writing its event stream to `out_path`. Returns its exit status, or "timeout" after `timeout_s` of wall time,
     # or "stall" when the stream stops growing for `stall_s` seconds (the process group is killed either way). A real run once sat
     # 45 minutes twice with no output at all, so a silent Agent is cut off long before the overall timeout.
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         proc = subprocess.Popen(agent_command(cmd, env, user, pidfile), cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT,
                                 start_new_session=True)
         began = last_change = time.time()

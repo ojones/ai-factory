@@ -12,6 +12,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from request import check_target_app  # noqa: E402
@@ -49,7 +50,6 @@ def list_fly_apps(org, token):
 
 def idle_days(last_push_iso, now=None):
     # Whole days since an ISO timestamp, or None if it cannot be read.
-    import time
     try:
         then = time.mktime(time.strptime(last_push_iso[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
     except (ValueError, TypeError):
@@ -83,7 +83,7 @@ def main():
         report = idle_report(rows)
         print(report)
         if os.environ.get("GITHUB_STEP_SUMMARY"):
-            Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a").write(report + "\n")
+            Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8").write(report + "\n")
     except Exception as e:  # noqa: BLE001
         print(f"idle report failed: {type(e).__name__}: {e}")
     found = orphans(list_fly_apps(org, os.environ["FLY_API_TOKEN"]), infra, owned_repo)

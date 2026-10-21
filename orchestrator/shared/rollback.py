@@ -48,23 +48,36 @@ def rollback_deploy(d, app, app_repo, pat, minutes):
         if started.returncode != 0:
             return {"status": "failed", "restored": base, "reason": f"could not start {ROLLBACK_WORKFLOW} in {app_repo} (an app built before it "
                     f"existed gets it from template sync): {(started.stderr or started.stdout or '').strip()[:200]}"}
-        end = time.time() + minutes * 60
-        while time.time() < end:
-            time.sleep(10)
-            new = [r for i, r in run_ids(app_repo, env).items() if i not in before]
-            done = [r for r in new if r.get("status") == "completed"]
-            if done and all(r.get("conclusion") == "success" for r in done):
-                for _ in range(12):
-                    status, _ = http_client.request("GET", f"https://{app}.fly.dev/api/health", timeout=20)
-                    if status == 200:
-                        return {"status": "rolled_back", "restored": base, "deploy": "healthy"}
-                    time.sleep(5)
-                return {"status": "failed", "restored": base, "deploy": "unhealthy", "reason": "the rollback deployed but /api/health did not answer 200"}
-            if done:
-                return {"status": "failed", "restored": base, "deploy": "deploy_failed", "reason": "the rollback workflow failed"}
-        return {"status": "failed", "restored": base, "deploy": "timeout", "reason": f"the rollback did not finish within {minutes:g} minutes"}
+        return wait_for_rollback(app, app_repo, env, before, base, minutes)
     except Exception as e:  # noqa: BLE001 - reported, never raised: finalize must still write its Report
         return {"status": "failed", "restored": base, "reason": f"{type(e).__name__}: {str(e)[:300]}"}
+
+
+def wait_for_rollback(app, app_repo, env, before, base, minutes):
+    end = time.time() + minutes * 60
+    while time.time() < end:
+        time.sleep(10)
+        done = [r for i, r in run_ids(app_repo, env).items() if i not in before and r.get("status") == "completed"]
+        if done:
+            return rollback_result(app, base, all(r.get("conclusion") == "success" for r in done))
+    return {"status": "failed", "restored": base, "deploy": "timeout", "reason": f"the rollback did not finish within {minutes:g} minutes"}
+
+
+def rollback_result(app, base, succeeded):
+    if not succeeded:
+        return {"status": "failed", "restored": base, "deploy": "deploy_failed", "reason": "the rollback workflow failed"}
+    if healthy(app):
+        return {"status": "rolled_back", "restored": base, "deploy": "healthy"}
+    return {"status": "failed", "restored": base, "deploy": "unhealthy", "reason": "the rollback deployed but /api/health did not answer 200"}
+
+
+def healthy(app):
+    for _ in range(12):
+        status, _ = http_client.request("GET", f"https://{app}.fly.dev/api/health", timeout=20)
+        if status == 200:
+            return True
+        time.sleep(5)
+    return False
 
 
 def rollback_failed_run(d, pat, lim):

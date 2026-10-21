@@ -1,3 +1,4 @@
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -19,7 +20,6 @@ class Prompts(unittest.TestCase):
     }
 
     def test_placeholders(self):
-        import re
         for role, supplied in self.SUPPLIED.items():
             text = (config.FACTORY_DIR / "agents" / "prompts" / f"{role}.md").read_text()
             self.assertEqual(set(re.findall(r"\{\{(\w+)\}\}", text)) - supplied, set(), role)

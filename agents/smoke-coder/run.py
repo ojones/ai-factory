@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -130,7 +131,6 @@ def score(workdir, task, base_sha):
 def fetch_prices():
     # USD per million tokens per DeepInfra model id, from the public /models list. OpenHands reports a
     # cost of 0 for models it has no price for, so cost is computed from tokens instead.
-    import urllib.request
     try:
         with urllib.request.urlopen("https://api.deepinfra.com/v1/openai/models", timeout=30) as r:
             return {m["id"]: m.get("metadata", {}).get("pricing") or {} for m in json.load(r).get("data", [])}
@@ -258,7 +258,7 @@ def main():
     for r in rows:
         vs = "-" if r["faster_than_first"] is None else f"{r['faster_than_first']:+.0%} faster"
         print(f"{r['model']} | {r['passed']}/{r['runs']} | {r['median_secs']} | {vs} | ${r['avg_cost']} | {r['avg_calls']}")
-    Path("smoke-coder-results.json").write_text(json.dumps({"summary": rows, "runs": results}, indent=2))
+    Path("smoke-coder-results.json").write_text(json.dumps({"summary": rows, "runs": results}, indent=2), encoding="utf-8")
     if not os.environ.get("KEEP"):
         shutil.rmtree(root, ignore_errors=True)
 

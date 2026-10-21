@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from try_fix import validate_bug
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shared import config, spend_budget  # noqa: E402
@@ -72,7 +74,6 @@ class Fallback(unittest.TestCase):
         self.assertIn("a scan of the deployed app's logs", got["how_found"])
 
     def test_the_fallback_passes_its_own_validation(self):
-        from try_fix import validate_bug
         got = write_bug.fallback(VERDICT, FACTS, None, 6)
         self.assertEqual(validate_bug.check(got, 6)[1], [])
 

@@ -16,7 +16,6 @@ class RunWatched(unittest.TestCase):
         self.assertFalse(agent_process.silent_too_long(0, 10**6, 0))
 
     def test_a_silent_process_is_killed_as_a_stall_and_a_chatty_one_finishes(self):
-        import sys
         out = Path(tempfile.mkdtemp()) / "o.jsonl"
         started = time.time()
         rc = agent_process.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)

@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -86,7 +87,6 @@ class Scan(unittest.TestCase):
         self.assertEqual((events[0]["story"], events[0]["released"]), (None, None))
 
     def test_one_events_file_is_written_and_a_switched_off_scan_writes_an_empty_one(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"GITHUB_REPOSITORY": "o/ai-factory", "FACTORY_GH_TOKEN": "t", "FACTORY_PAT": "p"}), \
                 mock.patch.object(scan_production.config, "load", return_value={"limits": {"production_feedback": {"enabled": False}}}):
             path = Path(tmp) / "events.json"

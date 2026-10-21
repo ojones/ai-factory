@@ -1,10 +1,14 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import yaml
+from shared import github
+
+from planning import file_children
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared import child_tickets, run_stops  # noqa: E402
@@ -218,11 +222,8 @@ class Inheritance(unittest.TestCase):
         self.assertEqual(plan_run.read_intake(issue(), "o/f", info(), LIMITS)["inherit"], [])
 
     def test_children_are_filed_with_the_inherited_label_so_production_workflows_skip_them(self):
-        from unittest import mock
 
-        from shared import github
 
-        from planning import file_children
         gh = FakeIssues()
         gh.add(7)
         with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
@@ -235,7 +236,6 @@ class Inheritance(unittest.TestCase):
 
 class SeedWorkdir(unittest.TestCase):
     def test_a_new_apps_planner_gets_a_copy_of_the_starter_without_its_dependencies(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             starter, work = Path(tmp) / "starter", Path(tmp) / "work" / "app"
             (starter / "backend" / "src").mkdir(parents=True)
@@ -250,7 +250,6 @@ class SeedWorkdir(unittest.TestCase):
             self.assertEqual((starter / "AGENTS.md").read_text(), "rules")  # a copy: reading or editing it never touches the Starter
 
     def test_the_real_starter_has_what_the_planner_is_told_to_read(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             plan_run.seed_workdir(Path(tmp) / "app")
             self.assertTrue((Path(tmp) / "app" / "AGENTS.md").exists())

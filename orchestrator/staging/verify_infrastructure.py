@@ -142,9 +142,6 @@ def report(results):
     return "\n".join(lines)
 
 
-# --- the real world (not unit-tested) -------------------------------------------
-
-
 def fetch(method, url, headers):
     req = urllib.request.Request(url, method=method, headers=headers)
 
@@ -184,7 +181,7 @@ def main():
     results = verify(Deps(fetch, runs, secret_names, flag_connection), app, sha, preview_token.for_app(e["PREVIEW_MASTER_SECRET"], app), declared)
     text = report(results)
     print(text)
-    with open(e.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
+    with open(e.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
         f.write(text + "\n")
     github.run(["issue", "comment", number, "--repo", repo, "--body", text], e.get("GH_TOKEN", pat))
     if e.get("FAILURE_EVENTS_FILE"):

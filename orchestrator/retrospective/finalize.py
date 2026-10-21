@@ -38,7 +38,7 @@ def finalize():
     summary = run_summary.render_summary(d)
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
     (work / "artifacts" / "build-run-report.json").write_text(json.dumps(d, indent=2))
-    with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
+    with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
         f.write(summary)
     ok = d["outcome"] in outcomes.OK
     spend_ledger.record_spend_in_ledger(d, os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_RUN_ID", "0"), os.environ["FACTORY_GH_TOKEN"])

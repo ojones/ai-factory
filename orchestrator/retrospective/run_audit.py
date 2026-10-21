@@ -85,7 +85,7 @@ def render_audit(problems):
 
 
 def main(argv):
-    with open(argv[1]) as f:
+    with open(argv[1], encoding="utf-8") as f:
         problems = audit_report(json.load(f))
     print(render_audit(problems) or "audit: no invariant broken")
     return 1 if problems else 0

@@ -141,4 +141,4 @@ if ok:
     print(f"\nKnown problems found: {found_total}/{found_possible} ({100 * found_total // max(found_possible, 1)}%)")
     print(f"Average {sum(r['secs'] for r in ok) / len(ok):.0f}s, {sum(r['output_tokens'] for r in ok) // len(ok)} output tokens; "
           f"total cost ${sum(r.get('cost', 0) for r in ok):.4f}" + ("" if MODE == "single" else " (agent cost not summed)"))
-Path("replay-results.json").write_text(json.dumps(results, indent=1))
+Path("replay-results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")

@@ -25,9 +25,6 @@ ECOSYSTEMS = (("npm_and_yarn", "npm"), ("docker", "docker"), ("github_actions", 
 APPLICABLE = ("npm", "docker")
 
 
-# --- pure logic (unit-tested) -------------------------------------------------
-
-
 def ecosystem(pr):
     # npm | docker | actions | other, from Dependabot's branch name (dependabot/<ecosystem>/...).
     ref = pr.get("headRefName") or ""
@@ -74,9 +71,6 @@ def maintenance_request(app, applicable, reported):
     if reported:
         parts += ["", "Not part of this change (they edit `.github/`, which Agents may not change): " + "; ".join(clean_title(p["title"]) for p in reported)]
     return "\n".join(parts)
-
-
-# --- GitHub (not unit-tested) -------------------------------------------------
 
 
 def dependabot_prs(owner, app, pat):

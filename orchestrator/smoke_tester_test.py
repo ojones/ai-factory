@@ -1,5 +1,6 @@
 # The pure logic of agents/smoke-tester/run.py: how a bug is seeded and how a tester report is judged.
 import importlib.util
+import re as _re
 import sys
 import unittest
 from pathlib import Path
@@ -62,7 +63,6 @@ class Judging(unittest.TestCase):
         # id-zero used "0|zero|...", which matched the 0 in "200"; dup-ids used "...|id", which matched every message.
         unrelated = "Health check endpoint returns 200 | Unable to test due to environment constraints for id lookups"
         for fid in ("id-zero", "dup-ids", "lenient-id", "wrong-status", "no-trim", "no-blank-check"):
-            import re as _re
             self.assertIsNone(_re.search(BY[fid]["match"], unrelated, _re.I), fid)
         self.assertTrue(__import__("re").search(BY["id-zero"]["match"], "GET /api/notes/0 returned 404, expected 400", __import__("re").I))
         self.assertTrue(__import__("re").search(BY["dup-ids"]["match"], "All notes receive ID=1 instead of unique IDs", __import__("re").I))

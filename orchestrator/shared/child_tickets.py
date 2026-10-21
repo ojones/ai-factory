@@ -119,7 +119,6 @@ class ChildTickets:
         return [{"number": b["number"], "state": b["state"].upper()} for b in self._api(f"issues/{number}/dependencies/blocked_by") or []]
 
     def is_ready(self, number):
-        # Open, and every blocker closed.
         return self._api(f"issues/{number}")["state"].upper() == "OPEN" and all(b["state"] == "CLOSED" for b in self.blockers(number))
 
     def withdraw(self, number, comment):

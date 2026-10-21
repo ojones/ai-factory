@@ -44,7 +44,6 @@ def answer(events, cfg, key, ask=ask_model, app_state=None):
 
 
 def judge(events, cfg, key, ask=ask_model, app_state=None, fixed_today=0):
-    # Verdicts for a batch of events with no Build Run.
     return event_verdicts.decide(events, answer(events, cfg, key, ask, app_state), cfg.get("limits", {}), fixed_today)
 
 
@@ -54,7 +53,7 @@ def main(argv):
     verdicts = judge(events, cfg, key)
     if budget and os.environ.get("GITHUB_REPOSITORY") and os.environ.get("FACTORY_GH_TOKEN"):
         agent_run.record_agent_spend(budget, key, os.environ["GITHUB_REPOSITORY"], os.environ["FACTORY_GH_TOKEN"], os.environ.get("GITHUB_RUN_ID", "0"))
-    Path(argv[2]).write_text(json.dumps(verdicts, indent=2))
+    Path(argv[2]).write_text(json.dumps(verdicts, indent=2), encoding="utf-8")
     print(event_verdicts.render(verdicts))
     return 0
 

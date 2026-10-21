@@ -52,7 +52,8 @@ class Sh:
 
 
 class Deploy(unittest.TestCase):
-    def go(self, sh, http=(200, {}), minutes=5):
+    def go(self, sh, http=None, minutes=5):
+        http = (200, {}) if http is None else http
         with mock.patch.object(rollback, "sh", sh), mock.patch.object(http_client, "request", return_value=http), mock.patch.object(rollback.time, "sleep"):
             return rollback.rollback_deploy(run_state(), "demo", "o/demo", "pat", minutes)
 

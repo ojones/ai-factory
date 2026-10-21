@@ -8,7 +8,7 @@ GROWTHBOOK_API = os.environ.get("GROWTHBOOK_API_HOST", "https://ai-factory-growt
 
 
 def load():
-    import yaml
+    import yaml  # noqa: PLC0415
     return yaml.safe_load(PROFILES.read_text())
 
 

@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared import github  # noqa: E402
 
@@ -43,7 +45,6 @@ class Resume(unittest.TestCase):
             self.assertFalse([a for a, _ in calls if a[:2] == ["issue", "edit"]], kwargs)
 
     def test_the_workflow_runs_only_for_a_merged_pr_that_names_a_child(self):
-        import yaml
         root = Path(__file__).resolve().parent.parent.parent
         wf = yaml.safe_load((root / ".github/workflows/resume-failed-child.yml").read_text())
         self.assertEqual(wf[True]["pull_request"]["types"], ["closed"])

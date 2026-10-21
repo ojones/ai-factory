@@ -106,12 +106,12 @@ def update_state_issues(d, factory_repo, pat, factory_token):
             body = render(prev)
             if found:
                 number, url = found[0]["number"], found[0]["url"]
-                with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as f:
                     f.write(body)
                 gh(["issue", "edit", str(number), "--repo", repo, "--body-file", f.name], token)
                 return url
             gh(["label", "create", label, "--repo", repo, "--color", color, "--description", "Maintained by the Orchestrator"], token)
-            with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as f:
                 f.write(body)
             made = gh(["issue", "create", "--repo", repo, "--label", label, "--title", title, "--body-file", f.name], token)
             m = re.search(r"https://\S+/issues/(\d+)", made)

@@ -1,7 +1,11 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from retrospective import agent_run, fix_budget, judge_events, run_retrospective
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -68,10 +72,7 @@ class JudgeRunEvents(unittest.TestCase):
     CFG = {"roles": {"retrospective": {"model": "m"}}, "provider": {"base_url": "https://p"}, "limits": {"fix_events_per_app_per_day": 3}}
 
     def judge(self, events, result, key="parent", batch=None):
-        import tempfile
-        from unittest import mock
 
-        from retrospective import agent_run, fix_budget, judge_events, run_retrospective
         asked = []
 
         def answer(evs, cfg, k):

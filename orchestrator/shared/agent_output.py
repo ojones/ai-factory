@@ -25,10 +25,9 @@ def adopt_misplaced_file(path, cwd):
 def json_problem(path, check=None):
     # Why an Agent's output file cannot be used, in words the Agent can act on; None when it can. Used to tell the
     # Agent on its second attempt what was wrong with its first.
-    try:
-        text = Path(path).read_text()
-    except OSError:
+    if not Path(path).is_file():
         return f"the file {path} was not written (write it at exactly that absolute path, not relative to your working directory)"
+    text = Path(path).read_text(encoding="utf-8")
     if not text.strip():
         return f"the file {path} is empty"
     try:
@@ -47,7 +46,7 @@ def json_problem(path, check=None):
 
 def load_json(path):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 

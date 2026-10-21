@@ -2,26 +2,48 @@
 #
 # The meta test at the bottom keeps the table and these tests in step: every INV-NN row has exactly one
 # `test_invNN_...` here and every test here has a row.
+import inspect
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import yaml
+from bugs import escaped_defects, flood_limits, route_bug, scan_production
+from build_run import read_child, ship_code
+from build_run import start_build as u
+from build_run import ui_check as uc
+from build_run.run_test import RoundLoop, finding
+from flag_lifecycle import flag_slug, missing_flag, release_features
+from flag_lifecycle.fake_growthbook import FakeGrowthBook
+from maintenance import dependency_updates as mt
+from maintenance import template_sync as ts
+from monitoring import benchmark as bm
+from monitoring import dashboard
+from planning import file_children, fix_for, plan_run, render_child, secrets_marker, triage, validate_plan
+from planning import triage as tr
+from retrospective import agent_run, app_state, close_child, event_verdicts, learning_pr, lesson_records, run_audit
+from shared import api_check as ac
+from shared import child_tickets
+from shared import child_tickets as ct
+from shared.fake_issues import FakeIssues
+from staging import read_staging_child, verify_infrastructure
+from try_fix import collect_events, event, factory_fix_request, file_bug, render_bug, resume_after_merge, route, validate_bug, write_bug
 
 sys.path.insert(0, str(Path(__file__).parent))
-from build_run import endings, gate_release, prepare_run, read_child, review_code, suggestions, track_progress, verify_deployed_app  # noqa: E402
+from build_run import endings, gate_release, prepare_run, review_code, suggestions, track_progress, verify_deployed_app  # noqa: E402
 from build_run import run as run_module
 from build_run.run import BuildRun  # noqa: E402
 from flag_lifecycle import dark_feature, flag_manifest, retirement_check, retirement_selection, story_link  # noqa: E402
 from request import check_target_app, intake_labels  # noqa: E402
-from retrospective import agent_run, learning_pr, lesson_records, story_report, tracker  # noqa: E402
+from retrospective import story_report, tracker  # noqa: E402
 from shared import (  # noqa: E402
     agent_process,
     agent_runner,
@@ -36,7 +58,6 @@ from shared import (  # noqa: E402
     spend_budget,
     starter_template,
 )
-from shared.fake_issues import FakeIssues  # noqa: E402
 
 ROOT = config.FACTORY_DIR
 PROFILES = yaml.safe_load((ROOT / "agents/profiles.yml").read_text())
@@ -90,8 +111,6 @@ class Invariants(unittest.TestCase):
         self.assertTrue(verify_deployed_app.derive_test({"results": [{"flag": "a", "check": "x", "status": "passed"}]}, ["a"])[0])
 
     def test_inv06_release_switches_on_only_the_storys_own_flag_and_never_creates_or_touches_another(self):
-        from flag_lifecycle import release_features
-        from flag_lifecycle.fake_growthbook import FakeGrowthBook
         off = lambda: {"environments": {"production": {"enabled": False, "rules": []}}}  # noqa: E731
         gb = FakeGrowthBook({"demo.feature.old": off(), "demo.feature.issue-9": off()})
         to_switch, kept, missing = release_features.check_flags(gb, "demo", ["old", "issue-9", "ghost"], ["issue-9"])
@@ -215,7 +234,6 @@ class Invariants(unittest.TestCase):
         self.assertGreaterEqual(installs, 4)
 
     def test_inv22_an_update_intake_changes_only_a_repo_this_factory_created(self):
-        from build_run import start_build as u
         self.assertTrue(check_target_app.is_factory_repo("Intake: o/ai-factory#3", "o/ai-factory"))
         for bad in ("Intake: o/other#3", "", None, "my own project"):
             self.assertFalse(check_target_app.is_factory_repo(bad, "o/ai-factory"), bad)
@@ -232,8 +250,6 @@ class Invariants(unittest.TestCase):
         self.assertFalse([c for c in calls if c[:2] == ["workflow", "run"]])
 
     def test_inv23_a_change_set_starts_only_after_its_blockers_close_and_only_once(self):
-        from retrospective import close_child
-        from shared import child_tickets
         W, S = child_tickets.WAIT, intake_labels.START
         kid = lambda n, state, labels: {"number": n, "state": state, "labels": set(labels)}
         blockers = lambda table: lambda n: [{"number": k, "state": v} for k, v in table.get(n, {}).items()]
@@ -246,8 +262,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(close_child.ready_to_start([kid(1, "OPEN", []), kid(2, "OPEN", [W])], blockers({})), [])
 
     def test_inv24_only_the_go_label_on_an_update_intake_starts_a_run_and_modules_agree_on_good_endings(self):
-        from monitoring import dashboard
-        from retrospective import app_state, run_audit
         wf = yaml.safe_load((ROOT / ".github/workflows/update-app-intake.yml").read_text())
         self.assertEqual(wf[True]["issues"]["types"], ["labeled"])  # YAML reads the key `on` as True
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
@@ -258,7 +272,6 @@ class Invariants(unittest.TestCase):
         self.assertNotIn("planned", outcomes.OK)  # planning is its own process (plan.yml); a Build Run never ends by planning
 
     def test_inv25_nothing_is_reverted_in_git_and_only_a_regression_rolls_the_deploy_back_through_ci(self):
-        import inspect
         d = {"commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
         self.assertTrue(rollback.rollback_decision(dict(d, outcome="regression"))[0])
         for outcome in ("released", "nothing_to_release", "watchdog_disabled", "round_limit", "needs_human", "stuck",
@@ -272,13 +285,10 @@ class Invariants(unittest.TestCase):
         wf = yaml.safe_load((ROOT / "templates/starter/.github/workflows/rollback-fly.yml").read_text())
         self.assertIn("workflow_dispatch", wf[True])
         self.assertIn(".github/workflows/rollback-fly.yml", starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR)  # template sync gives existing apps the workflow
-        from retrospective import run_audit
         self.assertTrue(run_audit.audit_report(dict(d, outcome="regression", stages=[], blocking=[], rollback={"status": "failed", "reason": "x"})))
         self.assertTrue(run_audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
 
     def test_inv26_a_child_that_ends_badly_and_every_other_failure_event_is_judged_and_handled_once(self):
-        from retrospective import lesson_records
-        from try_fix import event, factory_fix_request, file_bug, route
         for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
             self.assertTrue(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release"):
@@ -297,9 +307,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual((first["action"], second["action"], second["number"]), ("bug_intake", "again", first["number"]))  # the same event reported twice is one
 
     def test_inv27_fix_first_never_retry_the_unchanged_child_and_bounded(self):
-        from retrospective import close_child
-        from shared import child_tickets
-        from try_fix import event, file_bug, resume_after_merge
         self.assertEqual(PROFILES["limits"]["fix_attempts_max"], 2)
         form = "### App name\n\ndemo\n\n### What should change?\n\nChange set CS-1: T\n"
         gh = FakeIssues()
@@ -338,7 +345,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(verify_deployed_app.check_state({"status": "passed", "evidence": "Cannot see logs, but npm run test:file shows 1 passed"}), "passed")
 
     def test_inv29_a_provider_with_no_balance_stops_the_run_and_retries_nothing(self):
-        from retrospective import lesson_records
         event = '{"code": "LLMBadRequestError", "detail": "OpenAIException - You need positive balance to do inference", "kind": "ConversationErrorEvent"}'
         self.assertTrue(provider.provider_blocked_text(event))
         self.assertFalse(provider.provider_blocked_text("the spec mentions a positive balance"))
@@ -352,7 +358,6 @@ class Invariants(unittest.TestCase):
         self.assertNotIn("provider_blocked", outcomes.OK)
 
     def test_inv30_the_api_check_helpers_observation_outranks_the_testers_judgement(self):
-        from shared import api_check as ac
         api = {"create": {"id": "create", "ok": False, "problems": ["status: expected 201, got 200"], "observed": {"status": 200}}}
         passed = {"flag": "f", "check": "create", "status": "passed", "passed": True, "evidence": "ok", "api": ["create"]}
         out = verify_deployed_app.reconcile_api_checks({"results": [passed]}, api)
@@ -363,7 +368,6 @@ class Invariants(unittest.TestCase):
         self.assertIsNotNone(ac.validate([{"id": "a", "request": {"path": "https://other.example/"}, "expect": {"status": 200}}])[1])
 
     def test_inv31_production_feedback_is_an_event_source_that_is_rate_limited_and_owner_only(self):
-        from bugs import escaped_defects, flood_limits, scan_production
         cfg = {"min_occurrences": 3, "max_per_app_per_day": 2}
         groups = {"a" * 8: {"count": 9, "message": "m", "frame": ""}, "b" * 8: {"count": 8, "message": "n", "frame": ""},
                   "c" * 8: {"count": 1, "message": "o", "frame": ""}}
@@ -377,7 +381,6 @@ class Invariants(unittest.TestCase):
         self.assertFalse(hasattr(scan_production, "file_update_app_intake"))  # the scan reports events; Try Fix files the bug
 
     def test_inv32_a_silent_agent_is_killed_long_before_the_overall_timeout(self):
-        import tempfile
         out = Path(tempfile.mkdtemp()) / "o.jsonl"
         rc = agent_process.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
         self.assertEqual(rc, "stall")
@@ -385,7 +388,6 @@ class Invariants(unittest.TestCase):
         self.assertLess(PROFILES["limits"]["agent_stall_minutes"], PROFILES["limits"]["agent_timeout_minutes"])
 
     def test_inv33_template_sync_is_an_intake_for_agent_changeable_files_once_per_target(self):
-        from maintenance import template_sync as ts
         applicable, protected, _ = ts.split_changes([("M", "package.json"), ("M", "fly.toml"), ("M", ".github/x.yml")])
         self.assertEqual([p for _, p in applicable], ["package.json"])
         self.assertEqual(len(protected), 2)
@@ -408,7 +410,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(PROFILES["limits"]["agent_isolation"], "user")
 
     def test_inv35_updates_reach_apps_only_as_gated_intakes(self):
-        from maintenance import dependency_updates as mt
         npm = {"number": 1, "title": "Bump a from 1 to 2", "url": "u", "headRefName": "dependabot/npm_and_yarn/a-2", "labels": []}
         acts = {"number": 2, "title": "Bump actions/checkout", "url": "u", "headRefName": "dependabot/github_actions/x", "labels": []}
         applicable, reported = mt.split_prs([npm, acts])
@@ -421,7 +422,6 @@ class Invariants(unittest.TestCase):
                                                                                               ".github/workflows/deploy-fly.yml"})
 
     def test_inv36_the_browser_helpers_observation_outranks_the_testers_judgement(self):
-        from build_run import ui_check as uc
         ui = {"s": {"id": "s", "ok": False, "problems": ["role='button': expected it to be visible, but it is not"], "observed": {}}}
         passed = {"flag": "f", "check": "c", "status": "passed", "passed": True, "evidence": "e", "ui": ["s"]}
         self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_ui_checks({"results": [passed]}, ui)["results"][0]), "failed")
@@ -449,7 +449,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(story_link.flag_label("x"), "flag:x")
         self.assertIn("issues/9", story_link.flag_description("https://github.com/o/r/issues/9", "t"))
         self.assertEqual(story_link.flag_tags(9, "app"), ["intake-9", "app-app"])
-        from retrospective import app_state
         self.assertIn("issues/9", app_state.story_link({"issue": 9, "run_url": "https://github.com/o/r/actions/runs/1"}))
         run = object.__new__(BuildRun)
         run.factory_repo, run.factory_token, run.issue, run.issue_title = "o/factory", "tok", "9", "app: a page"
@@ -464,7 +463,6 @@ class Invariants(unittest.TestCase):
         self.assertIn("app.feature.issue-9", next(a for a in calls if a[:2] == ["issue", "comment"])[-1])  # and a comment has the full key
 
     def test_inv39_a_fix_is_one_ordinary_child_that_the_failed_child_waits_for(self):
-        from planning import fix_for
         self.assertFalse(hasattr(fix_for, "apply"))  # the planner's flag decision stands: a fix child is an ordinary child
         self.assertEqual(fix_for.max_change_sets({"fix_for": 20}, 8), 1)  # a bug Intake that fixes a child plans exactly one change set
         self.assertEqual(fix_for.max_change_sets(None, 8), 8)
@@ -472,7 +470,6 @@ class Invariants(unittest.TestCase):
             self.assertTrue(hasattr(BuildRun, fn))
 
     def test_inv40_an_impossible_request_is_refused_before_anything_is_built(self):
-        from planning import triage as tr
         self.assertEqual(tr.find_secrets("key sk-" + "x1y2z3w4v5u6t7s8r9q0p1o2"), ["an API key (sk- style)"])
         self.assertEqual(tr.find_secrets("add a password field"), [])
         self.assertTrue(tr.feasibility({"feasibility": {"status": "blocked", "category": "payments", "reasons": ["card"]}})[0])
@@ -482,7 +479,6 @@ class Invariants(unittest.TestCase):
         self.assertTrue(issubclass(endings.Refused, Exception))
 
     def test_inv41_a_model_swap_is_decided_by_a_measured_pass_and_survivable_at_run_time(self):
-        from monitoring import benchmark as bm
         base = {"tasks": 7, "passed": 6, "cost_usd": 2.0, "minutes": 100, "rounds_mean": 1.5,
                 "by_task": {"refuse-secret": {"passed": True, "tags": ["refusal"], "outcome": "refused"}}}
         better = {"tasks": 7, "passed": 6, "cost_usd": 1.0, "minutes": 60, "rounds_mean": 1.4, "by_task": base["by_task"]}
@@ -503,14 +499,12 @@ class Invariants(unittest.TestCase):
         self.assertEqual(run.cfg["roles"]["coder"]["model"], "ok")
 
     def test_inv42_only_reviewed_code_is_pushed_and_the_reviewer_runs_before_the_push(self):
-        import inspect
         self.assertNotIn('"push"', inspect.getsource(BuildRun.coder))  # the coder only commits
-        run_src = inspect.getsource(BuildRun.run)
-        self.assertLess(run_src.index("review_before_push"), run_src.index("self.push(head)"))
-        self.assertLess(run_src.index("self.push(head)"), run_src.index("test_deployed"))
-        self.assertIn("PipelineFix", run_src)  # a fix CI needed is reviewed again before it is pushed
+        deploy_src = inspect.getsource(BuildRun.review_and_deploy)
+        self.assertLess(deploy_src.index("review_before_push"), deploy_src.index("push_through_pipeline"))
+        self.assertLess(*[inspect.getsource(BuildRun.play_round).index(name) for name in ("review_and_deploy", "test_until_decided")])
+        self.assertIn("PipelineFix", inspect.getsource(BuildRun.push_through_pipeline))  # a fix CI needed is reviewed again before it is pushed
         # and the run's rounds, exercised end to end with the stages stubbed (build_run_test.RoundLoop)
-        from build_run.run_test import RoundLoop
         t = RoundLoop()
         run = t.make([t.BLOCKED, t.CLEAN], [t.PASSED])
         t.go(run)
@@ -542,9 +536,7 @@ class Invariants(unittest.TestCase):
         self.assertGreaterEqual(len(tracker.content_words("Coder prompt does not say to trim the input") & tracker.content_words("The coder prompt never says to trim input")), 4)
 
     def test_inv45_the_retrospective_agent_is_isolated_like_the_build_run_agents(self):
-        import inspect
 
-        from retrospective import agent_run, learning_pr
         src = inspect.getsource(agent_run.run_agent)
         self.assertIn("run_isolation_probes", src)
         self.assertIn("user=user", src)
@@ -560,7 +552,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(agent_run.tree_changes.__module__, "retrospective.agent_run")
 
     def test_inv46_what_blocks_or_retries_is_decided_from_structure_not_labels(self):
-        from build_run.run_test import RoundLoop, finding
         self.assertFalse(review_code.derive_review({"findings": [finding()]})[0])
         for weak in (finding(evidence_kind="opinion"), finding(category="style"), finding(file="", line="")):
             self.assertTrue(review_code.derive_review({"findings": [weak]})[0])
@@ -575,7 +566,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(run.calls.count("coder2"), 0)  # no coder round for checks nobody could run
 
     def test_inv47_the_lint_config_is_the_orchestrators_and_a_stricter_rule_never_reaches_main_alone(self):
-        import inspect
         for f in ("eslint.config.mjs", ".prettierrc.json", ".prettierignore"):
             self.assertEqual(starter_template.protected_violations([f]), [f])  # a coder commit that touches it is rejected
             self.assertIn(f, starter_template.TEMPLATE_FILES_HELD)
@@ -593,7 +583,6 @@ class Invariants(unittest.TestCase):
 
 
     def test_inv48_a_request_needing_a_secret_builds_nothing_until_its_names_exist(self):
-        from planning import triage
         run = object.__new__(BuildRun)
         run.app_repo, run.issue, run.factory_repo, run.factory_token = "o/app", "7", "o/f", "tok"
         run.state = mock.Mock(d={})
@@ -612,7 +601,6 @@ class Invariants(unittest.TestCase):
         listed.append({"name": "WEATHER_API_KEY"})
         run.require_secrets(need)  # all present: the build may go on
         # every later start checks the recorded names before any Agent is paid for: a retry, a re-run, a child issue
-        from planning import render_child, secrets_marker
         marker = secrets_marker.secrets_marker(need)
         self.assertEqual(secrets_marker.declared_secrets({"comments": [{"body": "text\n\n" + marker}]}), need)
         child = render_child.child_body("app", "task", 5, {"id": "CS-1"}, [], secrets=need)
@@ -631,7 +619,6 @@ class Invariants(unittest.TestCase):
         self.assertNotIn("-----", triage.secrets_request(need, "o/app"))
 
     def test_inv49_a_commit_with_a_secret_value_or_an_undeclared_name_is_never_pushed(self):
-        from planning import triage
         run = object.__new__(BuildRun)
         run.state = mock.Mock(d={"secrets": ["WEATHER_API_KEY"]})
         calls = []
@@ -673,14 +660,10 @@ class Invariants(unittest.TestCase):
         self.assertEqual(prepare_run.wire_secrets(wired, ["WEATHER_API_KEY"]), wired)  # idempotent
         self.assertEqual(prepare_run.wire_secrets(wired, []), deploy)  # and removable
         self.assertNotIn("echo \"$value\"", step)
-        from planning import triage
         self.assertEqual(triage.find_secrets("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk"), ["a bearer or JWT token"])
 
 
     def test_inv51_a_flags_name_is_issue_n_of_its_story_and_it_exists_off_before_the_coder_starts(self):
-        from flag_lifecycle import flag_slug
-        from flag_lifecycle.fake_growthbook import FakeGrowthBook
-        from planning import render_child
         cs = {"id": "CS-1", "title": "T", "criteria": ["AC-1: x"], "verification": ["v"], "flag": True}
         self.assertIn(flag_slug.SLOT, render_child.render_change_set_task(cs))  # the plan only says "flagged"; the slug is filled in per issue
         self.assertEqual(flag_slug.for_story(42), "issue-42")
@@ -692,8 +675,6 @@ class Invariants(unittest.TestCase):
         self.assertIn("issue-42", flag_slug.add_to_manifest("[]", "issue-42", "o/f#42", "t"))
 
     def test_inv52_a_flag_that_does_not_exist_at_release_is_reported_not_made_up(self):
-        from flag_lifecycle import missing_flag, release_features
-        from flag_lifecycle.fake_growthbook import FakeGrowthBook
         gb = FakeGrowthBook()
         self.assertEqual(release_features.check_flags(gb, "demo", ["ghost"], ["ghost"]), ([], [], ["ghost"]))
         self.assertEqual(gb.features, {})  # nothing was created
@@ -716,9 +697,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(len(hits), 2)  # tests and the manifest count, not only source
 
     def test_inv54_a_plan_is_rolled_back_as_one_and_its_children_are_filed_once_or_not_at_all(self):
-        from planning import file_children, validate_plan
-        from shared import child_tickets
-        from shared.fake_issues import FakeIssues
         cs = {"id": "CS-1", "title": "T", "requirements": ["REQ-1"], "depends_on": [], "criteria": ["AC-1: x"], "verification": ["v"], "size": "S",
               "flag": True, "internal_only": False, "out_of_scope": []}
         plan = {"requirements": [{"id": "REQ-1", "text": "t"}], "assumptions": [], "open_questions": [], "change_sets": [cs]}
@@ -737,7 +715,6 @@ class Invariants(unittest.TestCase):
         self.assertEqual(len(gh.blocked), 1)
 
     def test_inv55_a_build_run_starts_only_for_a_planned_child_of_an_open_plan(self):
-        from build_run import read_child
         marker = {"parent": 7, "cs": "CS-1", "kind": "update"}
         self.assertIsNone(read_child.planned_problem(marker, {"number": 7, "state": "OPEN"}))
         for bad in (({}, {"number": 7, "state": "OPEN"}), (marker, None), (marker, {"number": 7, "state": "CLOSED"}), (marker, {"number": 8, "state": "OPEN"})):
@@ -745,9 +722,6 @@ class Invariants(unittest.TestCase):
         self.assertTrue(read_child.planned_problem({"parent": 7, "kind": "staging"}, {"number": 7, "state": "OPEN"}))  # a staging child is never a Build Run
 
     def test_inv56_planning_is_its_own_process_that_files_a_child_and_can_always_be_retried(self):
-        from planning import plan_run
-        from shared import child_tickets as ct
-        from shared.fake_issues import FakeIssues
         wf = yaml.safe_load((ROOT / ".github/workflows/plan.yml").read_text())
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
         self.assertIn("update-app-intake", cond)
@@ -771,8 +745,6 @@ class Invariants(unittest.TestCase):
         self.assertFalse(hasattr(BuildRun, "plan_change"))
 
     def test_inv57_a_staging_child_is_verified_by_deterministic_checks_before_anything_is_built_on_it(self):
-        from shared import child_tickets
-        from staging import read_staging_child, verify_infrastructure
         self.assertEqual(verify_infrastructure.CHECKS, ("ci_green", "deploy_healthy", "flag_service", "preview_token", "secrets_present", "smoke"))
         wf = (ROOT / ".github/workflows/update-app-intake.yml").read_text()
         self.assertIn("!contains(github.event.issue.body, '\"kind\":\"staging\"')", wf)
@@ -784,8 +756,6 @@ class Invariants(unittest.TestCase):
         self.assertIn("staging.verify_infrastructure", script)
         self.assertLess(script.index("staging.verify_infrastructure"), script.index("retrospective.close_child close"))  # verified, then the next child starts
     def test_inv58_every_failure_event_gets_a_verdict_a_failure_is_never_downgraded_and_a_warning_needs_a_reason(self):
-        from retrospective import event_verdicts
-        from try_fix import collect_events, event
         failure = event.make("build_run", "failure", "demo", "round limit", "f")
         warning = event.make("tester", "warning", "demo", "a dark check failed", "w")
         entries = {failure["key"]: {"key": failure["key"], "verdict": "record", "reason": "skip"}, warning["key"]: {"key": warning["key"], "verdict": "fix"}}
@@ -799,7 +769,6 @@ class Invariants(unittest.TestCase):
         self.assertTrue(lesson_records.wants_fix_request({"outcome": "stuck"}, {}))
 
     def test_inv59_the_try_fix_agent_only_writes_the_ticket_text_and_its_answer_is_validated_or_replaced(self):
-        from try_fix import event, render_bug, validate_bug, write_bug
         ev = event.make("tester", "failure", "demo", "blank text accepted", "fp")
         verdict = {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": "spec_ambiguity", "reason": "r", "event": ev}
         cfg = {**PROFILES, "limits": {**PROFILES["limits"], "planner_max_criteria": 6}}
@@ -818,9 +787,6 @@ class Invariants(unittest.TestCase):
 
 
     def test_inv60_a_bug_is_dark_or_released_by_the_flags_state_and_only_a_dark_story_makes_its_child_wait(self):
-        from bugs import route_bug
-        from shared import child_tickets
-        from try_fix import event, file_bug
         state = {"flags": [{"key": "demo.feature.issue-12", "state": "released"}, {"key": "demo.feature.issue-20", "state": "switched off by the watchdog"}]}
         states = route_bug.flag_states(state)
         self.assertEqual((states[12], states[20]), ("released", "dark"))  # a flag the watchdog switched off is dark (STEP 5.5)
@@ -840,7 +806,6 @@ class Invariants(unittest.TestCase):
             self.assertEqual(bool(gh.blocked), waits)
 
     def test_inv61_a_child_is_routed_by_the_kind_in_its_marker_to_staging_or_to_a_build_run_never_both(self):
-        from shared import child_tickets
         staging, update = (" ".join(next(iter(yaml.safe_load((ROOT / ".github/workflows" / n).read_text())["jobs"].values()))["if"].split())
                            for n in ("app-staging.yml", "update-app-intake.yml"))
         kind = '"kind":"staging"'
@@ -849,9 +814,7 @@ class Invariants(unittest.TestCase):
         self.assertIn(f"!contains(github.event.issue.body, '{kind}')", update)
 
     def test_inv62_a_pipeline_failure_is_diagnosed_and_its_retries_and_coder_fixes_are_bounded(self):
-        import inspect
 
-        from build_run import ship_code
         self.assertGreaterEqual(PROFILES["limits"]["pipeline_retries"], 0)
         self.assertGreater(PROFILES["limits"]["pipeline_fix_attempts"], 0)
         source = inspect.getsource(ship_code.ShipCode.pipeline)
@@ -862,7 +825,7 @@ class Invariants(unittest.TestCase):
 class Registry(unittest.TestCase):
     def test_the_table_and_the_tests_list_the_same_invariants(self):
         table = set(re.findall(r"^\| INV-(\d\d) \|", (ROOT / "docs/invariants.md").read_text(), re.M))
-        tests = set(re.findall(r"def test_inv(\d\d)_", Path(__file__).read_text()))
+        tests = set(re.findall(r"def test_inv(\d\d)_", Path(__file__).read_text(encoding="utf-8")))
         self.assertEqual(table - tests, set(), "invariants with no test")
         self.assertEqual(tests - table, set(), "tests for invariants that are not in docs/invariants.md")
         self.assertTrue(table)

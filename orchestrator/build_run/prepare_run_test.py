@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from shared.fake_issues import FakeIssues
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from flag_lifecycle import flag_slug, retirement_selection  # noqa: E402
 from flag_lifecycle.fake_growthbook import FakeGrowthBook  # noqa: E402
@@ -31,15 +33,11 @@ class InstallDependencies(unittest.TestCase):
         return run
 
     def test_no_lockfile_means_no_install(self):
-        import tempfile
-        from unittest import mock
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(prepare_run, "sh") as sh:
             self.run_in(tmp, False).install_dependencies()
             sh.assert_not_called()
 
     def test_install_runs_without_the_runners_secrets_and_a_failure_is_not_fatal(self):
-        import tempfile
-        from unittest import mock
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(prepare_run, "sh") as sh, \
                 mock.patch.dict(os.environ, {"FLY_API_TOKEN": "secret", "PATH": "/bin"}):
             sh.return_value.returncode = 1
@@ -217,7 +215,6 @@ class SuppressionsAndLintConfig(unittest.TestCase):
 
     def run_with_template(self, files, labels=("template-sync",)):
         # A real app checkout with a base commit, and a Starter Template folder holding `files`.
-        import tempfile
         tmp = Path(tempfile.mkdtemp())
         starter = tmp / "factory" / "templates" / "starter"
         for rel, text in files.items():
@@ -239,7 +236,6 @@ class SuppressionsAndLintConfig(unittest.TestCase):
         return run, git, origin, tmp / "factory"
 
     def test_the_lint_config_is_staged_after_the_base_and_pushed_only_with_the_coders_work(self):
-        from unittest import mock
         run, git, origin, factory = self.run_with_template({"eslint.config.mjs": "// new rules\n", ".github/workflows/test-gate.yml": "name: gate\n"})
         pushes = []
         real_sh = prepare_run.sh
@@ -262,19 +258,16 @@ class SuppressionsAndLintConfig(unittest.TestCase):
 
     def test_without_the_template_sync_label_nothing_is_copied(self):
         run, git, _, factory = self.run_with_template({"eslint.config.mjs": "// new\n"})
-        from unittest import mock
         with mock.patch.object(config, "FACTORY_DIR", factory):
             run.apply_template_files({"update-app-intake"})
             run.stage_template_config({"update-app-intake"})
         self.assertEqual((run.app_dir / "eslint.config.mjs").read_text(), "// old\n")
 
 
-
 class LocatingThePlan(unittest.TestCase):
     MARKER = {"parent": 7, "cs": "CS-1", "kind": "update", "flag": True, "size": "S"}
 
     def run_for(self, marker, parent_state="open", has_parent=True):
-        from shared.fake_issues import FakeIssues
         gh = FakeIssues()
         gh.add(7, state=parent_state)
         child = gh.add(12)

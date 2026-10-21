@@ -39,6 +39,14 @@ from build_run.verify_deployed_app import VerifyDeployedApp
 from build_run.write_code import WriteCode
 
 
+def reviewer_view(f):
+    return review_code.finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f)
+
+
+def tester_view(r):
+    return review_code.finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r)
+
+
 class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDeployedApp, ReleaseStep, TrackProgress):
     # Sequencing only: `run` calls each step in order. Each step's code is in the mixin named above (one file each), over this object's state.
     retiring = ()  # the flags this run retires in passing (set in setup)
@@ -105,103 +113,7 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
 
     def run(self):
         try:
-            self.setup()
-            base = self.state.d["base_sha"]
-            findings_path = self.work / "findings-0.json"
-            findings_path.write_text(json.dumps({"blocking": [], "minor": []}))
-            self.name_the_flag()
-            task = self.task + retirement_selection.retirement_block(self.retiring)
-            self.spec = (getattr(self, "spec", None) or self.task) + retirement_selection.retirement_note(self.retiring)
-            if self.fix_for:
-                self.spec += fix_note.fix_note(self.fix_for)
-            if self.retiring:
-                log("retiring in passing: " + ", ".join(self.retiring))
-                self.state.d["retiring"] = list(self.retiring)
-            self.stage_secret_wiring()
-            head = self.coder("1", task, str(findings_path))
-            failed_tests = 0
-            for rnd in range(1, self.lim["review_rounds"] + 1):
-                # The reviewer sees the commit before it is pushed, so code it blocks never reaches `main`; only reviewed code is pushed,
-                # and it deploys dark behind its flag until the tester has passed it.
-                while True:
-                    clean, blocking, minor = self.review_before_push(base, head, rnd)
-                    flags = self.run_flags(base, head)
-                    if not clean:
-                        break
-                    self.push(head)
-                    try:
-                        head = self.pipeline(head)
-                    except endings.PipelineFix as fix:
-                        head = fix.head
-                        continue
-                    self.state.d["head_sha"] = head
-                    break
-                tpassed, test_failures = False, []
-                if clean:
-                    retests = int(self.lim.get("test_retries", 1))
-                    while True:
-                        tpassed, test_failures, impact = self.test_deployed(base, head, rnd, flags)
-                        if impact == "regression":
-                            broken = [r for r in test_failures if isinstance(r, dict) and r.get("scope") == "existing"]
-                            self.state.d["blocking"] = [review_code.finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in broken]
-                            raise endings.Regression("the tester found behaviour that was live before this change no longer working: "
-                                             + "; ".join(f"{r.get('check')}" for r in broken[:3]))
-                        if not tpassed and verify_deployed_app.failed_checks(test_failures):
-                            ungated = self.ungated_flags(head, flags)
-                            if ungated:
-                                # The change is live with no gate (nothing reads its flag), so a failure is a failure in production: roll back.
-                                named = self.state.d.get("named_flag")
-                                self.state.d["flag_notes"] = [missing_flag.note(s, "live_and_failing", named) for s in ungated]
-                                self.state.d["blocking"] = [review_code.finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r)
-                                                            for r in verify_deployed_app.failed_checks(test_failures)]
-                                raise endings.Regression(missing_flag.live_message(ungated, named, True))
-                        if tpassed or verify_deployed_app.failed_checks(test_failures):
-                            break
-                        # Nothing failed, but checks were blocked or not run. The coder cannot fix that, so it gets no round for it: the
-                        # tester looks again at the same deployed commit, and a run that still cannot verify it stops for a person.
-                        if retests <= 0:
-                            self.state.d["unverified"] = verify_deployed_app.unverified_checks(test_failures)
-                            raise run_stops.NeedsHuman("other", verify_deployed_app.unverified_message(test_failures))
-                        retests -= 1
-                        log(f"{len(test_failures)} check(s) could not be verified; testing the same deployed commit again")
-                all_blocking = (
-                    [review_code.finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in blocking]
-                    + [review_code.finding_view("tester", f"{r.get('flag')}: {r.get('check')}", r.get("evidence", ""), r) for r in verify_deployed_app.failed_checks(test_failures)])
-                self.state.d["blocking"] = all_blocking
-                self.state.save()
-                # Kept on a clean pass too: the minor findings of a run that ships are what the retrospective learns from.
-                findings = {"round": rnd, "blocking": all_blocking,
-                            "minor": [review_code.finding_view("reviewer", f.get("summary", ""), f.get("evidence", ""), f) for f in minor]}
-                findings_path = self.work / f"findings-{rnd}.json"
-                findings_path.write_text(json.dumps(findings, indent=2))
-                self.record_round(rnd, head, findings["blocking"])
-                if gate_release.release_gate(True, True, tpassed, clean, head, self.head()):
-                    self.check_limits()
-                    if flags:
-                        self.release(flags, head)
-                        released = (self.state.d.get("release") or {}).get("released")
-                        if not released and self.state.d.get("flag_message"):
-                            self.state.d.update(outcome="nothing_to_release", message=self.state.d["flag_message"])
-                        else:
-                            self.link_flags_to_issue(flags)
-                            self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
-                            self.watch_release()
-                    else:
-                        self.state.d.update(outcome="nothing_to_release", message="Clean, but the change added no flag, so there was nothing to release.")
-                    self.archive_retired_flags(base, head)
-                    return
-                if verify_deployed_app.failed_checks(test_failures):
-                    failed_tests += 1
-                    if failed_tests >= int(self.lim.get("test_rounds", 0) or 10**6):
-                        raise run_stops.NeedsHuman("round_limit", f"{failed_tests} deployed tests failed; each costs a push, a deploy and a tester pass, "
-                                                        "so the run stops for a person instead of trying again")
-                if rnd == self.lim["review_rounds"]:
-                    raise run_stops.NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
-                if track_progress.stalled(self.state.d["scoreboard"], int(self.lim.get("stuck_rounds", 0))):
-                    raise run_stops.NeedsHuman("stuck", f"the last {self.lim['stuck_rounds']} rounds left the same checks failing and the "
-                                              "same findings open; more fix rounds are not changing anything")
-                summary = "\n".join(review_code.describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
-                head = self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
+            self.drive()
         except endings.Regression as e:
             self.state.d.update(outcome="regression", message=str(e))
         except run_stops.FlagMissing as e:
@@ -223,6 +135,155 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         finally:
             self.state.save()
         return
+
+    def drive(self):
+        self.setup()
+        base = self.state.d["base_sha"]
+        self.failed_tests = 0
+        head = self.first_coder_round()
+        for rnd in range(1, self.lim["review_rounds"] + 1):
+            released, head = self.play_round(base, head, rnd)
+            if released:
+                return
+
+    def first_coder_round(self):
+        findings_path = self.work / "findings-0.json"
+        findings_path.write_text(json.dumps({"blocking": [], "minor": []}))
+        return self.coder("1", self.prepare_task(), str(findings_path))
+
+    def prepare_task(self):
+        self.name_the_flag()
+        task = self.task + retirement_selection.retirement_block(self.retiring)
+        self.spec = self.spec_with_notes()
+        self.note_retiring()
+        self.stage_secret_wiring()
+        return task
+
+    def spec_with_notes(self):
+        spec = (getattr(self, "spec", None) or self.task) + retirement_selection.retirement_note(self.retiring)
+        return spec + fix_note.fix_note(self.fix_for) if self.fix_for else spec
+
+    def note_retiring(self):
+        if self.retiring:
+            log("retiring in passing: " + ", ".join(self.retiring))
+            self.state.d["retiring"] = list(self.retiring)
+
+    def play_round(self, base, head, rnd):
+        clean, blocking, minor, flags, head = self.review_and_deploy(base, head, rnd)
+        tpassed, test_failures = self.test_until_decided(base, head, rnd, flags) if clean else (False, [])
+        findings, findings_path = self.write_findings(rnd, head, blocking, minor, test_failures)
+        if gate_release.release_gate(True, True, tpassed, clean, head, self.head()):
+            self.release_clean_run(base, head, flags)
+            return True, head
+        self.stop_when_exhausted(rnd, test_failures)
+        return False, self.coder_fix_round(rnd, findings, findings_path)
+
+    # The reviewer sees the commit before it is pushed, so code it blocks never reaches `main`; only reviewed code is pushed,
+    # and it deploys dark behind its flag until the tester has passed it.
+    def review_and_deploy(self, base, head, rnd):
+        while True:
+            clean, blocking, minor = self.review_before_push(base, head, rnd)
+            flags = self.run_flags(base, head)
+            deployed, head = self.push_through_pipeline(head) if clean else (True, head)
+            if deployed:
+                return clean, blocking, minor, flags, head
+
+    def push_through_pipeline(self, head):
+        self.push(head)
+        try:
+            deployed = self.pipeline(head)
+        except endings.PipelineFix as fix:
+            return False, fix.head
+        self.state.d["head_sha"] = deployed
+        return True, deployed
+
+    def test_until_decided(self, base, head, rnd, flags):
+        retests = int(self.lim.get("test_retries", 1))
+        while True:
+            tpassed, test_failures, impact = self.test_deployed(base, head, rnd, flags)
+            self.stop_on_regression(impact, test_failures)
+            self.stop_when_live_and_failing(tpassed, test_failures, head, flags)
+            if tpassed or verify_deployed_app.failed_checks(test_failures):
+                return tpassed, test_failures
+            retests = self.retest_or_stop(retests, test_failures)
+
+    def stop_on_regression(self, impact, test_failures):
+        if impact == "regression":
+            broken = [r for r in test_failures if isinstance(r, dict) and r.get("scope") == "existing"]
+            self.state.d["blocking"] = [tester_view(r) for r in broken]
+            raise endings.Regression("the tester found behaviour that was live before this change no longer working: "
+                                     + "; ".join(f"{r.get('check')}" for r in broken[:3]))
+
+    def stop_when_live_and_failing(self, tpassed, test_failures, head, flags):
+        failed = verify_deployed_app.failed_checks(test_failures)
+        ungated = self.ungated_flags(head, flags) if failed and not tpassed else []
+        if ungated:
+            # The change is live with no gate (nothing reads its flag), so a failure is a failure in production: roll back.
+            named = self.state.d.get("named_flag")
+            self.state.d["flag_notes"] = [missing_flag.note(s, "live_and_failing", named) for s in ungated]
+            self.state.d["blocking"] = [tester_view(r) for r in failed]
+            raise endings.Regression(missing_flag.live_message(ungated, named, True))
+
+    # Nothing failed, but checks were blocked or not run. The coder cannot fix that, so it gets no round for it: the
+    # tester looks again at the same deployed commit, and a run that still cannot verify it stops for a person.
+    def retest_or_stop(self, retests, test_failures):
+        if retests <= 0:
+            self.state.d["unverified"] = verify_deployed_app.unverified_checks(test_failures)
+            raise run_stops.NeedsHuman("other", verify_deployed_app.unverified_message(test_failures))
+        log(f"{len(test_failures)} check(s) could not be verified; testing the same deployed commit again")
+        return retests - 1
+
+    def write_findings(self, rnd, head, blocking, minor, test_failures):
+        all_blocking = [reviewer_view(f) for f in blocking] + [tester_view(r) for r in verify_deployed_app.failed_checks(test_failures)]
+        self.state.d["blocking"] = all_blocking
+        self.state.save()
+        # Kept on a clean pass too: the minor findings of a run that ships are what the retrospective learns from.
+        findings = {"round": rnd, "blocking": all_blocking, "minor": [reviewer_view(f) for f in minor]}
+        findings_path = self.work / f"findings-{rnd}.json"
+        findings_path.write_text(json.dumps(findings, indent=2))
+        self.record_round(rnd, head, all_blocking)
+        return findings, findings_path
+
+    def release_clean_run(self, base, head, flags):
+        self.check_limits()
+        if flags:
+            self.release_and_record(flags, head)
+        else:
+            self.state.d.update(outcome="nothing_to_release", message="Clean, but the change added no flag, so there was nothing to release.")
+        self.archive_retired_flags(base, head)
+
+    def release_and_record(self, flags, head):
+        self.release(flags, head)
+        released = (self.state.d.get("release") or {}).get("released")
+        if not released and self.state.d.get("flag_message"):
+            self.state.d.update(outcome="nothing_to_release", message=self.state.d["flag_message"])
+            return
+        self.link_flags_to_issue(flags)
+        self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
+        self.watch_release()
+
+    def stop_when_exhausted(self, rnd, test_failures):
+        if verify_deployed_app.failed_checks(test_failures):
+            self.failed_tests += 1
+            self.stop_when_tests_keep_failing()
+        self.stop_when_rounds_are_spent(rnd)
+
+    def coder_fix_round(self, rnd, findings, findings_path):
+        summary = "\n".join(review_code.describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
+        return self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
+
+    def stop_when_tests_keep_failing(self):
+        failed_tests = self.failed_tests
+        if failed_tests >= int(self.lim.get("test_rounds", 0) or 10**6):
+            raise run_stops.NeedsHuman("round_limit", f"{failed_tests} deployed tests failed; each costs a push, a deploy and a tester pass, "
+                                            "so the run stops for a person instead of trying again")
+
+    def stop_when_rounds_are_spent(self, rnd):
+        if rnd == self.lim["review_rounds"]:
+            raise run_stops.NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
+        if track_progress.stalled(self.state.d["scoreboard"], int(self.lim.get("stuck_rounds", 0))):
+            raise run_stops.NeedsHuman("stuck", f"the last {self.lim['stuck_rounds']} rounds left the same checks failing and the "
+                                      "same findings open; more fix rounds are not changing anything")
 
 
 def main():

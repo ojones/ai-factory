@@ -30,15 +30,13 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 MAX_CHECKS, MAX_STEPS = 30, 20
 ACTION_TIMEOUT_MS, NAV_TIMEOUT_MS = 8000, 15000
 TEXT_LIMIT = 300
 ACTIONS = ("click", "fill", "press", "goto", "wait_for", "check", "select")
 LOCATORS = ("role", "label", "text", "placeholder", "test_id")
-
-
-# --- pure logic (unit-tested) -------------------------------------------------
 
 
 def loc_key(loc):
@@ -144,9 +142,6 @@ def render(results):
     return "\n".join(lines)
 
 
-# --- running (needs Playwright) -------------------------------------------------
-
-
 def locate(page, loc):
     exact = bool(loc.get("exact"))
     if "role" in loc:
@@ -180,7 +175,6 @@ def observe(page, expect, console_errors, token, text_timeout=3000):
             obs["count"][loc_key(item)] = locate(page, item).count()
         except Exception:  # noqa: BLE001
             obs["count"][loc_key(item)] = -1
-    from urllib.parse import urlparse
     obs["url_path"] = urlparse(page.url).path or "/"
     obs["title"] = scrub(page.title(), token)
     return obs
@@ -219,51 +213,77 @@ def do_step(page, step, base):
 
 
 def run_checks(checks, base, token, log_path=None, shot_dir=None):
-    from urllib.parse import urlparse
-
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
     origin = "{0.scheme}://{0.netloc}".format(urlparse(base))
     results = []
     with sync_playwright() as p:
-        try:
-            browser = p.chromium.launch(headless=True)
-        except Exception:  # noqa: BLE001 - some runners forbid the sandbox to an unprivileged account; the browser only opens the app's own origin
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        browser = launch_browser(p)
         for c in checks:
-            began, problems, obs, shot = time.time(), [], None, None
-            ctx = browser.new_context(viewport={"width": 1100, "height": 800})
-            ctx.set_default_timeout(ACTION_TIMEOUT_MS)
-            ctx.route("**/*", lambda route, request: route.continue_() if request.url.startswith(origin) or request.url.startswith("data:") else route.abort())
-            page, console_errors = ctx.new_page(), []
-            page.on("console", lambda m, errs=console_errors: errs.append(m.text) if m.type == "error" else None)
-            page.on("pageerror", lambda e, errs=console_errors: errs.append(str(e)))
-            try:
-                if c.get("auth") == "preview":
-                    if not token:
-                        raise RuntimeError("PREVIEW_TOKEN is not set in the environment, so an auth: preview check cannot be made")
-                    page.goto(f"{base.rstrip('/')}/?preview={token}", timeout=NAV_TIMEOUT_MS)  # sets the HttpOnly preview cookie
-                page.goto(base.rstrip("/") + c.get("start", "/"), timeout=NAV_TIMEOUT_MS)
-                for step in c.get("steps", []):
-                    do_step(page, step, base)
-                obs, problems = settle(page, c["expect"], console_errors, token)
-            except Exception as e:  # noqa: BLE001 - a timeout or a failed navigation is a failed check, with the reason
-                problems = [scrub(f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}", token)]
-            if problems and shot_dir:
-                try:
-                    Path(shot_dir).mkdir(parents=True, exist_ok=True)
-                    shot = f"ui-{re.sub(r'[^A-Za-z0-9_-]', '_', c['id'])}.png"
-                    page.screenshot(path=str(Path(shot_dir) / shot))
-                except Exception:  # noqa: BLE001
-                    shot = None
-            ctx.close()
-            res = {"id": c["id"], "name": c.get("name") or c["id"], "ok": not problems, "problems": problems, "expected": c["expect"],
-                   "observed": obs or {}, "ms": round((time.time() - began) * 1000), "screenshot": shot}
-            results.append(res)
-            if log_path:
-                with open(log_path, "a") as f:
-                    f.write(json.dumps(res) + "\n")
+            results.append(run_one_check(browser, origin, c, base, token, shot_dir))
+            append_result(log_path, results[-1])
         browser.close()
     return results
+
+
+def launch_browser(p):
+    try:
+        return p.chromium.launch(headless=True)
+    except Exception:  # noqa: BLE001 - some runners forbid the sandbox to an unprivileged account; the browser only opens the app's own origin
+        return p.chromium.launch(headless=True, args=["--no-sandbox"])
+
+
+def append_result(log_path, res):
+    if log_path:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(res) + "\n")
+
+
+def run_one_check(browser, origin, c, base, token, shot_dir):
+    began = time.time()
+    ctx, page, console_errors = open_page(browser, origin)
+    obs, problems = attempt_check(page, c, base, token, console_errors)
+    shot = take_screenshot(page, c, shot_dir) if problems and shot_dir else None
+    ctx.close()
+    return {"id": c["id"], "name": c.get("name") or c["id"], "ok": not problems, "problems": problems, "expected": c["expect"],
+            "observed": obs or {}, "ms": round((time.time() - began) * 1000), "screenshot": shot}
+
+
+def open_page(browser, origin):
+    ctx = browser.new_context(viewport={"width": 1100, "height": 800})
+    ctx.set_default_timeout(ACTION_TIMEOUT_MS)
+    ctx.route("**/*", lambda route, request: route.continue_() if request.url.startswith(origin) or request.url.startswith("data:") else route.abort())
+    page, console_errors = ctx.new_page(), []
+    page.on("console", lambda m, errs=console_errors: errs.append(m.text) if m.type == "error" else None)
+    page.on("pageerror", lambda e, errs=console_errors: errs.append(str(e)))
+    return ctx, page, console_errors
+
+
+def attempt_check(page, c, base, token, console_errors):
+    try:
+        open_start_page(page, c, base, token)
+        for step in c.get("steps", []):
+            do_step(page, step, base)
+        return settle(page, c["expect"], console_errors, token)
+    except Exception as e:  # noqa: BLE001 - a timeout or a failed navigation is a failed check, with the reason
+        return None, [scrub(f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}", token)]
+
+
+def open_start_page(page, c, base, token):
+    if c.get("auth") == "preview":
+        if not token:
+            raise RuntimeError("PREVIEW_TOKEN is not set in the environment, so an auth: preview check cannot be made")
+        page.goto(f"{base.rstrip('/')}/?preview={token}", timeout=NAV_TIMEOUT_MS)  # sets the HttpOnly preview cookie
+    page.goto(base.rstrip("/") + c.get("start", "/"), timeout=NAV_TIMEOUT_MS)
+
+
+def take_screenshot(page, c, shot_dir):
+    try:
+        Path(shot_dir).mkdir(parents=True, exist_ok=True)
+        shot = f"ui-{re.sub(r'[^A-Za-z0-9_-]', '_', c['id'])}.png"
+        page.screenshot(path=str(Path(shot_dir) / shot))
+        return shot
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def main(argv):
@@ -276,7 +296,7 @@ def main(argv):
         print("usage: ui_check.py checks.json --base https://host   (or set UI_CHECK_BASE)", file=sys.stderr)
         return 2
     try:
-        with open(args[0]) as f:
+        with open(args[0], encoding="utf-8") as f:
             doc = json.load(f)
     except (OSError, ValueError) as e:
         print(f"cannot read {args[0]}: {e}", file=sys.stderr)

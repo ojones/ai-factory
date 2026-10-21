@@ -129,9 +129,6 @@ class PlanRun:
         return {"ending": PLANNED, "message": f"Planned as {len(made)} change set(s): {lines}.", "cost": self.cost, "children": made}
 
 
-# --- the real world (not unit-tested) -------------------------------------------
-
-
 def seed_workdir(app_dir, starter=None):
     # A new app has no code yet, so the planner reads the Starter Template it will start from (a copy, so reading it changes nothing): the same AGENTS.md, flag client and
     # routes the coder will find. Without it the planner asked people questions the code answers (found by the second and third live planning).
@@ -241,7 +238,7 @@ def main():
     if spent:
         spend_ledger.record_spend_in_ledger({"app": intake["app"], "spent_usd": spent}, repo, f"{e.get('GITHUB_RUN_ID', '0')}-plan", token)
     log(f"planning ended {result['ending']}: {result['message']}")
-    with open(e.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
+    with open(e.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
         f.write(f"## Planning: {result['ending']}\n\n{result['message']}\n")
     return 0 if result["ending"] in ANSWERED else 1
 

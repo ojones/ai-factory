@@ -1,6 +1,7 @@
 # Tests for the model canary. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import unittest
 
+import yaml
 from shared import config
 
 from monitoring import canary as c
@@ -24,7 +25,6 @@ class Drift(unittest.TestCase):
             self.assertIn(needle, text)
 
     def test_the_shipped_profile_names_a_fallback_for_every_role_that_runs_an_agent(self):
-        import yaml
         roles = yaml.safe_load((config.FACTORY_DIR / "agents" / "profiles.yml").read_text())["roles"]
         for role in ("coder", "tester", "reviewer", "planner"):
             self.assertTrue(roles[role].get("fallback_model"), role)

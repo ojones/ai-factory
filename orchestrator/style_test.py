@@ -17,7 +17,7 @@ BASELINE = Path(__file__).with_name("style_baseline.json")
 GOAL_LINES = 5
 MAX_LINES = 10
 MAX_INDENT = 4
-BLOCKS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try, ast.ExceptHandler)
+BLOCKS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
 ALLOWED_COMMENT_MARKERS = ("noqa", "type:", "pragma", "!")
 
 
@@ -34,9 +34,10 @@ def function_lengths():
     return found
 
 
-def indent_depth(node):
-    children = [indent_depth(c) for c in ast.iter_child_nodes(node)]
-    return max(children, default=0) + isinstance(node, BLOCKS)
+def indent_depth(node, is_elif=False):
+    elif_child = node.orelse[0] if isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If) else None
+    children = [indent_depth(c, c is elif_child) for c in ast.iter_child_nodes(node)]
+    return max(children, default=0) + (isinstance(node, BLOCKS) and not is_elif)
 
 
 def function_depths():
@@ -45,7 +46,7 @@ def function_depths():
         for node in ast.walk(ast.parse(path.read_text(), str(path))):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 key = f"{path.relative_to(ROOT)}::{node.name}"
-                found[key] = max(found.get(key, 0), indent_depth(node))
+                found[key] = max(found.get(key, 0), indent_depth(node) - 1)
     return found
 
 
@@ -63,10 +64,16 @@ def load_baseline():
     return json.loads(BASELINE.read_text())
 
 
+def tightened(current, limit, allowed):
+    return {name: n for name, n in current.items() if n > limit and (allowed is None or name in allowed)}
+
+
 def write_baseline():
-    long_functions = {name: n for name, n in function_lengths().items() if n > MAX_LINES}
-    deep_functions = {name: n for name, n in function_depths().items() if n > MAX_INDENT}
-    BASELINE.write_text(json.dumps({"long_functions": long_functions, "deep_functions": deep_functions, "comments": comment_counts()}, indent=1, sort_keys=True) + "\n")
+    old = load_baseline() if BASELINE.exists() else {}
+    long_functions = tightened(function_lengths(), MAX_LINES, old.get("long_functions"))
+    deep_functions = tightened(function_depths(), MAX_INDENT, old.get("deep_functions"))
+    comments = {name: n for name, n in comment_counts().items() if "comments" not in old or name in old["comments"]}
+    BASELINE.write_text(json.dumps({"long_functions": long_functions, "deep_functions": deep_functions, "comments": comments}, indent=1, sort_keys=True) + "\n")
 
 
 def report():

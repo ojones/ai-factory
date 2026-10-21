@@ -18,15 +18,20 @@
 # real `plan.yml` from that branch (so the planner it measures is the branch's), then dispatches the real `build-run.yml` from that branch for each child the plan filed,
 # in order, so production code carries no "benchmark mode" (the label only keeps the production workflows from starting the children with the production models). The branch also pins the limits that would make passes incomparable (no flag retirement
 # ride-along, a short watchdog, no daily cap). See docs/benchmark-protocol.md.
+import argparse
+import base64
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 import yaml
 from request import intake_labels, render_form
-from shared import config, github, http_client, outcomes, preview_token
+from shared import api_check, config, github, http_client, outcomes, preview_token
 
 ROOT = config.FACTORY_DIR
 SUITE = ROOT / "agents" / "benchmark" / "suite.json"
@@ -35,9 +40,6 @@ BASELINE = ROOT / "agents" / "benchmark" / "baseline.json"
 ROLES = ("coder", "tester", "reviewer", "planner", "pipeline", "retrospective")
 BENCH_LIMITS = {"flag_retirement": {"min_age_days": 1, "piggyback_max": 0}, "watchdog_minutes": 2, "daily_cost_cap_usd": 0}
 DEFAULT_RULES = {"max_pass_drop": 1, "max_cost_ratio": 1.3, "max_rounds_delta": 0.5, "must_pass_tags": ["refusal", "safety"], "improvement_ratio": 0.9}
-
-
-# --- pure logic (unit-tested) -------------------------------------------------
 
 
 def parse_candidate(text):
@@ -254,16 +256,11 @@ def estimate(tasks):
             "hours_low": round(0.35 * len(ran), 1), "hours_high": round(0.7 * len(ran), 1)}
 
 
-# --- the runner: GitHub, git and the deployed bench app (not unit-tested; `plan` is a dry run) ---------------------------------------------------
-
 def _env():
-    import os
     return os.environ
 
 
 def gh(args, token=None, check=True):
-    import os
-    import subprocess
     p = subprocess.run(["gh", *args], capture_output=True, text=True, env={**os.environ, "GH_TOKEN": token or os.environ["FACTORY_PAT"]})
     if check and p.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args[:3])} failed: {(p.stderr or p.stdout)[-300:]}")
@@ -272,7 +269,6 @@ def gh(args, token=None, check=True):
 
 def publish_branch(repo, branch, profile_text):
     # Create `branch` from main with agents/profiles.yml replaced by `profile_text` (through the API, so no local checkout is needed).
-    import base64
     sha = gh(["api", f"repos/{repo}/git/ref/heads/main", "--jq", ".object.sha"]).strip()
     gh(["api", "-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch}", "-f", f"sha={sha}"])
     file_sha = gh(["api", f"repos/{repo}/contents/agents/profiles.yml?ref={branch}", "--jq", ".sha"]).strip()
@@ -287,9 +283,6 @@ def delete_branch(repo, branch):
 def reset_bench(owner, app, base_sha):
     # Force the bench app's main back to the frozen commit, and wait for that commit's deploy if main moved (an older deploy finishing
     # after a newer one would put the app back). Returns True if main moved.
-    import os
-    import subprocess
-    import tempfile
     header = "Authorization: Basic " + __import__("base64").b64encode(f"x-access-token:{os.environ['FACTORY_PAT']}".encode()).decode()
     env = {**os.environ, **github.git_auth_env(header)}
     work = tempfile.mkdtemp(prefix="bench-")
@@ -310,9 +303,7 @@ def reset_bench(owner, app, base_sha):
 
 
 def file_task_issue(repo, app, pass_id, task, seed_flag=""):
-    import os
 
-    from shared import github
     token = os.environ["FACTORY_PAT"]
     for label in (intake_labels.UPDATE_APP_INTAKE, f"app:{app}", "benchmark"):
         github.ensure_label(repo, label, token, "ededed", "Benchmark pass")
@@ -373,18 +364,15 @@ def run_task(repo, app, branch, issue):
 
 
 def read_report(repo, run_id):
-    import tempfile
     d = tempfile.mkdtemp(prefix="bench-report-")
     gh(["run", "download", str(run_id), "--repo", repo, "-n", "build-run", "-D", d], check=False)
     found = sorted(Path(d).rglob("state.json"))
-    return json.load(open(found[0])) if found else None
+    return json.load(open(found[0], encoding="utf-8")) if found else None
 
 
 def run_oracle(app, task):
     # The task's setup checks, then its oracle checks, through api_check against the deployed bench app.
-    import os
 
-    import api_check
     checks = list(task.get("setup", [])) + list(task.get("oracle", {}).get("checks", []))
     if not checks:
         return []
@@ -396,7 +384,6 @@ def run_oracle(app, task):
 
 def archive_bench_flags(app, keep=("bench-seed",)):
     # Archive the features a pass created (GrowthBook cannot delete one), so a later pass starts clean. Best effort.
-    import os
     status, r = http_client.request("GET", f"{config.GROWTHBOOK_API}/features?limit=500", os.environ["GROWTHBOOK_ADMIN_PAT"])
     for f in (r.get("features") or []) if isinstance(r, dict) else []:
         fid = f.get("id", "")
@@ -405,8 +392,7 @@ def archive_bench_flags(app, keep=("bench-seed",)):
 
 
 def run_pass(label, overrides, task_names, execute):
-    import os
-    suite = json.load(open(SUITE))
+    suite = json.load(open(SUITE, encoding="utf-8"))
     problems = validate_suite(suite)
     if problems:
         print("suite problems:\n- " + "\n- ".join(problems))
@@ -442,18 +428,17 @@ def run_pass(label, overrides, task_names, execute):
         archive_bench_flags(app, keep=(suite.get("seed_flag") or "bench-seed",))
         reset_bench(owner, app, suite["base_sha"])
     agg = aggregate(scores)
-    base = json.load(open(BASELINE)) if BASELINE.exists() else None
-    verdict = compare(agg, base["aggregate"], json.load(open(RULES))) if base else None
+    base = json.load(open(BASELINE, encoding="utf-8")) if BASELINE.exists() else None
+    verdict = compare(agg, base["aggregate"], json.load(open(RULES, encoding="utf-8"))) if base else None
     out = {"label": label, "candidate": overrides, "pass_id": pass_id, "aggregate": agg, "verdict": verdict}
-    Path(f"benchmark-result-{label}.json").write_text(json.dumps(out, indent=2))
+    Path(f"benchmark-result-{label}.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
     report_md = render_report(label, overrides, agg, verdict)
-    Path(f"benchmark-result-{label}.md").write_text(report_md)
+    Path(f"benchmark-result-{label}.md").write_text(report_md, encoding="utf-8")
     print(report_md)
     return 0
 
 
 def main(argv):
-    import argparse
     ap = argparse.ArgumentParser(prog="benchmark.py")
     ap.add_argument("command", choices=["plan", "run", "compare", "accept", "freeze"])
     ap.add_argument("path", nargs="?")
@@ -468,7 +453,7 @@ def main(argv):
         if a.command in ("plan", "run"):
             return run_pass(a.label, overrides, a.tasks, execute=(a.command == "run" and a.execute))
         if a.command == "freeze":
-            suite = json.load(open(SUITE))
+            suite = json.load(open(SUITE, encoding="utf-8"))
             repo = _env()["GITHUB_REPOSITORY"]
             sha = gh(["api", f"repos/{repo.split('/')[0]}/{suite['app']}/commits/main", "--jq", ".sha"]).strip()
             suite["base_sha"] = sha
@@ -477,10 +462,10 @@ def main(argv):
             SUITE.write_text(json.dumps(suite, indent=2) + "\n")
             print(f"froze {suite['app']} at {sha}")
             return 0
-        result = json.load(open(a.path))
+        result = json.load(open(a.path, encoding="utf-8"))
         if a.command == "compare":
-            base = json.load(open(BASELINE))
-            verdict = compare(result["aggregate"], base["aggregate"], json.load(open(RULES)))
+            base = json.load(open(BASELINE, encoding="utf-8"))
+            verdict = compare(result["aggregate"], base["aggregate"], json.load(open(RULES, encoding="utf-8")))
             print(render_report(result["label"], result["candidate"], result["aggregate"], verdict))
             return 0 if verdict["accept"] else 1
         BASELINE.write_text(json.dumps({"label": result["label"], "candidate": result["candidate"], "aggregate": result["aggregate"]}, indent=2) + "\n")

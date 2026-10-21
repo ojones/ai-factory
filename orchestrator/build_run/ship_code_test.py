@@ -1,9 +1,12 @@
 import json
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from build_run import endings
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared import run_stops  # noqa: E402
@@ -49,7 +52,6 @@ class Diagnosis(unittest.TestCase):
     # STEP 4.8: a failed pipeline step is read by the Pipeline Agent, whose category decides: a flaky or infrastructure failure is re-run (up to `pipeline_retries`),
     # a failure in the code goes back to the coder (up to `pipeline_fix_attempts`), anything else stops for a person.
     def make(self, runs, diagnoses, retries=2, fixes=2, healthy=True):
-        import tempfile
         run = object.__new__(BuildRun)
         run.lim = {"pipeline_retries": retries, "pipeline_fix_attempts": fixes}
         run.app_repo, run.work = "o/app", Path(tempfile.mkdtemp())
@@ -62,7 +64,7 @@ class Diagnosis(unittest.TestCase):
         def agent_json(role, label, values, path, check=None):
             self.calls.append((role, label))
             doc = self.diagnoses.pop(0)
-            Path(path).write_text(json.dumps(doc))
+            Path(path).write_text(json.dumps(doc), encoding="utf-8")
             return doc, 0.01, {}
         run.agent_json = agent_json
         run.gh = lambda args, check=True: self.reruns.append(args) or mock.Mock(stdout="")
@@ -94,14 +96,12 @@ class Diagnosis(unittest.TestCase):
         self.assertIn("infra", str(cm.exception))
 
     def test_a_failure_in_the_code_goes_back_to_the_coder_with_the_agents_fix_request(self):
-        from build_run import endings
         run = self.make([self.red()], [{"category": "code", "fix_request": "the lint step fails on app.ts", "summary": "lint"}])
         with self.assertRaises(endings.PipelineFix):
             run.pipeline("a" * 40)
         self.assertEqual(self.coded[0][1], "the lint step fails on app.ts")
 
     def test_coder_fixes_are_bounded(self):
-        from build_run import endings
         run = self.make([self.red(), self.red()], [{"category": "code", "fix_request": "x", "summary": "s"}] * 2, fixes=1)
         with self.assertRaises(endings.PipelineFix):
             run.pipeline("a" * 40)

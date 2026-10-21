@@ -14,13 +14,12 @@ from try_fix import event, file_failure, write_bug
 
 
 def fixes_in(verdicts):
-    # The `fix` verdicts whose event is well formed.
     return [v for v in verdicts if isinstance(v, dict) and v.get("verdict") == "fix" and event.valid(v.get("event"))]
 
 
 def main(argv):
     try:
-        verdicts = json.loads(Path(argv[1]).read_text())
+        verdicts = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         verdicts = []
     cfg, e = config.load(), os.environ

@@ -175,7 +175,7 @@ def main():
         summary.append(row)
         print(f"{m} | {row['ok']}/{row['runs']} | {row['built']}/{row['runs']} | {row['median_secs']} | {row['median_llm_secs']} | "
               f"${row['avg_cost']} | {row['avg_calls']} | {row['avg_blocking']}")
-    Path("coder-replay-results.json").write_text(json.dumps({"summary": summary, "runs": results}, indent=2))
+    Path("coder-replay-results.json").write_text(json.dumps({"summary": summary, "runs": results}, indent=2), encoding="utf-8")
     if not os.environ.get("KEEP"):
         shutil.rmtree(root, ignore_errors=True)
 

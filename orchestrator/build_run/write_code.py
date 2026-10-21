@@ -26,38 +26,43 @@ class WriteCode:
             self.run_agent("coder", label, {"round": label, "task": task, "findings_path": findings_path,
                                             "issue_ref": f"{self.factory_repo}#{self.issue}"})
             cost, head = self._last_cost, self.head()
-            problem = None
-            if head == base:
-                problem = "You made no commit. Make the change, then run `git add` and `git commit`."
-            elif self.git("merge-base", "--is-ancestor", base, head, check=False).returncode != 0:
-                self.git("reset", "-q", "--hard", base)
-                problem = "You rewrote history. Add new commits on top of the existing ones only."
-            else:
-                changed = self.git("diff", "--name-only", f"{base}..{head}").stdout.split("\n")
-                bad = starter_template.protected_violations([c for c in changed if c])
-                if bad:
-                    self.git("reset", "-q", "--hard", base)
-                    problem = f"Your commits changed protected Starter Template files ({', '.join(bad)}). They were discarded. Redo the work without touching them."
-                else:
-                    for slug in self.retiring:
-                        problem = retirement_check.retirement_problem(slug, retirement_check.code_references(
-                            self.git("grep", "-n", "-I", "-F", "-e", slug, head, check=False).stdout.splitlines()))
-                        if problem:
-                            break
-                    if not problem:
-                        problem = self.secret_problem(base, head)
-                    if not problem and self.lim.get("precheck", True):
-                        problem = self.check_problem()
+            problem = self.commit_problem(base, head)
+            if not problem:
+                return self.accept_commit(label, cost, head)
+            attempts += 1
+            self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
+            if attempts >= 3:
+                raise run_stops.NeedsHuman("other", f"the coder could not produce an acceptable commit: {problem}")
+            task = f"{problem}\n\nOriginal task:\n{task0}"
+
+    def accept_commit(self, label, cost, head):
+        self.check_limits()
+        self.state.stage("Coder", "coder", label, cost, f"committed {head[:8]}", self.take_usage())
+        return head
+
+    def commit_problem(self, base, head):
+        if head == base:
+            return "You made no commit. Make the change, then run `git add` and `git commit`."
+        if self.git("merge-base", "--is-ancestor", base, head, check=False).returncode != 0:
+            self.git("reset", "-q", "--hard", base)
+            return "You rewrote history. Add new commits on top of the existing ones only."
+        return self.content_problem(base, head)
+
+    def content_problem(self, base, head):
+        changed = self.git("diff", "--name-only", f"{base}..{head}").stdout.split("\n")
+        bad = starter_template.protected_violations([c for c in changed if c])
+        if bad:
+            self.git("reset", "-q", "--hard", base)
+            return f"Your commits changed protected Starter Template files ({', '.join(bad)}). They were discarded. Redo the work without touching them."
+        return self.retirement_problem_in(head) or self.secret_problem(base, head) or (self.check_problem() if self.lim.get("precheck", True) else None)
+
+    def retirement_problem_in(self, head):
+        for slug in self.retiring:
+            references = retirement_check.code_references(self.git("grep", "-n", "-I", "-F", "-e", slug, head, check=False).stdout.splitlines())
+            problem = retirement_check.retirement_problem(slug, references)
             if problem:
-                attempts += 1
-                self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
-                if attempts >= 3:
-                    raise run_stops.NeedsHuman("other", f"the coder could not produce an acceptable commit: {problem}")
-                task = f"{problem}\n\nOriginal task:\n{task0}"
-                continue
-            self.check_limits()
-            self.state.stage("Coder", "coder", label, cost, f"committed {head[:8]}", self.take_usage())
-            return head
+                return problem
+        return None
 
     def secret_problem(self, base, head):
         # Reject a commit that adds a real secret value, or that lists in `secrets.json` a name the plan did not declare (the deploy step

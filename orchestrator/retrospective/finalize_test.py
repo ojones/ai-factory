@@ -69,7 +69,7 @@ class Finalize(unittest.TestCase):
         self.assertIn("audit", saved)
         self.assertFalse([c for c in calls if c[0] == "git"], "nothing is committed, pushed or reverted in git")
         failure_issue = next(c for c in calls if c[:3] == ["gh", "issue", "create"])
-        self.assertIn("Rollback", Path(failure_issue[failure_issue.index("--body-file") + 1]).read_text())
+        self.assertIn("Rollback", Path(failure_issue[failure_issue.index("--body-file") + 1]).read_text(encoding="utf-8"))
 
     def test_an_update_intake_that_failed_loses_its_go_label_and_says_how_to_retry(self):
         _, _, _, _, calls = self.run_finalize(Run)

@@ -59,7 +59,7 @@ class Run(unittest.TestCase):
         runner = runner_in(tmp, on_spend=lambda jwt: spends.append(jwt) or 0.25, **kw)
 
         def fake_watched(cmd, cwd, env, out, timeout_s, stall_s, user=None, pidfile=None, **k):
-            Path(out).write_text(jsonl_text)
+            Path(out).write_text(jsonl_text, encoding="utf-8")
             self.watched = {"cmd": cmd, "cwd": cwd, "env": env, "timeout": timeout_s, "stall": stall_s, "user": user, "pidfile": pidfile}
             return rc
 
@@ -113,7 +113,7 @@ class Run(unittest.TestCase):
                 conv = Path(tmp) / "home" / ".openhands" / "conversations" / "c1"
                 conv.mkdir(parents=True)
                 (conv / "base_state.json").write_text(json.dumps(state))
-                Path(out).write_text("")
+                Path(out).write_text("", encoding="utf-8")
                 return 0
 
             with mock.patch.object(agent_process, "run_watched", fake_watched), mock.patch("builtins.print"):
@@ -131,7 +131,7 @@ class JsonOutput(unittest.TestCase):
             calls.append((label, note))
             what = writes[len(calls) - 1]
             if what is not None:
-                Path(path).write_text(what)
+                Path(path).write_text(what, encoding="utf-8")
             return 0, 0.1, None
         return attempt, calls
 

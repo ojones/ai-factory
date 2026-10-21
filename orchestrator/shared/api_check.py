@@ -55,9 +55,6 @@ TYPES = {
 }
 
 
-# --- pure logic (unit-tested) -------------------------------------------------
-
-
 def mismatches(expected, observed, path="$"):
     # What differs between an expectation and an observed JSON value; an empty list means it matches.
     if isinstance(expected, str) and expected in TYPES:
@@ -166,9 +163,6 @@ def validate(doc):
     return checks, None
 
 
-# --- running (network) ----------------------------------------------------------
-
-
 def do_request(base, request, captures, token):
     # (status, body text, parsed JSON or None, headers, error). A connection failure is status 0 with an error.
     method = str(request.get("method", "GET")).upper()
@@ -219,7 +213,7 @@ def run_checks(checks, base, token, log_path=None):
         results.append({"id": c["id"], "name": c.get("name") or c["id"], "ok": not problems, "problems": problems,
                         "expected": c["expect"], "observed": {"status": status, "body": body}, "ms": round((time.time() - began) * 1000)})
         if log_path:
-            with open(log_path, "a") as f:
+            with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(results[-1]) + "\n")
     return results
 
@@ -247,7 +241,7 @@ def main(argv):
         print("usage: api_check.py checks.json --base https://host   (or set API_CHECK_BASE)", file=sys.stderr)
         return 2
     try:
-        with open(args[0]) as f:
+        with open(args[0], encoding="utf-8") as f:
             doc = json.load(f)
     except (OSError, ValueError) as e:
         print(f"cannot read {args[0]}: {e}", file=sys.stderr)

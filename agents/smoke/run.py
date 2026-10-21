@@ -212,5 +212,5 @@ print(f"\nModel {MODEL}, reasoning_effort={REASONING_EFFORT or 'default'}")
 print(f"Total estimated cost of T5 calls: ${total_cost:.4f}")
 failed = [n for n, ok, _ in results if not ok]
 pathlib.Path("smoke-results.json").write_text(json.dumps(
-    [{"name": n, "ok": ok, "detail": d} for n, ok, d in results], indent=2))
+    [{"name": n, "ok": ok, "detail": d} for n, ok, d in results], indent=2), encoding="utf-8")
 sys.exit(1 if failed else 0)

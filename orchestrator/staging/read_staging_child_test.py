@@ -1,3 +1,4 @@
+import shlex
 import sys
 import unittest
 from pathlib import Path
@@ -55,7 +56,6 @@ class Checking(unittest.TestCase):
 
     def test_the_shell_gets_quoted_values_so_a_request_cannot_inject_commands(self):
         found = {"app": "notes", "parent": 7, "description": "it's `rm -rf /` $(x)\nline two", "cost_cap": "2.00", "cap_source": "default"}
-        import shlex
         lines = r.shell_lines(found)
         description = next(line.split("=", 1)[1] for line in lines if line.startswith("DESCRIPTION="))
         self.assertEqual(shlex.split(description), ["it's `rm -rf /` $(x)\nline two"])

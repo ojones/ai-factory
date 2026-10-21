@@ -2,6 +2,7 @@ import unittest
 from unittest import mock
 
 from flag_lifecycle import watchdog
+from flag_lifecycle.fake_growthbook import FakeGrowthBook
 
 
 class TripRules(unittest.TestCase):
@@ -71,7 +72,6 @@ class Watching(unittest.TestCase):
 
 class Disabling(unittest.TestCase):
     def test_each_flag_is_switched_off_and_read_back_and_one_that_stays_on_is_reported(self):
-        from flag_lifecycle.fake_growthbook import FakeGrowthBook
         on = {"environments": {"production": {"enabled": True, "rules": []}}}
         gb = FakeGrowthBook({"a.feature.x": dict(on), "a.feature.y": dict(on)})
         real = gb.__call__

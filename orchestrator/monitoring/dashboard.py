@@ -186,9 +186,6 @@ def render_html(history, m, generated):
     return "".join(out) + "\n"
 
 
-# --- GitHub (not unit-tested) -------------------------------------------------
-
-
 def gh_json(args):
     p = subprocess.run(["gh", *args], capture_output=True, text=True)
     return json.loads(p.stdout or "[]") if p.returncode == 0 else []
@@ -232,7 +229,7 @@ def main(argv):
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400))
     digest = render_digest(history, m, since)
     print(digest)
-    with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
+    with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
         f.write(digest)
     return 0
 
