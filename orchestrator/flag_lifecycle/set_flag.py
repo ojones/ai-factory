@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-# Switch one Managed App flag on or off in production by hand (the owner's lever; run by .github/workflows/flag-set.yml).
-#
-# The release step creates flags and the watchdog switches them off. This is the same call for a person: turning a released flag
-# off is the rollback, and turning one on is for a test such as the production-feedback check. It changes the `production`
-# environment's `enabled` switch of one existing flag and reads it back; it never creates a flag or edits rules.
-#
-#   PYTHONPATH=orchestrator python3 -m flag_lifecycle.set_flag <app> <flag-slug> on|off        Env: GROWTHBOOK_ADMIN_PAT
-# Exit 0 if the read-back shows the requested state, 1 otherwise, 2 for bad input.
 import os
 import sys
 
@@ -26,7 +18,6 @@ def main(argv):
         print(f"{key}: no such flag (HTTP {status}); nothing changed", file=sys.stderr)
         return 1
     prod = (((r.get("feature") or r) if isinstance(r, dict) else {}).get("environments") or {}).get("production") or {}
-    # The API wants the environment's rules with the switch (the watchdog sends rules too); send the current ones back unchanged.
     code, reply = http_client.request("POST", f"{config.GROWTHBOOK_API}/features/{key}", token,
                          {"environments": {"production": {"enabled": want, "rules": prod.get("rules") or []}}})
     if code != 200:

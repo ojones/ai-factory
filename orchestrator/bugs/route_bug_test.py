@@ -12,7 +12,6 @@ STATE = {"flags": [{"key": "demo.feature.issue-12", "state": "released"},
 
 
 class FlagStates(unittest.TestCase):
-    # STEP 8.1, 8.2: the flag's state in the App State decides whether a story is released or dark (INV-60).
     def test_only_a_flag_released_and_still_on_is_released_and_every_other_state_is_dark(self):
         self.assertEqual(route_bug.flag_states(STATE), {12: "released", 20: "dark", 30: "dark"})
 
@@ -26,7 +25,6 @@ class FlagStates(unittest.TestCase):
 
 
 class Attach(unittest.TestCase):
-    # STEP 8.1, 8.4: a bug is tied to a story by the flag it names, never by a guess.
     states = {12: "released", 20: "dark"}
 
     def test_an_error_that_names_a_dark_flag_belongs_to_that_dark_story_whose_open_child_will_wait(self):

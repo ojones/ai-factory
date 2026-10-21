@@ -1,4 +1,3 @@
-# The hidden marker that records which secrets a request declared, and the reader that finds them again on any later start.
 import json
 import re
 
@@ -8,13 +7,10 @@ SECRETS_RE = re.compile(r"<!-- factory-secrets:(.*?) -->", re.S)
 
 
 def secrets_marker(needed):
-    # The hidden marker that records which secrets a request declared (names and purposes, never values), so every later start checks them
-    # before any Agent is paid for, whichever path it takes.
     return "<!-- factory-secrets:" + json.dumps([{"name": x["name"], "purpose": x.get("purpose", "")} for x in needed], separators=(",", ":")) + " -->"
 
 
 def declared_secrets(issue):
-    # The secrets recorded for this Intake: in a hidden marker in any comment, or in a child issue's plan metadata. [{name, purpose}].
     found = {}
     sources = [c.get("body", "") for c in issue.get("comments") or []]
     for text in sources:

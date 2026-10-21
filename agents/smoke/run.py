@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-# Smoke test for the reviewer model (issue #33).
-#
-# Checks, against DeepInfra's OpenAI-compatible API, that the model:
-#   T1 returns usage.estimated_cost (the cost guardrail depends on it)
-#   T2 round-trips a tool call (incl. reasoning_content if the model emits it)
-#   T3 produces schema-valid structured JSON
-#   T4 does structured output and tools in the same request
-#   T5 finds known bugs / passes a clean diff (agents/smoke/fixtures), N trials each
-#
-# Prints pass/fail only. The key comes from DEEPINFRA_API_KEY and is never printed.
 import json
 import os
 import pathlib
@@ -24,7 +14,6 @@ BASE = "https://api.deepinfra.com/v1/openai"
 KEY = os.environ["DEEPINFRA_API_KEY"]
 TRIALS = int(os.environ.get("TRIALS", "3"))
 WORKERS = int(os.environ.get("WORKERS", "6"))
-# Optional: "low" | "medium" | "high", sent as reasoning_effort on every call.
 REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "")
 HERE = pathlib.Path(__file__).parent
 
@@ -32,14 +21,11 @@ sys.path.insert(0, str(HERE.parent.parent / "orchestrator"))
 from build_run import review_code  # noqa: E402
 from shared import prompts  # noqa: E402
 
-# The schema the Orchestrator's single-call reviewer sends, so the smoke test checks the model against what it will really be asked.
 VERDICT_SCHEMA = review_code.REVIEW_SCHEMA
 RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {"name": "review_verdict", "schema": VERDICT_SCHEMA, "strict": True},
 }
-# The real single-call reviewer prompt (agents/prompts/reviewer-fast.md plus the shared rubric), rendered
-# the way the Orchestrator renders it. A fixture is an update unless expected.json says "first build".
 
 def review_system(kind):
     return prompts.render(
@@ -61,9 +47,6 @@ def record(name, ok, detail=""):
     print(f"{'PASS' if ok else 'FAIL'}  {name} {detail}", flush=True)
 
 def chat(payload, attempts=5):
-    # One API call. Retries overload (429), server errors (5xx) and timeouts with backoff:
-    # those say nothing about the model, and counting them as wrong verdicts made a busy
-    # provider look like a regression.
     extra = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
     body = json.dumps({"model": MODEL, **extra, **payload}).encode()
     req = urllib.request.Request(f"{BASE}/chat/completions", data=body, headers={
@@ -89,14 +72,11 @@ def message(resp):
 def parse_verdict(resp):
     text = message(resp).get("content") or ""
     v = json.loads(text)
-    # The Orchestrator derives the verdict from the findings instead of
-    # trusting the model's own field.
     v["model_verdict"] = v["verdict"]
-    v["findings"] = review_code.banded_findings(v)  # a blocking finding the fields do not back is minor, as at run time
+    v["findings"] = review_code.banded_findings(v)
     v["verdict"] = "changes_requested" if any(f["severity"] == "blocking" for f in v["findings"]) else "clean"
     return v
 
-# T1
 try:
     r = chat({"max_tokens": 5, "messages": [{"role": "user", "content": "Say hi."}]})
     cost = r.get("usage", {}).get("estimated_cost")
@@ -104,7 +84,6 @@ try:
 except Exception as e:
     record("T1 usage.estimated_cost present", False, f"({e})")
 
-# T2
 try:
     msgs = [{"role": "user", "content": "Use read_file to read src/a.ts, then tell me in one sentence what it exports."}]
     r1 = chat({"messages": msgs, "tools": TOOLS, "tool_choice": "auto"})
@@ -114,7 +93,7 @@ try:
     if not calls:
         record("T2 tool call round-trip", False, "(model did not call the tool)")
     else:
-        msgs.append(m1)  # replay exactly as returned, incl. reasoning_content if present
+        msgs.append(m1)
         msgs.append({"role": "tool", "tool_call_id": calls[0]["id"], "content": "export const answer = 42;"})
         r2 = chat({"messages": msgs, "tools": TOOLS})
         final = message(r2).get("content") or ""
@@ -123,12 +102,10 @@ except Exception as e:
     record("T2 tool call round-trip", False, f"({e})")
 
 def load_fixture(p):
-    # An optional <name>.intake.md stands in for the repo's INTAKE.md, which the real reviewer reads.
     intake = p.with_suffix(".intake.md")
     prefix = f"Contents of INTAKE.md:\n{intake.read_text()}\n\n" if intake.exists() else ""
     return prefix + p.read_text()
 
-# FIXTURES=name,name limits the T5 run to those fixtures (to repeat a flaky one).
 ONLY = {n for n in os.environ.get("FIXTURES", "").split(",") if n}
 fixtures = {p.stem: load_fixture(p) for p in sorted((HERE / "fixtures").glob("*.diff")) if not ONLY or p.stem in ONLY}
 expected = json.loads((HERE / "expected.json").read_text())
@@ -138,14 +115,12 @@ def review(diff, extra=None, kind="update"):
                               {"role": "user", "content": f"Review this diff:\n\n{diff}"}],
                  "response_format": RESPONSE_FORMAT, **(extra or {})})
 
-# T3
 try:
     v = parse_verdict(review(fixtures["clean"]))
     record("T3 schema-valid structured output", v["verdict"] in ("clean", "changes_requested") and isinstance(v["findings"], list))
 except Exception as e:
     record("T3 schema-valid structured output", False, f"({e})")
 
-# T4
 try:
     r = review(fixtures["clean"], {"tools": TOOLS, "tool_choice": "auto"})
     m = message(r)
@@ -154,9 +129,6 @@ try:
 except Exception as e:
     record("T4 structured output + tools together", False, f"({e})")
 
-# T5: every (fixture, trial) is an independent call, so they run in parallel. A trial that errors
-# (provider overload, timeout) after the retries says nothing about the model, so it is reported
-# separately and does not count against the fixture.
 def grade(want, v):
     if v["verdict"] != want["verdict"]:
         return False

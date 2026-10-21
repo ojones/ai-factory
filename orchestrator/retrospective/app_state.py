@@ -1,14 +1,3 @@
-# Where each Managed App stands, kept in GitHub issues the Orchestrator maintains.
-#
-# - The **App State issue** (label `factory-state`) in each Managed App's repo: its recent Build Runs and every flag
-#   a Build Run released, with the flag's last known state. This is how a person, or the next Build Run, learns
-#   "what is in flight, what is released" without reading logs. It is an issue, not a file on `main`: a commit
-#   would redeploy the app, race the release step, and break "only the coder's work reaches main".
-# - The **registry issue** (label `factory-registry`) in ai-factory: one row per Managed App, linking each State issue.
-#
-# Each body carries its data as JSON in an HTML comment, so a rewrite never has to parse the tables. `finalize`
-# calls `update_state_issue` and `update_registry` after every Build Run, best effort: a failure here never changes
-# a run's outcome. The rendering functions are pure and unit-tested.
 import json
 import os
 import re
@@ -29,13 +18,11 @@ def day(d):
 
 
 def story_link(flag):
-    # A link to the issue a flag came from, built from the run URL's repository (the story lives in the Factory repo), or '-'.
     m = re.match(r"(https://github\.com/[^/]+/[^/]+)/actions/", flag.get("run_url") or "")
     return f"[#{flag['issue']}]({m.group(1)}/issues/{flag['issue']})" if m and flag.get("issue") else "-"
 
 
 def render_state(prev_body, d):
-    # The App State issue body after this run. `d` is the Build Run Report.
     data = app_state_record.load(prev_body)
     runs = data.get("runs", [])
     runs.append({"date": day(d), "outcome": d.get("outcome"), "kind": d.get("build_kind") or "", "run_url": d.get("run_url") or "",
@@ -47,8 +34,6 @@ def render_state(prev_body, d):
     for key in (d.get("release") or {}).get("released") or []:
         flags[key] = {"key": key, "date": day(d), "run_url": d.get("run_url") or "", "issue": d.get("issue_number"),
                       "state": "switched off by the watchdog" if off else "released"}
-    # A flagged change that was pushed and never released is a dark feature: it is listed (so a person can see it), and never taken for a
-    # released flag. Once it is released at last, the release above replaces the entry.
     if d.get("flags") and d.get("commits") and d.get("outcome") not in outcomes.OK + ("refused", outcomes.PROVIDER_BLOCKED) and not off:
         for slug in d["flags"]:
             key = f"{d.get('app')}.feature.{slug}"
@@ -74,7 +59,6 @@ def render_state(prev_body, d):
 
 
 def render_registry(prev_body, d, state_url):
-    # The registry body after this run: one row per app, keyed by app name.
     data = app_state_record.load(prev_body)
     apps = data.get("apps", {})
     row = apps.get(d.get("app"), {"runs": 0, "ok": 0})
@@ -91,7 +75,6 @@ def render_registry(prev_body, d, state_url):
 
 
 def update_state_issues(d, factory_repo, pat, factory_token):
-    # Rewrite the app's State issue and ai-factory's registry issue after a run (best effort).
     try:
         owner, app = factory_repo.split("/")[0], d["app"]
         app_repo = f"{owner}/{app}"
@@ -116,7 +99,7 @@ def update_state_issues(d, factory_repo, pat, factory_token):
             made = gh(["issue", "create", "--repo", repo, "--label", label, "--title", title, "--body-file", f.name], token)
             m = re.search(r"https://\S+/issues/(\d+)", made)
             if m:
-                gh(["issue", "pin", m.group(1), "--repo", repo], token)  # best effort; not every plan allows it
+                gh(["issue", "pin", m.group(1), "--repo", repo], token)
             return m.group(0) if m else ""
 
         state_url = upsert(app_repo, pat, app_state_record.STATE_LABEL, "Factory: app state", "5319e7", lambda prev: render_state(prev, d))

@@ -1,17 +1,3 @@
-# The gate that starts a Build Run for a child ticket (STEP 4.1's trigger). Planning (`planning/plan_run.py`) files each Intake's change sets as child tickets,
-# sub-issues of the Intake carrying a `factory-plan` marker, and puts `proceed-with-change` on the first child with nothing to wait for; the rest are
-# labelled `waiting-on-plan`, and `retrospective/close_child.py` gives `proceed-with-change` to the next one whose blockers are closed, one at a time, so an app
-# never has two pending Build Runs (GitHub keeps only one pending run per concurrency group). A staging child is staged by App Staging instead.
-#
-# `.github/workflows/update-app-intake.yml` runs `start`, which refuses (comments, removes the label) anything that is not a planned child of an open plan,
-# or whose app is not one this Factory built, and otherwise labels it app:<slug> and dispatches the Build Run.
-#
-# The label is added with the PAT, not the Actions token: events made by the Actions token do not start workflows.
-#
-# Commands (env: GH_TOKEN, FACTORY_PAT, FACTORY_REPO, ISSUE_NUMBER, ISSUE_BODY, RUN_URL):
-#   start     validate the issue, label it app:<slug>, dispatch the Build Run
-#
-# Usage: python -m build_run.start_build start   (PYTHONPATH=orchestrator)
 import json
 import os
 import sys
@@ -45,7 +31,6 @@ def start():
         return refuse(f"`{owner}/{app}` does not exist. An update Intake changes an app the Factory already built; a new app starts with an Intake.")
     if not check_target_app.is_factory_repo(json.loads(info.stdout).get("description"), repo):
         return refuse(f"`{owner}/{app}` was not created by this Factory (its description is not an `Intake: {repo}#<n>` marker), so the Factory will not change it.")
-    # Only a planned child starts a run: a sub-issue of an open plan whose body carries the `factory-plan` marker naming that plan.
     try:
         problem = read_child.planned_problem(child_tickets.read_marker(body), child_tickets.parent_info(repo, number, pat))
     except child_tickets.ChildTicketError as e:

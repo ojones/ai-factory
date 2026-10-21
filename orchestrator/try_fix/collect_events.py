@@ -1,6 +1,3 @@
-# STEP 6.2: the failure events of one Build Run, from its facts (retrospective/run_facts.py). The run's own ending is the one `failure`; the
-# warnings are the things that did not stop the run but are worth a look (a dark-only test failure, a check that could not be run, a minor finding,
-# an improvement for the app, a flag that was missing). The Retrospective gives each event a verdict; nothing here decides to fix anything.
 from shared import outcomes
 
 from try_fix import event
@@ -9,7 +6,6 @@ MAX_WARNINGS = 8
 
 
 def run_failure(d):
-    # The outcome that is a failure to fix: not a good ending, not an answer (refused, awaiting_secret) and not the provider running out of balance.
     return d.get("outcome") not in outcomes.OK + outcomes.ANSWERED + (outcomes.PROVIDER_BLOCKED,)
 
 

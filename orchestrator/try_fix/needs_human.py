@@ -1,5 +1,3 @@
-# STEP 7.5: nothing runs until the owner edits the child and gives it `proceed-with-change` again. The child stays open with no start label and
-# no waiting label, which also keeps its siblings from starting (the Retrospective's advance treats such a child as stalled).
 from shared import github
 
 LABEL = "needs-human"

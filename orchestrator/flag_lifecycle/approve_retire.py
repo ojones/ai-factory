@@ -1,4 +1,3 @@
-# A person approved removing a dark feature: file the removal as an Update App Intake, start it, and close the story. Run by approve-retire.yml.
 import json
 import os
 import sys
@@ -10,8 +9,6 @@ from flag_lifecycle import dark_feature
 
 
 def approve(repo, pat, number):
-    # The story #number got the label `approve-retire`: file the removal as an Update App Intake and start it. Returns 0 either way (a refusal
-    # is a comment on the story, not a failed workflow).
     env = {**os.environ, "GH_TOKEN": pat}
     story = json.loads(shell.sh(["gh", "issue", "view", str(number), "--repo", repo, "--json", "labels,title"], env=env).stdout)
     labels = [l["name"] for l in story["labels"]]

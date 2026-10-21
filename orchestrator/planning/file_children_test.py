@@ -38,11 +38,11 @@ class FilingChildren(unittest.TestCase):
         marker = child_tickets.read_marker(second["body"])
         self.assertEqual((marker["parent"], marker["cs"], marker["kind"], marker["flag"], marker["size"]),
                          (7, "CS-2", "update", True, "S"))
-        self.assertIn("- AC-1" if False else "- a", second["body"])  # the criteria are in the body: the child needs nothing else to be built
+        self.assertIn("- AC-1" if False else "- a", second["body"], msg="the criteria are in the body: the child needs nothing else to be built")
         self.assertIn("### What should change?", second["body"])
-        self.assertEqual({label["name"] for label in second["labels"]}, {"update-app-intake", "app:notes", "waiting-on-plan"})  # the parent link is the sub-issue, not a label
+        self.assertEqual({label["name"] for label in second["labels"]}, {"update-app-intake", "app:notes", "waiting-on-plan"}, msg="the parent link is the sub-issue, not a label")
         starts = [c for c in self.gh.calls if isinstance(c, list) and c[:2] == ["issue", "edit"]]
-        self.assertEqual([c[2] for c in starts], [str(numbers["CS-1"])])  # CS-3 has nothing to wait for either, but waits its turn
+        self.assertEqual([c[2] for c in starts], [str(numbers["CS-1"])], msg="CS-3 has nothing to wait for either, but waits its turn")
         self.assertIn(intake_labels.START, starts[0])
 
     def test_a_fix_child_is_an_ordinary_child_that_keeps_the_planners_flag_decision_and_records_what_it_fixes(self):
@@ -56,7 +56,7 @@ class FilingChildren(unittest.TestCase):
                                                    fix={"fix_for": 12, "origin_parent": 5, "attempt": 2})
             marker = child_tickets.read_marker(gh.issues[made[0][1]]["body"])
             self.assertEqual((marker["flag"], marker["fix_for"], marker["fix_attempt"]), (expected_flag, 12, 2))
-            self.assertEqual(set(marker) & {"flag_story", "origin_parent"}, set())  # the child names no one else's flag, and the chain is counted from the failed child
+            self.assertEqual(set(marker) & {"flag_story", "origin_parent"}, set())
             body = gh.issues[made[0][1]]["body"]
             self.assertEqual("slug `" in body, expected_flag)
 
@@ -84,8 +84,8 @@ class FilingChildren(unittest.TestCase):
         self.gh.route = second_link_fails
         with self.assertRaises(child_tickets.ChildTicketError):
             self.file()
-        self.assertEqual([i["state"] for n, i in self.gh.issues.items() if n != 7], ["closed", "closed"])  # the filed one and the unlinked one
-        self.assertEqual(self.gh.subs[7], [])  # neither is left under the parent, so the Intake does not count as planned
+        self.assertEqual([i["state"] for n, i in self.gh.issues.items() if n != 7], ["closed", "closed"], msg="the filed one and the unlinked one")
+        self.assertEqual(self.gh.subs[7], [], msg="neither is left under the parent, so the Intake does not count as planned")
         self.gh.route = original
         self.assertEqual(len(self.file()), 3)
 

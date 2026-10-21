@@ -1,5 +1,3 @@
-# One chat call to the model provider that must answer with a JSON object, for Agents that only write text (the retrospective's event batch, the Try Fix
-# Agent): no tools, no checkout, so a scoped credential and a timeout are all it needs.
 import json
 
 from shared import http_client

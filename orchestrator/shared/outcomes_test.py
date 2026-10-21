@@ -22,7 +22,6 @@ class Outcomes(unittest.TestCase):
 
 
     def test_no_other_module_keeps_its_own_copy_of_the_good_endings(self):
-        # Four modules used to mirror this tuple, and a test kept them in step (INV-24).
         root = Path(__file__).resolve().parent.parent
         copies = [p.name for p in root.rglob("*.py") if p.name != "outcomes.py" and not p.name.endswith("_test.py") and '("released", "nothing_to_release")' in p.read_text()]
         self.assertEqual(copies, [])

@@ -1,5 +1,3 @@
-# Tests for the ui-check helper: pure logic always, a real browser run only where Playwright is installed.
-# Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import sys
 import tempfile
 import threading
@@ -34,7 +32,7 @@ class Handler(BaseHTTPRequestHandler):
         if "preview=TKN9f3a1c" in self.path:
             self.send_header("Set-Cookie", "preview=TKN9f3a1c; HttpOnly; Path=/")
         self.end_headers()
-        if self.path.startswith("/late"):  # a page that fills in after a network-sized delay
+        if self.path.startswith("/late"):
             self.wfile.write(b"<!doctype html><title>Late</title><p id=p>Loading</p><script>setTimeout(function(){document.getElementById('p').textContent='Loaded'},1500)</script>")
             return
         self.wfile.write((PAGE % ("<button>Secret flagged control</button>" if preview else "")).encode())

@@ -61,7 +61,6 @@ class PlannedChildrenOnly(unittest.TestCase):
     PLAN = {"description": "Intake: o/f#3"}
 
     def start(self, body, parent=None):
-        # `parent` is {number, state} (or None) for the child's parent, answered by the sub-issues API.
         calls = []
 
         def fake(args, token, check=False):

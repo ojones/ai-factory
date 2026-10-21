@@ -51,8 +51,8 @@ class FileFailures(unittest.TestCase):
     def test_each_fix_gets_the_agents_text_then_is_filed_with_the_attempt_bound_and_the_spend_is_recorded_once(self):
         out, wrote, filed, spent, _ = self.go([verdict(fp="a"), verdict(fp="b", source="tester", severity="warning")], {"category": "spec_ambiguity"})
         self.assertEqual([w[0] for w in wrote], ["managed_app", "managed_app"])
-        self.assertEqual([w[1] for w in wrote], ["spec_ambiguity", "spec_ambiguity"])  # the cause of the run, when the verdict has none
-        self.assertEqual({w[2] for w in wrote}, {"cred"})  # one credential for the batch
+        self.assertEqual([w[1] for w in wrote], ["spec_ambiguity", "spec_ambiguity"], msg="the cause of the run, when the verdict has none")
+        self.assertEqual({w[2] for w in wrote}, {"cred"}, msg="one credential for the batch")
         self.assertEqual([f[1] for f in filed], [3, 3])
         self.assertEqual(spent, [("budget", "cred")])
         self.assertEqual([(o["severity"], o["action"]) for o in out], [("failure", "bug_intake"), ("warning", "bug_intake")])

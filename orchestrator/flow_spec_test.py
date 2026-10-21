@@ -1,5 +1,3 @@
-# Keeps docs/flow-spec.md honest: the diagram and the step index list the same unique step IDs, every edge points at a defined step,
-# and every STEP n.m cited in the docs, and every Step in the invariants table, exists. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import re
 import unittest
 from pathlib import Path
@@ -13,7 +11,6 @@ def diagram():
 
 
 def expand(cell):
-    # "5.1-5.7" is the range 5.1 .. 5.7; "4.3" is one step.
     out = set()
     for part in re.split(r"\s*,\s*", cell.strip()):
         rng = re.fullmatch(r"(\d+)\.(\d+)-\1\.(\d+)", part)
@@ -27,7 +24,6 @@ def expand(cell):
 
 
 def diagram_steps():
-    # Every step node is declared as S<group>_<n>["<b>group.n Title ..."] (or a { } / ( ) shape) and its label starts with its own ID.
     declared = re.findall(r'\bS(\d+)_(\d+)(?:\["|\{"|\(\["|\("|\{")<b>(\d+\.\d+) ', diagram())
     return declared
 

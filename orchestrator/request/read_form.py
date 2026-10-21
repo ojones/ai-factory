@@ -1,4 +1,3 @@
-# Reading what an owner (or an automated source) wrote in an Intake issue form.
 import re
 
 APP_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
@@ -6,7 +5,6 @@ NO_ANSWER = "_No response_"
 
 
 def form_section(body, heading):
-    # Text under `### <heading>` in an Issue Form body, surrounding blanks trimmed.
     out, on = [], False
     for line in (body or "").replace("\r", "").split("\n"):
         if line == f"### {heading}":
@@ -19,7 +17,6 @@ def form_section(body, heading):
 
 
 def app_name(body):
-    # The Managed App named in the form, or ValueError.
     name = form_section(body, "App name")
     if not name or name == NO_ANSWER:
         raise ValueError('the "App name" field is empty')
@@ -29,8 +26,6 @@ def app_name(body):
 
 
 def read_request(body, default_cap, ceiling):
-    # (what was asked for, the cost cap in dollars), or ValueError. A New App Intake asks "What should be built?", an Update App Intake
-    # "What should change?".
     task = form_section(body, "What should be built?") or form_section(body, "What should change?")
     if not task or task == NO_ANSWER:
         raise ValueError("The Intake's request field (\"What should be built?\" or \"What should change?\") is empty.")

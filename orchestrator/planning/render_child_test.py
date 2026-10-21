@@ -28,7 +28,7 @@ class ChangeSets(unittest.TestCase):
         cs = dict(self.CS, flag=True)
         self.assertIn("slug `" + child_tickets.FLAG_SLOT + "`", render_child.render_change_set_task(cs))
         self.assertIn("a flag named for its issue", plan_comment.render_plan_comment({"change_sets": [dict(cs, id="CS-1", title="t")]}))
-        self.assertIn("slug `species-filter`", render_child.render_change_set_task(self.CS))  # an older plan's own slug is kept
+        self.assertIn("slug `species-filter`", render_child.render_change_set_task(self.CS))
 
     def test_an_internal_change_says_it_needs_no_flag(self):
         text = render_child.render_change_set_task(dict(self.CS, flag=None, out_of_scope=[]))

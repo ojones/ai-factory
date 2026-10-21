@@ -1,18 +1,3 @@
-# What staging proves before the first business child may start (STEP 3.2): the app that was seeded is built, deployed and wired to everything it
-# needs. Deterministic checks, in this order, each with its own result; none of them is an Agent's opinion. Everything outside (HTTP, GitHub,
-# GrowthBook, the clock) is handed in, so the checks are tested without any of it.
-#
-#   ci_green         the seed commit's Test Gate, Build and Deploy to Fly runs all finished green
-#   deploy_healthy   `/api/health` answers 200 with `{"status": "ok"}`
-#   flag_service     GrowthBook has the app's own SDK connection (the app starts only once its flag provider is ready, so a healthy deploy
-#                    also shows the app reaches the service)
-#   preview_token    a request carrying the app's Preview Token is given the preview cookie, and one carrying a wrong token is not
-#   secrets_present  the repository has the secrets staging sets, and every secret the request declared
-#   smoke            the deployed app serves its front page
-#
-# Usage: python -m staging.verify_infrastructure   (env: FACTORY_REPO, ISSUE_NUMBER, APP_NAME, SEED_SHA, FACTORY_PAT, GROWTHBOOK_ADMIN_PAT,
-# PREVIEW_MASTER_SECRET, GITHUB_STEP_SUMMARY, optional FAILURE_EVENTS_FILE); exit 0 when every check passes. When a check fails, one failure event per failed check is
-# written to FAILURE_EVENTS_FILE for the Retrospective to judge (STEP 6.7).
 import json
 import os
 import sys
@@ -25,14 +10,11 @@ from shared import child_tickets, github, preview_token
 from try_fix import event
 
 CHECKS = ("ci_green", "deploy_healthy", "flag_service", "preview_token", "secrets_present", "smoke")
-PIPELINE = ("Test Gate", "Build", "Deploy to Fly")  # the names of the workflows the Starter's seed push runs, in order
+PIPELINE = ("Test Gate", "Build", "Deploy to Fly")
 STAGING_SECRETS = ("FLY_API_TOKEN", "GROWTHBOOK_CLIENT_KEY", "PREVIEW_TOKEN")
 
 
 class Deps:
-    # `http(method, url, headers)` -> (status, response headers as a dict with lower-case names, body text); `runs(sha)` -> the workflow runs of the
-    # app repository for that commit, [{name, status, conclusion}]; `secret_names()` -> set; `flag_connection()` says whether GrowthBook has the app's SDK connection;
-    # `sleep` and `now` are the clock.
     def __init__(self, http, runs, secret_names, flag_connection, sleep=time.sleep, now=time.time):
         self.http, self.runs, self.secret_names, self.flag_connection, self.sleep, self.now = http, runs, secret_names, flag_connection, sleep, now
 
@@ -58,7 +40,7 @@ def ci_green(deps, sha, timeout=900):
         if all(runs.get(n, {}).get("status") == "completed" for n in PIPELINE):
             return runs
         failed = [n for n in PIPELINE if runs.get(n, {}).get("status") == "completed" and runs[n].get("conclusion") != "success"]
-        return runs if failed else None  # a failed stage will not recover: stop waiting
+        return runs if failed else None
 
     runs = wait_until(deps, settled, timeout, 15)
     if runs is None:
@@ -116,7 +98,6 @@ def smoke(deps, app):
 
 
 def verify(deps, app, sha, token, declared=(), timeouts=None):
-    # Every check, in order, and all of them even after a failure, so the comment shows the whole picture. A check that raises is a failed check.
     t = timeouts or {}
     steps = [lambda: ci_green(deps, sha, t.get("ci", 900)), lambda: deploy_healthy(deps, app, t.get("health", 120)),
              lambda: flag_service(deps, app), lambda: preview_token_path(deps, app, token),
@@ -131,7 +112,6 @@ def verify(deps, app, sha, token, declared=(), timeouts=None):
 
 
 def failure_events(app, number, results):
-    # One failure event per failed check (STEP 3.2 to 6.7): a failed staging check is a failure of the staging child.
     return [event.make("staging", "failure", app, f"staging check {r['check']} failed: {r['detail']}", r["check"], story=number)
             for r in results if not r["ok"]]
 

@@ -22,7 +22,6 @@ class VerificationStates(unittest.TestCase):
         self.assertFalse(verify_deployed_app.derive_test(doc, ["a"])[0])
 
     def test_a_check_whose_own_evidence_admits_it_was_not_observed_does_not_pass(self):
-        # The first real run on an unobservable requirement: marked passed, evidence said it could not be seen.
         real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
         self.assertEqual(verify_deployed_app.check_state({"status": "passed", "evidence": real}), "not_run")
         self.assertFalse(verify_deployed_app.derive_test({"results": [{"flag": "a", "check": "logs the hash", "status": "passed", "evidence": real}]}, ["a"])[0])
@@ -35,7 +34,7 @@ class VerificationStates(unittest.TestCase):
                    "Unable to observe the logs from outside, but the unit test 'logs the hash' passes (npm run test:file: 1 passed)",
                    "", None):
             self.assertEqual(verify_deployed_app.check_state({"status": "passed", "evidence": ok}), "passed", ok)
-        self.assertEqual(verify_deployed_app.check_state({"status": "failed", "evidence": "could not verify"}), "failed")  # only a pass is downgraded
+        self.assertEqual(verify_deployed_app.check_state({"status": "failed", "evidence": "could not verify"}), "failed", msg="only a pass is downgraded")
 
     def test_a_result_with_no_recognised_status_falls_back_to_its_boolean_and_garbage_fails(self):
         self.assertEqual(verify_deployed_app.check_state({"passed": True}), "passed")
@@ -89,7 +88,7 @@ class ReportFromHelpers(unittest.TestCase):
         doc = verify_deployed_app.report_from_helper_failures({}, {"b": self.bad, "g": self.good})
         self.assertEqual([r["status"] for r in doc["results"]], ["failed"])
         self.assertIn("no report", doc["limitations"][0])
-        self.assertEqual(verify_deployed_app.report_from_helper_failures({"g": self.good}, {}), None)  # nothing failed: nothing to act on
+        self.assertEqual(verify_deployed_app.report_from_helper_failures({"g": self.good}, {}), None, msg="nothing failed: nothing to act on")
         self.assertEqual(verify_deployed_app.report_from_helper_failures({}, {}), None)
 
 

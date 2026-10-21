@@ -10,7 +10,6 @@ from build_run import review_code, verify_deployed_app  # noqa: E402
 
 
 def finding(**over):
-    # A reviewer finding as the schema requires it: blocking, backed by a cited file and line.
     return {"severity": "blocking", "category": "correctness", "evidence_kind": "cited", "summary": "x", "evidence": "e",
             "file": "backend/src/a.ts", "line": "3", "requirement": "", "suggested_fix": "", "repro": "", **over}
 

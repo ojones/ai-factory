@@ -12,9 +12,9 @@ class Candidates(unittest.TestCase):
 
     def test_a_flag_is_retired_only_after_a_later_release_and_a_day(self):
         flags = [entry("a", 100), entry("b", 200)]
-        self.assertEqual(retirement_selection.candidates(flags, self.manifest, "2026-10-12", 1), [("a", 100)])  # b is the newest release: keeps its flag
-        self.assertEqual(retirement_selection.candidates([entry("a", 100)], self.manifest, "2026-10-12", 1), [])  # nothing came after it
-        self.assertEqual(retirement_selection.candidates(flags, self.manifest, "2026-10-10", 1), [])  # released today: not a day yet
+        self.assertEqual(retirement_selection.candidates(flags, self.manifest, "2026-10-12", 1), [("a", 100)], msg="b is the newest release: keeps its flag")
+        self.assertEqual(retirement_selection.candidates([entry("a", 100)], self.manifest, "2026-10-12", 1), [], msg="nothing came after it")
+        self.assertEqual(retirement_selection.candidates(flags, self.manifest, "2026-10-10", 1), [], msg="released today: not a day yet")
         self.assertEqual(retirement_selection.candidates(flags, self.manifest, "2026-10-10", 0), [("a", 100)])
 
     def test_a_flag_the_watchdog_switched_off_or_missing_from_the_manifest_is_never_retired(self):
@@ -25,7 +25,7 @@ class Candidates(unittest.TestCase):
     def test_oldest_first_and_a_backlog_may_retire_several_up_to_the_limit(self):
         flags = [entry("c", 300), entry("a", 100), entry("b", 200), entry("d", 400)]
         manifest = {"a", "b", "c", "d"}
-        self.assertEqual(retirement_selection.piggyback_slugs(flags, manifest, "2026-10-12", 1, 5), ["a", "b", "c"])  # d is the newest release
+        self.assertEqual(retirement_selection.piggyback_slugs(flags, manifest, "2026-10-12", 1, 5), ["a", "b", "c"], msg="d is the newest release")
         self.assertEqual(retirement_selection.piggyback_slugs(flags, manifest, "2026-10-12", 1, 2), ["a", "b"])
         self.assertEqual(retirement_selection.piggyback_slugs(flags, manifest, "2026-10-12", 1, 0), [])
 

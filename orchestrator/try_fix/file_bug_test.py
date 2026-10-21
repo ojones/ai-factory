@@ -44,24 +44,24 @@ class Filing(unittest.TestCase):
         bug = got["number"]
         self.assertEqual(got["action"], "bug_intake")
         fix = child_tickets.read_fix_for(self.gh.issues[bug]["body"])
-        self.assertEqual(fix, {"fix_for": 12, "origin_parent": 7, "attempt": 1})  # no flag fields: the planner gives the fix child its own flag decision
-        self.assertEqual(self.gh.blocked, {12: [bug]})  # blocked by the Intake: it resumes only when the Intake closes
+        self.assertEqual(fix, {"fix_for": 12, "origin_parent": 7, "attempt": 1}, msg="no flag fields: the planner gives the fix child its own flag decision")
+        self.assertEqual(self.gh.blocked, {12: [bug]}, msg="blocked by the Intake: it resumes only when the Intake closes")
         self.assertIn("waiting-on-plan", self.labels(12))
-        self.assertFalse(any("same flag" in c for c in self.gh.comments[12]))  # the story is told nothing about a shared flag
-        self.assertIn("Change set CS-1: Tags", self.gh.issues[bug]["body"])  # the failed child's own instructions travel with the fix
+        self.assertFalse(any("same flag" in c for c in self.gh.comments[12]), msg="the story is told nothing about a shared flag")
+        self.assertIn("Change set CS-1: Tags", self.gh.issues[bug]["body"])
         self.assertEqual(render_bug.read_key(self.gh.issues[bug]["body"]), verdict()["key"])
 
     def test_planning_starts_last_with_the_pat_and_the_failed_child_is_never_started(self):
         bug = self.file()["number"]
         created_with = [c for c in self.gh.calls if isinstance(c, list) and c[:2] == ["issue", "create"]][0]
-        self.assertNotIn("update-app-intake", created_with[created_with.index("--label") + 1])  # not yet: the block comes first
+        self.assertNotIn("update-app-intake", created_with[created_with.index("--label") + 1], msg="not yet: the block comes first")
         self.assertIn("update-app-intake", self.labels(bug))
         self.assertEqual([c[2] for c in self.edits("update-app-intake")], [str(bug)])
-        self.assertEqual(self.edits("proceed-with-change"), [])  # nobody starts the failed child again
+        self.assertEqual(self.edits("proceed-with-change"), [], msg="nobody starts the failed child again")
 
     def test_the_story_hears_about_the_failure_and_the_bug_once(self):
         self.file()
-        self.file(verdict(fp="other"))  # a second event on the same story
+        self.file(verdict(fp="other"))
         notes = self.gh.comments[12]
         self.assertEqual(len([n for n in notes if "bug-comment" in n]), 2)
         first = verdict()["key"]
@@ -99,8 +99,8 @@ class Filing(unittest.TestCase):
         got = self.file(verdict(released=True))
         body = self.gh.issues[got["number"]]["body"]
         self.assertEqual(child_tickets.read_fix_for(body), {})
-        self.assertIn("update-app-intake", self.labels(got["number"]))  # planned straight away
-        self.assertEqual(self.gh.blocked, {})  # nothing is blocked: the story is closed work
+        self.assertIn("update-app-intake", self.labels(got["number"]), msg="planned straight away")
+        self.assertEqual(self.gh.blocked, {}, msg="nothing is blocked: the story is closed work")
         self.assertTrue(any(f"#{got['number']}" in c for c in self.gh.comments[12]))
 
     def test_an_event_with_no_story_or_an_issue_that_is_not_a_planned_child_is_a_plain_bug_intake(self):
@@ -118,7 +118,7 @@ class Filing(unittest.TestCase):
         self.assertEqual(got["action"], "needs_human")
         self.assertTrue(any(isinstance(c, list) and c[:2] == ["issue", "close"] for c in self.gh.calls))
         self.assertIn("needs-human", self.labels(12))
-        self.assertNotIn("update-app-intake", self.labels(next(n for n in self.gh.issues if n > 12 and self.gh.issues[n].get("title", "").startswith("demo:"))))  # planning never started
+        self.assertNotIn("update-app-intake", self.labels(next(n for n in self.gh.issues if n > 12 and self.gh.issues[n].get("title", "").startswith("demo:"))), msg="planning never started")
 
     def test_a_factory_cause_files_a_fix_request_for_the_child_and_holds_it_until_the_fix_merges(self):
         got = self.file(verdict(target="factory"))

@@ -1,4 +1,3 @@
-# The Build Run Summary: the Report rendered as Markdown for the job summary and the failure Issue (STEP 6.2).
 from shared import outcomes
 
 from retrospective import run_audit

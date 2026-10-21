@@ -1,19 +1,12 @@
-# The run's one cap, enforced and metered by scoped model-provider credentials.
 from shared import http_client, provider
 from shared.run_stops import BudgetExhausted, ProviderBlocked
 
 
 class Budget:
-    # The run's one cap, enforced and metered by DeepInfra scoped JWTs.
-    #
-    # A spending-limited JWT can carry only one model, so each Agent invocation gets its own
-    # single-model JWT limited to what is left of the run's cap. DeepInfra refuses the first call
-    # after a JWT's limit (403) and the crossing call completes. The run's spend is the sum of every
-    # JWT's spending_current, so there are still no per-Agent budgets.
 
     def __init__(self, admin_key, cap, ttl):
         self.admin_key, self.cap, self.ttl = admin_key, cap, ttl
-        self.tokens = {}  # jwt -> last read spending_current
+        self.tokens = {}
 
     def mint(self, model):
         remaining = round(self.cap - self.spent_known(), 6)

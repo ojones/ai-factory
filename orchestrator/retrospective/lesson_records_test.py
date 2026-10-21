@@ -56,7 +56,7 @@ class Lessons(unittest.TestCase):
         self.assertEqual(self.kinds(spent_usd=1.4), ["budget_high"])
         rounds = [{"round": 1, "blocking": ["x"], "tester_blocking": ["x"]}]
         many = lesson_records.lessons_from(facts_for(review_passes=4, spent_usd=1.9, stages=slow, rounds=rounds))
-        self.assertEqual(len(many), lesson_records.MAX_LESSONS)  # four applied: many_rounds, first_pass_test_failure, budget_high, slow_stage
+        self.assertEqual(len(many), lesson_records.MAX_LESSONS, msg="four applied: many_rounds, first_pass_test_failure, budget_high, slow_stage")
 
     def test_collect_facts_keeps_which_findings_came_from_the_tester(self):
         with tempfile.TemporaryDirectory() as tmp:

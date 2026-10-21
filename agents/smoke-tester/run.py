@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-# Seeded-bug screen for the tester (.wayfinder orchestrator-hardening, ticket 07).
-#
-# The reviewer has had seeded-bug fixtures since #33; nothing showed whether the tester fails a broken app, and the tester
-# has twice marked a check passed that it could not have observed. This runs the real tester prompt (agents/prompts/tester.md)
-# against a small flagged feature served locally, once correct and several times with exactly one bug seeded, and measures
-# how often the tester notices.
-#
-# The app under test is the Starter Template with a notes API behind the flag `notes-api`. A local stub stands in for
-# GrowthBook (no flags set), so nothing touches production. The tester gets the spec, a git checkout with a "previous
-# release" commit and a head commit (so `git log -p flags.json` shows the new flag), the app's URL and a Preview Token.
-#
-# Scoring, per run: the tester's report is read the way the Orchestrator reads it (`derive_test`, which also downgrades a
-# `passed` check whose evidence admits it was not observed). A buggy app is caught if that says "not passed"; it is caught
-# for the right reason if a failing check also matches the fixture's pattern. The correct app must pass.
-#
-#   python3 agents/smoke-tester/run.py --validate    no model: prove the correct feature passes an independent checker and every
-#                                                    seeded bug is observable from outside (needs npm)
-#   python3 agents/smoke-tester/run.py               run the screen (needs openhands and DEEPINFRA_API_KEY; costs real money,
-#                                                    about $0.05 to $0.12 per run)
-#
-# Env: FIXTURES (comma-separated ids, default all), TRIALS (per fixture, default 2), WORKERS (default 3), TIMEOUT_MIN (per run,
-# default 20), MODEL (default the tester in agents/profiles.yml), KEEP=1 (keep the working directories).
-# Writes smoke-tester-results.json.
 import importlib.util
 import json
 import os
@@ -47,7 +24,7 @@ from shared import agent_output, config, prompts  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("smoke_coder", ROOT / "agents" / "smoke-coder" / "run.py")
 sc = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(sc)  # its helpers: base copy with deps installed, env, mount, cost
+_spec.loader.exec_module(sc)
 
 SLUG = "evalapp"
 TOKEN = "eval-preview-token"
@@ -55,8 +32,6 @@ MOUNT = {"import": 'import { notesRouter } from "./routes/notes";', "use": "app.
 
 
 def apply_edits(source, edits):
-    # The base source with each [old, new] edit applied exactly once; an edit that does not apply is an error, so a
-    # fixture cannot silently turn into the correct feature.
     for old, new in edits:
         if source.count(old) != 1:
             raise ValueError(f"edit does not apply exactly once ({source.count(old)} matches): {old[:60]!r}")
@@ -69,9 +44,6 @@ def spec_for(fixtures, fixture):
 
 
 def judge(fixture, doc, flag):
-    # Score one tester report against what the fixture expects. Returns
-    # {"outcome": caught|missed|false_alarm|correct|unusable, "right_reason": bool|None, "failed": [...]}.
-    # `doc` is the report as parsed (or None). The Orchestrator's own reading is used: derive_test.
     if doc is None:
         return {"outcome": "unusable", "right_reason": None, "failed": []}
     try:
@@ -81,8 +53,6 @@ def judge(fixture, doc, flag):
     failed = [f"{r.get('check', '')} | {r.get('evidence', '')}" for r in failures if isinstance(r, dict)]
     observed_failure = any(verify_deployed_app.check_state(r) == "failed" for r in doc.get("results", []) if isinstance(r, dict))
     if not passed and not observed_failure and fixture["expect"] != "not_pass":
-        # Nothing was run (every check not_run or blocked: seen when the tester could not execute curl). The Orchestrator rightly
-        # refuses to release that, but it says nothing about whether the tester can find this bug, so it is not counted either way.
         return {"outcome": "inconclusive", "right_reason": None, "failed": failed}
     if fixture["expect"] == "pass":
         return {"outcome": "correct" if passed else "false_alarm", "right_reason": None, "failed": failed}
@@ -93,7 +63,6 @@ def judge(fixture, doc, flag):
 
 
 def summarize(results, fixtures):
-    # Per fixture and overall: how often a bug was caught, caught for the right reason, and a correct app flagged.
     rows, by = [], {f["id"]: f for f in fixtures}
     for fid, fixture in by.items():
         mine = [r for r in results if r["fixture"] == fid]
@@ -108,7 +77,7 @@ def summarize(results, fixtures):
                      "cost": round(sum(r.get("cost", 0) for r in mine), 4)})
     buggy = [r for r in rows if r["expect"] != "pass"]
     good = [r for r in rows if r["expect"] == "pass"]
-    total = sum(r["runs"] - r["inconclusive"] - r["unusable"] for r in buggy)  # only runs that actually tested something
+    total = sum(r["runs"] - r["inconclusive"] - r["unusable"] for r in buggy)
     return {"rows": rows, "inconclusive_runs": sum(r["inconclusive"] + r["unusable"] for r in rows),
             "detection_rate": round(sum(r["caught"] for r in buggy) / total, 2) if total else None,
             "right_reason_rate": round(sum(r["right_reason"] for r in buggy) / total, 2) if total else None,
@@ -123,7 +92,6 @@ def free_port():
 
 
 class GrowthBookStub:
-    # Serves the SDK payload GrowthBook would: no flags (a feature flag that is not in the payload reads as off, which is how a dark feature behaves).
 
     def __init__(self):
         class Handler(BaseHTTPRequestHandler):
@@ -148,7 +116,6 @@ class GrowthBookStub:
 
 
 def build_checkout(base, fixtures, fixture, dest):
-    # A git checkout with a 'previous release' commit (the Starter Template) and a head commit (the feature and its flag).
     shutil.copytree(base, dest, symlinks=True)
     for cmd in (["git", "init", "-q", "-b", "main"], ["git", "config", "user.email", "smoke@ai-factory.local"],
                 ["git", "config", "user.name", "smoke"], ["git", "add", "-A"], ["git", "commit", "-qm", "previous release"]):
@@ -216,7 +183,6 @@ def http(method, url, body=None, token=False, timeout=10):
 
 
 def oracle(base):
-    # An independent checker for the spec: [(check name, ok)]. It is the answer key, not part of the tester.
     out = []
     url = base + "/api/notes"
     out.append(("dark without the token", http("GET", url)[0] == 404 and http("POST", url, {"text": "x"})[0] == 404))
@@ -244,7 +210,6 @@ def load():
 
 
 def validate():
-    # No model: the correct feature passes the independent checker, and every seeded bug fails at least the check it should.
     data, ok = load(), True
     with tempfile.TemporaryDirectory() as tmp:
         base = sc.prepare_base(Path(tmp))
@@ -261,7 +226,7 @@ def validate():
                 good = not failing
             else:
                 want = fixture.get("oracle_fails", [])
-                good = (set(want) <= set(failing)) if want else not failing  # an unobservable bug fails no check
+                good = (set(want) <= set(failing)) if want else not failing
             ok &= good
             print(f"{'OK  ' if good else 'FAIL'} {fixture['id']}: oracle fails {failing or 'nothing'}"
                   + ("" if good else f"  (wanted {fixture.get('oracle_fails', 'nothing')})"))
@@ -286,7 +251,7 @@ def one_run(job):
                "PREVIEW_TOKEN": TOKEN, "API_CHECK_BASE": app.url, "API_CHECK_LOG": str(api_log)}
         began = time.time()
         try:
-            with open(root / f"agent-{name}.log", "w", encoding="utf-8") as log:  # kept: without it a run that quits at once cannot be diagnosed
+            with open(root / f"agent-{name}.log", "w", encoding="utf-8") as log:
                 rc = subprocess.run(["openhands", "--headless", "--override-with-envs", "--json", "-t", prompt], cwd=dest, env=env,
                                     stdout=log, stderr=subprocess.STDOUT, timeout=timeout_min * 60).returncode
         except subprocess.TimeoutExpired:
@@ -297,12 +262,12 @@ def one_run(job):
             cost = sc.cost_of(json.loads(state_file.read_text()), prices.get(model, {}))
         result["cost"] = round(cost, 4)
         doc = agent_output.load_json(report)
-        if doc is not None:  # the Orchestrator reads the report this way: the helper's observations outrank the tester's judgement
+        if doc is not None:
             doc = verify_deployed_app.reconcile_api_checks(doc, verify_deployed_app.load_api_results(api_log))
         result["helper_checks"] = len(verify_deployed_app.load_api_results(api_log))
         result.update(judge(fixture, doc, data["flag"]))
         result["json_problem"] = agent_output.json_problem(report) if doc is None else None
-        if doc is None:  # say why, from the agent's own output
+        if doc is None:
             tail = (root / f"agent-{name}.log").read_text(errors="replace")[-600:] if (root / f"agent-{name}.log").exists() else ""
             result["agent_output_tail"] = re.sub(r"\s+", " ", tail).strip()
     except Exception as e:  # noqa: BLE001 - a broken run is a result, not a crash of the screen

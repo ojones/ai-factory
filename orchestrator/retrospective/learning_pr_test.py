@@ -29,7 +29,6 @@ class MergePolicy(unittest.TestCase):
         self.assertFalse(learning_pr.lesson_has_fixture(["agents/prompts/coder.md", "templates/starter/AGENTS.md"]))
 
     def test_a_smoke_fixture_must_be_a_diff_with_an_expected_entry(self):
-        # What the first learning PR did: files in the fixtures folder that the harness never runs.
         stray = ["agents/smoke/fixtures/missing-feature-flag.expected.json", "agents/smoke/fixtures/missing-feature-flag.intake.md"]
         self.assertFalse(learning_pr.lesson_has_fixture(stray))
         self.assertFalse(learning_pr.lesson_has_fixture(["agents/smoke/fixtures/x.diff"]))
@@ -41,7 +40,6 @@ class Guardrails(unittest.TestCase):
              "+++ b/agents/prompts/tester.md\n@@ -1,2 +1,3 @@\n context line\n+{line}\n context line\n")
 
     def test_shouting_in_added_prompt_lines_is_caught_wherever_it_appears(self):
-        # Lines taken from the first two learning PRs.
         for line in ("**CRITICAL**: You MUST write your test results to the file", "**ACTION REQUIRED**: Before finishing, execute this",
                      "\u26a0\ufe0f CRITICAL: Every new user-facing endpoint", "WARNING: Previous tester runs have failed", "You MUST do it",
                      "This is IMPORTANT"):

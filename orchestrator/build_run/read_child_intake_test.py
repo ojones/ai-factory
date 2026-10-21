@@ -33,7 +33,7 @@ class Identity(unittest.TestCase):
         body = FORM.format(app="notes", task="x", cap="")
         ok = self.issue(title="notes: add tags", labels=["update-app-intake", "app:notes"], body=body)
         self.assertEqual(read_child.identify_intake(ok, "notes", 5), {})
-        for bad in (self.issue(labels=["update-app-intake"], body=body),  # no app: label
+        for bad in (self.issue(labels=["update-app-intake"], body=body),
                     self.issue(labels=["update-app-intake", "app:todo"], body=body),
                     self.issue(labels=["update-app-intake", "app:todo"], body=FORM.format(app="todo", task="x", cap="")),
                     self.issue(labels=["update-app-intake", "app:notes"], body="no form")):

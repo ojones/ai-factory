@@ -1,4 +1,3 @@
-# Tests for the maintenance pass. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import unittest
 
 from maintenance import dependency_updates as m

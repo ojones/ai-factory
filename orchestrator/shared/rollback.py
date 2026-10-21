@@ -1,4 +1,3 @@
-# Rolling the deploy back after a regression: through the app's own CI, never by reverting commits in git (STEP 4.11).
 import json
 import os
 import time
@@ -8,10 +7,6 @@ from shared.shell import sh
 
 
 def rollback_decision(d, enabled=True):
-    # (rollback, reason). Code is fixed forward, never taken out of git: nothing is reverted, and `main` keeps every commit. A change that
-    # only breaks itself is dark (its flag is never released) and a later run fixes it. The one exception is a regression, where the tester
-    # saw behaviour that was live before the run stop working: the live app is then put back on the previous deployed version by the app's
-    # own CI (`rollback-fly.yml` redeploys that version's image), because the broken behaviour is live for everyone. The commits stay.
     outcome, commits = d.get("outcome"), d.get("commits") or []
     if outcome != "regression":
         return False, "only a regression rolls the deploy back; every other ending is fixed forward"
@@ -37,9 +32,6 @@ def run_ids(app_repo, env):
 
 
 def rollback_deploy(d, app, app_repo, pat, minutes):
-    # Redeploy the previous version through the app's own CI: dispatch its `rollback-fly.yml` for the run's starting commit (whose image
-    # the earlier deploy left in Fly's registry), wait for that run, then for /api/health. Nothing is committed. Returns
-    # {"status": rolled_back|failed, "restored": sha, "deploy": healthy|deploy_failed|timeout, ...}; never raises.
     base = d["base_sha"]
     env = {**os.environ, "GH_TOKEN": pat}
     try:
@@ -81,7 +73,6 @@ def healthy(app):
 
 
 def rollback_failed_run(d, pat, lim):
-    # The finalize step: decide, and for a regression roll the deploy back through CI; the outcome goes in the Report as d["rollback"].
     go, why = rollback_decision(d, bool(lim.get("rollback_regressions", True)))
     if not go:
         d["rollback"] = {"status": "skipped", "reason": why}

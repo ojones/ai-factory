@@ -1,5 +1,3 @@
-# What a failure is called in writing: the rollback in a sentence, the numbered requirements that say what must be true once it is fixed, and the body of
-# a Factory or information fix request.
 MAX_ITEMS = 5
 
 
@@ -8,7 +6,6 @@ def clip(text, n=300):
 
 
 def rollback_line(rollback):
-    # The rollback, in one sentence for the issue.
     if not rollback:
         return "No rollback was attempted."
     status = rollback.get("status")
@@ -22,8 +19,6 @@ def rollback_line(rollback):
 
 
 def requirements(facts, result, rollback, app_side=False):
-    # Numbered, checkable requirements: what must be true once this is fixed. `app_side` is for a retry of the app's own
-    # request, which carries no requirements about fixing the Factory.
     outcome, message = facts.get("outcome"), clip(facts.get("message"), 200)
     reqs = []
     status = (rollback or {}).get("status")
@@ -61,8 +56,6 @@ def requirements(facts, result, rollback, app_side=False):
         reqs.append(f"Whatever stopped the run is resolved: {message}.")
     if recurring and outcome not in ("round_limit", "stuck"):
         reqs.append("These findings, which the coder did not resolve across rounds, stop recurring: " + "; ".join(clip(s, 100) for s in recurring[:MAX_ITEMS]) + ".")
-    # The retrospective Agent's own requirements are about how to fix the Factory. They belong in a Factory fix request and
-    # not in a retry of the app's request (a retry that was told to build tester helpers would go and build them).
     for r in ((result or {}).get("requirements") or []) if not app_side else []:
         if isinstance(r, str) and r.strip() and clip(r, 300) not in reqs:
             reqs.append(clip(r, 300))
@@ -71,7 +64,6 @@ def requirements(facts, result, rollback, app_side=False):
 
 
 def render(facts, result, rollback, target, intake_url=""):
-    # The body of a fix request issue (the Factory and information routes).
     cat = (result or {}).get("category")
     lines = ["## What happened", "",
              f"The Build Run for `{facts.get('app')}` ended **{facts.get('outcome')}**: {clip(facts.get('message'), 400)}", "",

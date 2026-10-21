@@ -31,7 +31,7 @@ class FileEvents(unittest.TestCase):
         filing = self.run_main([verdict(FAIL, "fix"), verdict(WARN, "record")])
         fixes = filing.call_args.args[3]
         self.assertEqual([v["key"] for v in fixes], [FAIL["key"]])
-        self.assertEqual(filing.call_args.args[4:7], (None, None, None))  # no facts, result or rollback: a scan has no Build Run
+        self.assertEqual(filing.call_args.args[4:7], (None, None, None), msg="no facts, result or rollback: a scan has no Build Run")
 
     def test_nothing_to_fix_or_unreadable_verdicts_files_nothing_and_does_not_fail(self):
         for verdicts in ([verdict(WARN, "record")], "not json", "{}", [{"verdict": "fix", "event": {"x": 1}}]):

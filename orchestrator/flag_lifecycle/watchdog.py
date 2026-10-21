@@ -1,4 +1,3 @@
-# After a release: count the app's error logs, decide when to switch the released flags off.
 import re
 import time
 
@@ -6,14 +5,10 @@ ERROR_LOG_RE = re.compile(r'"level"\s*:\s*"(?:error|fatal)"', re.I)
 
 
 def count_errors(log_text):
-    # Error-level lines in a Managed App's structured (JSON) logs (STANDARDS-VISIBILITY.md).
     return len(ERROR_LOG_RE.findall(log_text or ""))
 
 
 def watchdog_trip(samples, baseline_errors, max_failures, max_new_errors):
-    # The reason to switch a just-released flag off, or None. `samples` are in time order, each
-    # {"healthy": bool, "errors": int}. Trips on `max_failures` health failures in a row, or on the
-    # error count rising `max_new_errors` above what the app logged before the release.
     streak = 0
     for sample in samples:
         streak = 0 if sample["healthy"] else streak + 1
@@ -26,7 +21,6 @@ def watchdog_trip(samples, baseline_errors, max_failures, max_new_errors):
 
 
 def disable_flags(gb, keys):
-    # Switch flags off in production and read each back. Returns the keys that are still on. `gb(method, path, body)` returns (status, document).
     still_on = []
     for key in keys:
         gb("POST", f"/features/{key}", {"environments": {"production": {"enabled": False, "rules": []}}})
@@ -38,9 +32,6 @@ def disable_flags(gb, keys):
 
 
 def watch(keys, limits, deadline, disable, error_count, health_status):
-    # Watch the app for `watchdog_minutes` after a release. Returns (minutes watched or None if the watch is off, the reason it tripped or
-    # None, the keys that could not be confirmed off). A trip calls `disable(keys)`, which switches the released flags off (never one that already existed) and
-    # returns the ones still on.
     minutes = float(limits.get("watchdog_minutes", 0))
     if minutes <= 0 or not keys:
         return None, None, []

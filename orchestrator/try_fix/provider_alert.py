@@ -1,4 +1,3 @@
-# One alert for the whole Factory when the model provider has no balance: nothing a fix child or a learning PR does helps until someone tops up.
 import json
 import re
 
@@ -20,7 +19,6 @@ def provider_alert_body(facts):
 
 
 def file_provider_alert(repo, token, facts):
-    # One open alert for the whole Factory: later blocked runs add a comment. Returns its URL.
     for name, color, desc in (("provider-blocked", "b60205", "The model provider refuses requests (no balance)"),
                               ("needs-human", "b60205", "The Orchestrator stopped and needs a person")):
         github.ensure_label(repo, name, token, color, desc)

@@ -1,4 +1,3 @@
-# Running an Agent as a process: as the unprivileged Agent account when isolation is on, with a self-check, a stall watch and a kill by process group.
 import contextlib
 import os
 import signal
@@ -8,9 +7,6 @@ from pathlib import Path
 
 
 def agent_command(cmd, env, user, pidfile=None):
-    # `cmd` as it is run for an Agent. With a `user` (limits.agent_isolation: user) it runs as that unprivileged account through
-    # sudo: the variables in `env` are passed by name, so no value shows on a command line, and a wrapper records the process group
-    # in `pidfile` so the runner (which cannot signal another user's processes) can kill it through sudo.
     if not user:
         return cmd
     names = ",".join(k for k in env if k != "PATH")
@@ -21,7 +17,6 @@ def agent_command(cmd, env, user, pidfile=None):
 
 
 def run_isolation_probes(agent_user):
-    # Run probes as the Agent user (no model involved) and return what is wrong; see isolation_problems.
     marker = subprocess.Popen(["sleep", "60"], env={**os.environ, "ISOLATION_MARK": "SELF-CHECK-SECRET"}, start_new_session=True)
     try:
         env = {"PATH": os.environ.get("PATH", "")}
@@ -42,7 +37,6 @@ def run_isolation_probes(agent_user):
 
 
 def kill_agent(proc, user, pidfile):
-    # Kill an Agent's whole process group, whether it runs as the runner or, through sudo, as the Agent user.
     if user and pidfile and Path(pidfile).is_file():
         pgid = Path(pidfile).read_text(encoding="utf-8").strip()
         if pgid.isdigit():
@@ -55,7 +49,6 @@ def kill_agent(proc, user, pidfile):
 
 
 def isolation_problems(outputs):
-    # What an isolation self-check found wrong, from {probe: output of the probe run as the Agent user}. Empty means isolated.
     problems = []
     if outputs.get("whoami", "").strip() in ("", os.environ.get("USER", "runner"), "runner"):
         problems.append("the Agent user is not a different account from the Orchestrator's")
@@ -71,14 +64,10 @@ def isolation_problems(outputs):
 
 
 def silent_too_long(last_progress, now, stall_seconds):
-    # True when an Agent's output has not grown for `stall_seconds` (0 turns the check off).
     return stall_seconds > 0 and now - last_progress >= stall_seconds
 
 
 def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0, user=None, pidfile=None):
-    # Run an Agent writing its event stream to `out_path`. Returns its exit status, or "timeout" after `timeout_s` of wall time,
-    # or "stall" when the stream stops growing for `stall_s` seconds (the process group is killed either way). A real run once sat
-    # 45 minutes twice with no output at all, so a silent Agent is cut off long before the overall timeout.
     with open(out_path, "w", encoding="utf-8") as f:
         proc = subprocess.Popen(agent_command(cmd, env, user, pidfile), cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT,
                                 start_new_session=True)

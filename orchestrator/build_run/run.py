@@ -1,11 +1,3 @@
-# Build Run orchestrator (ARCHITECTURE.md → Agents and Build Run stages): coder → CI/deploy dark → reviewer + tester → fix loop → release.
-# `run` only sequences the steps; each step's code is in the file named for it in this folder. `run/state.json` is updated after every stage, so a
-# crash, breach or killed job still reports (retrospective/finalize.py).
-#
-# Agents are OpenHands subprocesses with a whitelisted environment. They never hold the PAT, the GrowthBook admin key, the Fly token or the
-# DeepInfra parent key; the coder only commits, and this process pushes.
-#
-# Usage: python -m build_run.run run   (PYTHONPATH=orchestrator; run by .github/workflows/build-run.yml)
 import base64
 import json
 import os
@@ -48,13 +40,12 @@ def tester_view(r):
 
 
 class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDeployedApp, ReleaseStep, TrackProgress):
-    # Sequencing only: `run` calls each step in order. Each step's code is in the mixin named above (one file each), over this object's state.
-    retiring = ()  # the flags this run retires in passing (set in setup)
-    fix_for = None  # the failed child this child fixes (its marker's `fix_for`), set in setup
-    story_flags = ()  # the flag this run named for the story (flag_slug.py); it is switched on at release whether or not this run created it
-    flag_issues = {}  # slug -> number of the story each released flag came from (from the State issue)
-    declared_secrets = ()  # the secrets recorded on the Intake, checked at the start of the run (`setup`)
-    agent_user = None  # set in __init__ from AGENT_USER; a class default so a bare test instance runs Agents as the same account
+    retiring = ()
+    fix_for = None
+    story_flags = ()
+    flag_issues = {}
+    declared_secrets = ()
+    agent_user = None
 
     def __init__(self):
         e = os.environ
@@ -82,11 +73,9 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         self.cap = None
         self.meter = None
         self._usage = None
-        # limits.agent_isolation: user -> the workflow created this unprivileged account and put the work directories where only it
-        # and the runner can reach them; every Agent then runs as it.
         self.agent_user = e.get("AGENT_USER") or None
         self.preview = None
-        self.build_kind = "update"  # every Build Run is a planned child of an existing app; staging is not a Build Run
+        self.build_kind = "update"
         self.auth_header = "Authorization: Basic " + base64.b64encode(
             f"x-access-token:{self.pat}".encode()).decode()
         print(f"::add-mask::{self.auth_header.split()[-1]}", flush=True)
@@ -178,8 +167,6 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         self.stop_when_exhausted(rnd, test_failures)
         return False, self.coder_fix_round(rnd, findings, findings_path)
 
-    # The reviewer sees the commit before it is pushed, so code it blocks never reaches `main`; only reviewed code is pushed,
-    # and it deploys dark behind its flag until the tester has passed it.
     def review_and_deploy(self, base, head, rnd):
         while True:
             clean, blocking, minor = self.review_before_push(base, head, rnd)
@@ -218,14 +205,11 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         failed = verify_deployed_app.failed_checks(test_failures)
         ungated = self.ungated_flags(head, flags) if failed and not tpassed else []
         if ungated:
-            # The change is live with no gate (nothing reads its flag), so a failure is a failure in production: roll back.
             named = self.state.d.get("named_flag")
             self.state.d["flag_notes"] = [missing_flag.note(s, "live_and_failing", named) for s in ungated]
             self.state.d["blocking"] = [tester_view(r) for r in failed]
             raise endings.Regression(missing_flag.live_message(ungated, named, True))
 
-    # Nothing failed, but checks were blocked or not run. The coder cannot fix that, so it gets no round for it: the
-    # tester looks again at the same deployed commit, and a run that still cannot verify it stops for a person.
     def retest_or_stop(self, retests, test_failures):
         if retests <= 0:
             self.state.d["unverified"] = verify_deployed_app.unverified_checks(test_failures)
@@ -237,7 +221,6 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         all_blocking = [reviewer_view(f) for f in blocking] + [tester_view(r) for r in verify_deployed_app.failed_checks(test_failures)]
         self.state.d["blocking"] = all_blocking
         self.state.save()
-        # Kept on a clean pass too: the minor findings of a run that ships are what the retrospective learns from.
         findings = {"round": rnd, "blocking": all_blocking, "minor": [reviewer_view(f) for f in minor]}
         findings_path = self.work / f"findings-{rnd}.json"
         findings_path.write_text(json.dumps(findings, indent=2))

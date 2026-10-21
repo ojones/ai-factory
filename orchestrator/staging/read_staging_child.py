@@ -1,9 +1,3 @@
-# The first thing the staging workflow does with a `kind: staging` child (STEP 3.1): decide whether it may be staged now, and say what to stage. The
-# child's marker says it is the staging child; its form names the app; the parent Intake holds the owner's request and cost cap (the repository's
-# INTAKE.md is written from it) and is read for that and nothing else. Limits: one Managed App through staging at a time (`max_simultaneous_build_runs`).
-#
-# Usage: python -m staging.read_staging_child   (env: FACTORY_REPO, ISSUE_NUMBER, GH_TOKEN); prints KEY='value' lines for the shell, or the reason on
-# stderr and exit status 3 when the child may not be staged.
 import json
 import os
 import shlex
@@ -18,8 +12,6 @@ class NotStageable(Exception):
 
 
 def check_child(child, parent, parent_issue, in_flight, build_runs_running, max_apps, limits):
-    # child: {number, body, labels}; parent: {number, state} or None; parent_issue: {body}; in_flight: other staging children being staged (issue numbers);
-    # returns {app, parent, description, cost_cap, cap_source}, or raises NotStageable with the reason.
     marker = child_tickets.read_marker(child["body"])
     if marker.get("kind") != "staging":
         raise NotStageable("this child is not a staging child (its plan marker does not say `kind: staging`), so there is no app to stage for it")
@@ -45,7 +37,6 @@ def check_child(child, parent, parent_issue, in_flight, build_runs_running, max_
 
 
 def staging_children_in_flight(issues, this):
-    # The numbers of the other open staging children that carry the start label: issues is [{number, body}] of open `proceed-with-change` issues.
     return sorted(i["number"] for i in issues if i["number"] != this and child_tickets.read_marker(i.get("body")).get("kind") == "staging")
 
 

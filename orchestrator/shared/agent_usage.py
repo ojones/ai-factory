@@ -1,10 +1,4 @@
-# What an Agent's conversation cost in model calls and context, read from OpenHands' persisted state.
-
 def summarize_token_usage(base_state):
-    # Per-invocation context stats from OpenHands' persisted base_state.json.
-    #
-    # prompt_tokens of one LLM call is that call's context size, so the max over calls is the
-    # invocation's peak context. The condenser's own calls are counted separately.
     metrics = (base_state.get("stats") or {}).get("usage_to_metrics") or {}
     agent = (metrics.get("agent") or {}).get("token_usages") or []
     condenser = (metrics.get("condenser") or {}).get("token_usages") or []
@@ -18,7 +12,6 @@ def summarize_token_usage(base_state):
 
 
 def merge_usage(a, b):
-    # Combine two invocations' stats (a retry of the same role).
     if not a:
         return b
     if not b:

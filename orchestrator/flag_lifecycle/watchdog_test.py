@@ -78,7 +78,7 @@ class Disabling(unittest.TestCase):
 
         def stubborn(method, path, body=None):
             if method == "POST" and path.endswith("a.feature.y"):
-                return 200, {}  # accepted, but nothing changed
+                return 200, {}
             return real(method, path, body)
         self.assertEqual(watchdog.disable_flags(stubborn, ["a.feature.x", "a.feature.y"]), ["a.feature.y"])
         self.assertFalse(gb.production_enabled("a.feature.x"))

@@ -27,7 +27,7 @@ class Triggers(unittest.TestCase):
         self.assertNotIn("ready-for-staging", staged)
         self.assertNotIn("new-app-intake", staged)
         job = next(iter(wf["jobs"].values()))
-        self.assertEqual(job["concurrency"]["group"], "app-staging")  # one app through staging at a time
+        self.assertEqual(job["concurrency"]["group"], "app-staging", msg="one app through staging at a time")
         self.assertIs(job["concurrency"]["cancel-in-progress"], False)
 
     def test_no_ready_for_staging_label_is_left_anywhere_in_the_workflows_or_the_script(self):

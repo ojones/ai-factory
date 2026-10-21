@@ -1,4 +1,3 @@
-# The Factory's configuration: agents/profiles.yml, read fresh each time it is asked for.
 import os
 from pathlib import Path
 

@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-# Find Fly apps nobody owns: machines that bill while nothing in the Factory knows about them.
-#
-# A Fly app is owned if it is Factory infrastructure (`limits.fly_infra_apps` in agents/profiles.yml, plus GrowthBook) or a
-# Managed App: a repo in the Factory owner's account whose description carries the `Intake: <factory repo>#<n>` marker App
-# Staging writes. Anything else is an orphan, for example after a failed teardown or an App Staging run that stopped between
-# creating the Fly app and the repo. Nothing is deleted here: the audit keeps one open `fly-orphans` issue in ai-factory,
-# updated when the list changes and closed when it is empty, and the person decides (teardown.yml removes a Managed App).
-#
-# Env: FLY_API_TOKEN, FLY_ORG (the Fly organization slug, default `personal`), FACTORY_PAT (read repos), FACTORY_GH_TOKEN
-# (the Actions token, used for the issue), GITHUB_REPOSITORY.
 import json
 import os
 import sys
@@ -23,8 +13,6 @@ ALWAYS_OWNED = ("ai-factory-growthbook",)
 
 
 def orphans(fly_apps, infra, owned_repo):
-    # The Fly apps (name, machine count) that are neither infrastructure nor have a Managed App repo. `owned_repo(name)` says
-    # whether a repo with the Factory's marker exists for it.
     keep = set(ALWAYS_OWNED) | set(infra)
     return sorted((a for a in fly_apps if a["name"] not in keep and not owned_repo(a["name"])), key=lambda a: a["name"])
 
@@ -49,7 +37,6 @@ def list_fly_apps(org, token):
 
 
 def idle_days(last_push_iso, now=None):
-    # Whole days since an ISO timestamp, or None if it cannot be read.
     try:
         then = time.mktime(time.strptime(last_push_iso[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
     except (ValueError, TypeError):
@@ -58,7 +45,6 @@ def idle_days(last_push_iso, now=None):
 
 
 def idle_report(rows):
-    # A markdown table of [(app, days idle or None)], longest idle first. Report only: nothing is retired automatically.
     lines = ["### Managed Apps by days since the last push", "", "| App | Days idle |", "|---|---|"]
     for app, days in sorted(rows, key=lambda r: -(r[1] if r[1] is not None else -1)):
         lines.append(f"| `{app}` | {days if days is not None else '?'} |")
@@ -75,7 +61,7 @@ def main():
         out = shell.sh(["gh", "api", f"repos/{owner}/{name}", "--jq", ".description"], env={**os.environ, "GH_TOKEN": pat}, check=False)
         return out.returncode == 0 and check_target_app.is_factory_repo(out.stdout.strip(), repo)
 
-    try:  # the idle-app report goes in the run summary; it never fails the audit
+    try:
         rows = []
         for app in app_state_record.managed_apps(repo, token):
             pushed = shell.sh(["gh", "api", f"repos/{owner}/{app}", "--jq", ".pushed_at"], env={**os.environ, "GH_TOKEN": pat}, check=False).stdout.strip()

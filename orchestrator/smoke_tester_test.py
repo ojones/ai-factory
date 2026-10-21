@@ -1,4 +1,3 @@
-# The pure logic of agents/smoke-tester/run.py: how a bug is seeded and how a tester report is judged.
 import importlib.util
 import re as _re
 import sys
@@ -24,13 +23,13 @@ class Seeding(unittest.TestCase):
         source = (ROOT / "agents" / "smoke-tester" / "base" / "notes.ts").read_text()
         for fixture in DATA["fixtures"]:
             mutated = st.apply_edits(source, fixture["edits"])
-            self.assertEqual(mutated == source, not fixture["edits"], fixture["id"])  # only the correct feature is unchanged
+            self.assertEqual(mutated == source, not fixture["edits"], msg=f"{fixture['id']}: only the correct feature is unchanged")
 
     def test_an_edit_that_does_not_apply_is_an_error_not_a_silent_correct_app(self):
         with self.assertRaises(ValueError):
             st.apply_edits("a b", [["zzz", "y"]])
         with self.assertRaises(ValueError):
-            st.apply_edits("a a", [["a", "b"]])  # ambiguous
+            st.apply_edits("a a", [["a", "b"]])
 
     def test_the_unobservable_requirement_is_only_in_that_fixtures_spec(self):
         plain, hidden = st.spec_for(DATA, BY["good"]), st.spec_for(DATA, BY["unobservable"])
@@ -60,7 +59,6 @@ class Judging(unittest.TestCase):
         self.assertEqual((caught["outcome"], caught["right_reason"]), ("caught", True))
 
     def test_the_reason_patterns_do_not_match_unrelated_digits_or_words(self):
-        # id-zero used "0|zero|...", which matched the 0 in "200"; dup-ids used "...|id", which matched every message.
         unrelated = "Health check endpoint returns 200 | Unable to test due to environment constraints for id lookups"
         for fid in ("id-zero", "dup-ids", "lenient-id", "wrong-status", "no-trim", "no-blank-check"):
             self.assertIsNone(_re.search(BY[fid]["match"], unrelated, _re.I), fid)
@@ -72,7 +70,6 @@ class Judging(unittest.TestCase):
         self.assertEqual((wrong["outcome"], wrong["right_reason"]), ("caught", False))
 
     def test_a_check_that_admits_it_was_not_observed_does_not_count_as_a_pass(self):
-        # the integrity rule: this is how the unobservable requirement was wrongly released once
         doc = report(("every created note is written to the audit log", "passed", "Unable to directly observe logs in production"))
         self.assertEqual(st.judge(BY["unobservable"], doc, self.flag)["outcome"], "caught")
         honest = report(("every created note is written to the audit log", "passed", "unit test asserts it: npm run test:file passed"))
@@ -82,14 +79,11 @@ class Judging(unittest.TestCase):
         self.assertEqual(st.judge(BY["wrong-order"], {"results": []}, self.flag)["outcome"], "inconclusive")
 
     def test_a_tester_that_could_not_run_anything_is_inconclusive_not_a_catch(self):
-        # Seen live: every check not_run ("unable to execute curl"). The release gate refuses it, but it found no bug.
         nothing_ran = report(("health", "not_run", "Unable to test due to environment constraints"), ("create", "not_run", "same"))
         for fid in ("wrong-status", "good"):
             self.assertEqual(st.judge(BY[fid], nothing_ran, self.flag)["outcome"], "inconclusive", fid)
-        # one real failure alongside not_run checks is a real catch
         mixed = report(("health", "not_run", "x"), ("create", "failed", "got 200"))
         self.assertEqual(st.judge(BY["wrong-status"], mixed, self.flag)["outcome"], "caught")
-        # the unobservable fixture expects "not passed", and not_run is exactly the honest answer there
         honest = report(("audit log line", "not_run", "cannot see logs"))
         self.assertEqual(st.judge(BY["unobservable"], honest, self.flag)["outcome"], "caught")
 

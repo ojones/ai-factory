@@ -49,8 +49,6 @@ class PipelineNotStarted(unittest.TestCase):
 
 
 class Diagnosis(unittest.TestCase):
-    # STEP 4.8: a failed pipeline step is read by the Pipeline Agent, whose category decides: a flaky or infrastructure failure is re-run (up to `pipeline_retries`),
-    # a failure in the code goes back to the coder (up to `pipeline_fix_attempts`), anything else stops for a person.
     def make(self, runs, diagnoses, retries=2, fixes=2, healthy=True):
         run = object.__new__(BuildRun)
         run.lim = {"pipeline_retries": retries, "pipeline_fix_attempts": fixes}
@@ -92,7 +90,7 @@ class Diagnosis(unittest.TestCase):
         run = self.make([self.red(1), self.red(2)], [flaky, flaky], retries=1)
         with mock.patch.object(time, "sleep"), self.assertRaises(run_stops.NeedsHuman) as cm:
             run.pipeline("a" * 40)
-        self.assertEqual(len(self.reruns), 1)  # one re-run, then the second diagnosis stopped it
+        self.assertEqual(len(self.reruns), 1, msg="one re-run, then the second diagnosis stopped it")
         self.assertIn("infra", str(cm.exception))
 
     def test_a_failure_in_the_code_goes_back_to_the_coder_with_the_agents_fix_request(self):

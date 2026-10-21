@@ -50,13 +50,13 @@ class AppState(unittest.TestCase):
         dark = report(outcome="round_limit", released=(), flags=["pin"], commits=["h"], issue_number="12")
         body = a.render_state("", dark)
         self.assertIn("| `notes.feature.pin` | 2026-10-10 | dark (failed its checks", body)
-        self.assertEqual([f["state"].split(" ")[0] for f in app_state_record.load(body)["flags"]], ["dark"])  # not "released": nothing retires it
+        self.assertEqual([f["state"].split(" ")[0] for f in app_state_record.load(body)["flags"]], ["dark"])
         released = a.render_state(body, report(day="2026-10-11", released=("notes.feature.pin",), flags=["pin"], commits=["h2"], issue_number="12"))
         self.assertEqual([(f["key"], f["state"]) for f in app_state_record.load(released)["flags"]], [("notes.feature.pin", "released")])
-        for outcome in ("refused", "provider_blocked"):  # never built: no dark feature remains
+        for outcome in ("refused", "provider_blocked"):
             self.assertEqual(app_state_record.load(a.render_state("", dict(dark, outcome=outcome)))["flags"], [], outcome)
         regressed = app_state_record.load(a.render_state("", dict(dark, outcome="regression")))["flags"]
-        self.assertEqual([f["state"].split(" ")[0] for f in regressed], ["dark"])  # rolled back, but its code stays in main
+        self.assertEqual([f["state"].split(" ")[0] for f in regressed], ["dark"], msg="rolled back, but its code stays in main")
 
     def test_data_with_double_dashes_and_pipes_survives(self):
         url = "https://github.com/o/my--app/actions/runs/1"

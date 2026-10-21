@@ -80,9 +80,9 @@ class Plan(unittest.TestCase):
     def test_a_flagged_change_set_may_just_say_true_and_the_orchestrator_names_the_flag(self):
         plan = good()
         for cs in plan["change_sets"]:
-            cs["flag"] = True  # two flagged sets do not "share" a flag: each is named after its own issue
+            cs["flag"] = True
         self.assertEqual(check(plan), ([], []))
-        plan["change_sets"][1]["flag"] = None  # no flag and not internal is still a problem
+        plan["change_sets"][1]["flag"] = None
         self.assertTrue(any("no flag" in x for x in check(plan)[0]))
         plan["change_sets"][1]["flag"] = True
 
@@ -111,7 +111,6 @@ class Plan(unittest.TestCase):
             self.assertFalse(any("only tests" in x for x in check(plan)[0]), title)
 
     def test_retiring_a_flag_is_internal_and_must_not_be_given_a_new_flag(self):
-        # From the first real retirement runs: the planner invented a flag to retire a flag.
         for title in ("Remove update-todo-store feature flag and make PUT endpoint always available",
                       "Retire the delete-todo-endpoint flag", "Remove filter-todos-by-done flag", "Clean up the old search flag"):
             plan = good()
@@ -127,7 +126,6 @@ class Plan(unittest.TestCase):
             self.assertFalse(any("retires or removes a flag" in x for x in check(plan)[0]), title)
 
     def test_the_recorded_planner_mistakes_are_caught_and_their_good_versions_pass(self):
-        # agents/planner-fixtures/cases.json: plans shaped like the real mistakes in the factory-learning issues.
         cases = json.loads((Path(__file__).resolve().parent.parent.parent / "agents" / "planner-fixtures" / "cases.json").read_text())
         for case in cases:
             plan = good()
@@ -175,7 +173,7 @@ class RollbackSized(unittest.TestCase):
         self.assertTrue(any("7 acceptance criteria, more than 6" in x for x in check(plan)[0]))
         plan["change_sets"][0]["criteria"] = plan["change_sets"][0]["criteria"][:6]
         self.assertEqual(check(plan)[0], [])
-        self.assertEqual(len(p.validate_plan(plan, "update", 8, 5)[0]), 1)  # the limit is configurable (planner_max_criteria)
+        self.assertEqual(len(p.validate_plan(plan, "update", 8, 5)[0]), 1, msg="the limit is configurable (planner_max_criteria)")
 
     def test_a_change_set_that_names_another_must_depend_on_it(self):
         plan = good()
@@ -208,7 +206,6 @@ class RollbackSized(unittest.TestCase):
         self.assertTrue(any("only one of kind `staging`" in x for x in check(plan, "first build")[0]))
 
     def test_the_staging_change_set_needs_no_requirement_link_but_a_business_one_still_does(self):
-        # found by the first live planning: the staging change set has no business logic, so the planner rightly links it to nothing
         for empty in ([], None):
             plan = self.new_app()
             plan["change_sets"][0]["requirements"] = empty

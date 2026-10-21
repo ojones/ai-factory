@@ -1,7 +1,3 @@
-# One test per design invariant in docs/invariants.md. Run: python3 -m unittest discover -p "*_test.py" orchestrator
-#
-# The meta test at the bottom keeps the table and these tests in step: every INV-NN row has exactly one
-# `test_invNN_...` here and every test here has a row.
 import inspect
 import json
 import os
@@ -99,10 +95,9 @@ class Invariants(unittest.TestCase):
         self.assertFalse(clean)
         self.assertEqual(len(blocking), 1)
         self.assertTrue(review_code.derive_review({"verdict": "changes_requested", "findings": []})[0])
-        # a blocking label does not block unless its fields back it: an opinion, or a category that cannot block, is minor
         self.assertTrue(review_code.derive_review({"findings": [dict(backed, evidence_kind="opinion")]})[0])
         self.assertTrue(review_code.derive_review({"findings": [dict(backed, category="style")]})[0])
-        with self.assertRaises(ValueError):  # no structure at all: the reviewer is asked again, a label is not trusted
+        with self.assertRaises(ValueError):
             review_code.derive_review({"findings": [{"severity": "blocking", "summary": "x"}]})
 
     def test_inv05_only_a_passed_check_passes(self):
@@ -117,7 +112,7 @@ class Invariants(unittest.TestCase):
         self.assertEqual((to_switch, kept, missing), (["demo.feature.issue-9"], ["demo.feature.old"], ["ghost"]))
         release_features.switch_on(gb, to_switch)
         self.assertEqual([c for c in gb.calls if c[0] == "POST"], [("POST", "/features/demo.feature.issue-9", {"environments": {"production": {"enabled": True, "rules": []}}})])
-        self.assertNotIn("demo.feature.ghost", gb.features)  # a missing flag is reported, never created
+        self.assertNotIn("demo.feature.ghost", gb.features, msg="a missing flag is reported, never created")
 
     def test_inv07_the_watchdog_switches_off_only_what_its_run_released(self):
         run = object.__new__(BuildRun)
@@ -189,7 +184,7 @@ class Invariants(unittest.TestCase):
             self.assertIsNone(re.search(r"getBooleanValue\([^)]*,\s*true\s*\)", text), f"{path} reads a flag with default true")
         self.assertFalse([p.name for p, text in sources.items() if "kill" in text.lower()], "the Starter has no kill switch: a feature flag per change is the only switch")
         app = sources[STARTER / "backend/src/app.ts"]
-        self.assertLess(app.index("app.use(healthRouter)"), app.index("app.use(express.static"))  # health answers before anything else is mounted
+        self.assertLess(app.index("app.use(healthRouter)"), app.index("app.use(express.static"), msg="health answers before anything else is mounted")
 
     def test_inv17_finalize_and_the_retrospective_always_run(self):
         wf = yaml.safe_load((ROOT / ".github/workflows/build-run.yml").read_text())
@@ -203,7 +198,7 @@ class Invariants(unittest.TestCase):
         group = wf["concurrency"]
         self.assertIn("inputs.app_name", group["group"])
         self.assertIs(group["cancel-in-progress"], False)
-        self.assertEqual(group.get("queue"), "max")  # otherwise GitHub cancels all but one pending run
+        self.assertEqual(group.get("queue"), "max", msg="otherwise GitHub cancels all but one pending run")
 
     def test_inv19_a_run_that_changes_nothing_stops(self):
         entry = {"round": 1, "sha": "a", "counts": {}, "checks": {"a: x": "failed"}, "blocking": ["no flag"]}
@@ -256,20 +251,19 @@ class Invariants(unittest.TestCase):
         self.assertEqual(close_child.ready_to_start([kid(1, "OPEN", []), kid(2, "OPEN", [W])], blockers({2: {1: "OPEN"}})), [])
         self.assertEqual(close_child.ready_to_start([kid(1, "CLOSED", []), kid(2, "OPEN", [W])], blockers({2: {1: "CLOSED"}})), [2])
         self.assertEqual(close_child.ready_to_start([kid(1, "CLOSED", []), kid(2, "OPEN", [W, S])], blockers({2: {1: "CLOSED"}})), [])
-        # one at a time: a second ready change set waits, nothing starts while one is in flight, and a stalled child holds the others
         self.assertEqual(close_child.ready_to_start([kid(1, "CLOSED", []), kid(2, "OPEN", [W]), kid(3, "OPEN", [W])], blockers({})), [2])
         self.assertEqual(close_child.ready_to_start([kid(1, "OPEN", [S]), kid(2, "OPEN", [W])], blockers({})), [])
         self.assertEqual(close_child.ready_to_start([kid(1, "OPEN", []), kid(2, "OPEN", [W])], blockers({})), [])
 
     def test_inv24_only_the_go_label_on_an_update_intake_starts_a_run_and_modules_agree_on_good_endings(self):
         wf = yaml.safe_load((ROOT / ".github/workflows/update-app-intake.yml").read_text())
-        self.assertEqual(wf[True]["issues"]["types"], ["labeled"])  # YAML reads the key `on` as True
+        self.assertEqual(wf[True]["issues"]["types"], ["labeled"], msg="YAML reads the key `on` as True")
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
         self.assertIn("github.event.label.name == 'proceed-with-change'", cond)
         self.assertIn("contains(github.event.issue.labels.*.name, 'update-app-intake')", cond)
         for module in (run_module, run_audit, app_state, dashboard, lesson_records):
-            self.assertIs(module.outcomes, outcomes)  # one list of good endings, defined in shared/outcomes.py, not mirrored
-        self.assertNotIn("planned", outcomes.OK)  # planning is its own process (plan.yml); a Build Run never ends by planning
+            self.assertIs(module.outcomes, outcomes, msg="one list of good endings, defined in shared/outcomes.py, not mirrored")
+        self.assertNotIn("planned", outcomes.OK, msg="planning is its own process (plan.yml); a Build Run never ends by planning")
 
     def test_inv25_nothing_is_reverted_in_git_and_only_a_regression_rolls_the_deploy_back_through_ci(self):
         d = {"commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
@@ -277,14 +271,13 @@ class Invariants(unittest.TestCase):
         for outcome in ("released", "nothing_to_release", "watchdog_disabled", "round_limit", "needs_human", "stuck",
                         "budget_exhausted", "time_limit", "crash", "provider_blocked"):
             self.assertFalse(rollback.rollback_decision(dict(d, outcome=outcome))[0], outcome)
-        # the Orchestrator has no way to revert: no function, and the rollback runs the app's own workflow and touches no git
         self.assertFalse(hasattr(run_module, "revert_main_to_base"))
         src = inspect.getsource(rollback.rollback_deploy)
         self.assertIn("ROLLBACK_WORKFLOW", src)
         self.assertNotIn('"git"', src)
         wf = yaml.safe_load((ROOT / "templates/starter/.github/workflows/rollback-fly.yml").read_text())
         self.assertIn("workflow_dispatch", wf[True])
-        self.assertIn(".github/workflows/rollback-fly.yml", starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR)  # template sync gives existing apps the workflow
+        self.assertIn(".github/workflows/rollback-fly.yml", starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR, msg="template sync gives existing apps the workflow")
         self.assertTrue(run_audit.audit_report(dict(d, outcome="regression", stages=[], blocking=[], rollback={"status": "failed", "reason": "x"})))
         self.assertTrue(run_audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
 
@@ -294,7 +287,7 @@ class Invariants(unittest.TestCase):
         for outcome in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         self.assertEqual((route.route("plan_gap"), route.route("spec_ambiguity"), route.route("infra"), route.route(None)), ("factory", "app", "info", "info"))
-        self.assertEqual(route.route(route.inferred_category(None, "watchdog_disabled")), "app")  # a release the watchdog switched off is the story's to fix
+        self.assertEqual(route.route(route.inferred_category(None, "watchdog_disabled")), "app")
         self.assertEqual(factory_fix_request.fingerprint("a", "1", "factory"), factory_fix_request.fingerprint("a", "1", "factory"))
         self.assertNotEqual(factory_fix_request.fingerprint("a", "1", "factory"), factory_fix_request.fingerprint("a", "2", "factory"))
         gh = FakeIssues()
@@ -304,7 +297,7 @@ class Invariants(unittest.TestCase):
         with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
             first = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
             second = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
-        self.assertEqual((first["action"], second["action"], second["number"]), ("bug_intake", "again", first["number"]))  # the same event reported twice is one
+        self.assertEqual((first["action"], second["action"], second["number"]), ("bug_intake", "again", first["number"]), msg="the same event reported twice is one")
 
     def test_inv27_fix_first_never_retry_the_unchanged_child_and_bounded(self):
         self.assertEqual(PROFILES["limits"]["fix_attempts_max"], 2)
@@ -331,11 +324,11 @@ class Invariants(unittest.TestCase):
             second = file_bug.file_bug("o/f", "t", "pat", verdict(40, "b"), doc, None, 2)
             fix_child(41, second["number"], 2, 40)
             third = file_bug.file_bug("o/f", "t", "pat", verdict(41, "c"), doc, None, 2)
-        self.assertEqual((first["action"], second["action"], third["action"]), ("bug_intake", "bug_intake", "needs_human"))  # bounded along the fix_for chain
+        self.assertEqual((first["action"], second["action"], third["action"]), ("bug_intake", "bug_intake", "needs_human"), msg="bounded along the fix_for chain")
         started = [c[2] for c in gh.calls if isinstance(c, list) and c[:2] == ["issue", "edit"] and "proceed-with-change" in c]
-        self.assertNotIn("12", started)  # the failed child itself is never started again as it was
-        self.assertEqual(gh.blocked[12], [first["number"]])  # it waits for its bug Intake, which closes only with its last child
-        self.assertTrue(hasattr(resume_after_merge, "resume") and hasattr(close_child, "settle_fix"))  # a Factory fix resumes it on merge; a bug Intake closing resumes it
+        self.assertNotIn("12", started, msg="the failed child itself is never started again as it was")
+        self.assertEqual(gh.blocked[12], [first["number"]], msg="it waits for its bug Intake, which closes only with its last child")
+        self.assertTrue(hasattr(resume_after_merge, "resume") and hasattr(close_child, "settle_fix"), msg="a Factory fix resumes it on merge; a bug Intake closing resumes it")
 
     def test_inv28_a_check_that_admits_it_was_not_observed_does_not_pass(self):
         real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
@@ -353,7 +346,7 @@ class Invariants(unittest.TestCase):
                 provider.provider_check("https://x/v1", "k", "m")
             with self.assertRaises(run_stops.ProviderBlocked):
                 spend_budget.Budget("admin", 1.0, 60).mint("m")
-        self.assertFalse(lesson_records.wants_fix_request({"outcome": "provider_blocked"}, {}))  # no self-starting retry
+        self.assertFalse(lesson_records.wants_fix_request({"outcome": "provider_blocked"}, {}), msg="no self-starting retry")
         self.assertFalse(lesson_records.records_stuck_issue("provider_blocked"))
         self.assertNotIn("provider_blocked", outcomes.OK)
 
@@ -371,14 +364,14 @@ class Invariants(unittest.TestCase):
         cfg = {"min_occurrences": 3, "max_per_app_per_day": 2}
         groups = {"a" * 8: {"count": 9, "message": "m", "frame": ""}, "b" * 8: {"count": 8, "message": "n", "frame": ""},
                   "c" * 8: {"count": 1, "message": "o", "frame": ""}}
-        self.assertEqual(flood_limits.decide(groups, {}, 0, 0, cfg)[0], ["a" * 8])  # one at a time, below-threshold ignored
-        self.assertEqual(flood_limits.decide(groups, {}, 1, 0, cfg)[0], [])         # one already open for the app
-        self.assertEqual(flood_limits.decide(groups, {}, 0, 2, cfg)[0], [])         # the daily limit
-        self.assertEqual(flood_limits.decide(groups, {"a" * 8: 5}, 1, 0, cfg), ([], ["a" * 8]))  # a repeat comments
+        self.assertEqual(flood_limits.decide(groups, {}, 0, 0, cfg)[0], ["a" * 8], msg="one at a time, below-threshold ignored")
+        self.assertEqual(flood_limits.decide(groups, {}, 1, 0, cfg)[0], [], msg="one already open for the app")
+        self.assertEqual(flood_limits.decide(groups, {}, 0, 2, cfg)[0], [], msg="the daily limit")
+        self.assertEqual(flood_limits.decide(groups, {"a" * 8: 5}, 1, 0, cfg), ([], ["a" * 8]), msg="a repeat comments")
         issues = [{"number": 1, "title": "mine", "body": "", "author": {"login": "o"}}, {"number": 2, "title": "theirs", "body": "", "author": {"login": "someone"}}]
         with mock.patch.object(github, "run", lambda *a, **k: mock.Mock(stdout=json.dumps(issues))):
-            self.assertEqual([i["number"] for i in escaped_defects.owner_defects("o/ai-factory", "pat", "demo")], [1])  # a report by anyone but the owner is skipped
-        self.assertFalse(hasattr(scan_production, "file_update_app_intake"))  # the scan reports events; Try Fix files the bug
+            self.assertEqual([i["number"] for i in escaped_defects.owner_defects("o/ai-factory", "pat", "demo")], [1], msg="a report by anyone but the owner is skipped")
+        self.assertFalse(hasattr(scan_production, "file_update_app_intake"), msg="the scan reports events; Try Fix files the bug")
 
     def test_inv32_a_silent_agent_is_killed_long_before_the_overall_timeout(self):
         out = Path(tempfile.mkdtemp()) / "o.jsonl"
@@ -398,7 +391,7 @@ class Invariants(unittest.TestCase):
         self.assertFalse(ts.should_sync(applicable, t, base, [f"a: template sync [sync {t[:7]}]"], [], "a"))
         self.assertFalse(ts.should_sync(applicable, t, base, [], [{"number": 1}], "a"))
         triggers = yaml.safe_load((ROOT / ".github/workflows/template-sync.yml").read_text())[True]
-        self.assertNotIn("push", triggers)  # a merge to main never starts a Build Run: the nightly pass or a manual run does
+        self.assertNotIn("push", triggers, msg="a merge to main never starts a Build Run: the nightly pass or a manual run does")
         self.assertIn("schedule", triggers)
 
     def test_inv34_agents_run_as_a_separate_account_and_the_run_proves_it(self):
@@ -436,9 +429,9 @@ class Invariants(unittest.TestCase):
         released = lambda slug, run, state="released": {"key": f"a.feature.{slug}", "date": "2026-10-01", "run_url": f"https://x/runs/{run}", "state": state}
         flags = [released("old", 1), released("older", 2), released("new", 9), released("dead", 3, "switched off by the watchdog")]
         got = retirement_selection.piggyback_slugs(flags, {"old", "older", "new", "dead"}, "2026-10-12", 1, 5)
-        self.assertEqual(got, ["old", "older"])  # oldest first; the newest release keeps its flag; a watchdog-off flag is dead, not retired
+        self.assertEqual(got, ["old", "older"], msg="oldest first; the newest release keeps its flag; a watchdog-off flag is dead, not retired")
         self.assertEqual(retirement_selection.piggyback_slugs(flags, {"old", "older", "new"}, "2026-10-12", 1, 1), ["old"])
-        self.assertEqual(retirement_selection.piggyback_slugs(flags, {"old", "older", "new"}, "2026-10-01", 1, 5), [])  # released today: not a day yet
+        self.assertEqual(retirement_selection.piggyback_slugs(flags, {"old", "older", "new"}, "2026-10-01", 1, 5), [], msg="released today: not a day yet")
         self.assertEqual(retirement_check.retire_slugs(retirement_selection.retirement_block(["old", "older"])), ["old", "older"])
         self.assertIsNotNone(retirement_check.retirement_problem("old", retirement_check.code_references(['h:src/a.ts:3:  isFeatureEnabled(res, "old")'])))
         self.assertEqual(flag_manifest.removed_flag_slugs('[{"slug":"old"}]', "[]"), ["old"])
@@ -459,12 +452,12 @@ class Invariants(unittest.TestCase):
             run.link_flags_to_issue(["issue-9"])
         edits = [a for a in calls if a[:2] == ["issue", "edit"]]
         self.assertIn("flag:issue-9", [a[a.index("--add-label") + 1] for a in edits if "--add-label" in a])
-        self.assertEqual(run.issue_title, "app: a page [flag: issue-9]")  # the title carries the flag
-        self.assertIn("app.feature.issue-9", next(a for a in calls if a[:2] == ["issue", "comment"])[-1])  # and a comment has the full key
+        self.assertEqual(run.issue_title, "app: a page [flag: issue-9]", msg="the title carries the flag")
+        self.assertIn("app.feature.issue-9", next(a for a in calls if a[:2] == ["issue", "comment"])[-1], msg="and a comment has the full key")
 
     def test_inv39_a_fix_is_one_ordinary_child_that_the_failed_child_waits_for(self):
-        self.assertFalse(hasattr(fix_for, "apply"))  # the planner's flag decision stands: a fix child is an ordinary child
-        self.assertEqual(fix_for.max_change_sets({"fix_for": 20}, 8), 1)  # a bug Intake that fixes a child plans exactly one change set
+        self.assertFalse(hasattr(fix_for, "apply"))
+        self.assertEqual(fix_for.max_change_sets({"fix_for": 20}, 8), 1, msg="a bug Intake that fixes a child plans exactly one change set")
         self.assertEqual(fix_for.max_change_sets(None, 8), 8)
         for fn in ("release", "disable_flags"):
             self.assertTrue(hasattr(BuildRun, fn))
@@ -484,7 +477,7 @@ class Invariants(unittest.TestCase):
         better = {"tasks": 7, "passed": 6, "cost_usd": 1.0, "minutes": 60, "rounds_mean": 1.4, "by_task": base["by_task"]}
         self.assertTrue(bm.compare(better, base)["accept"] and bm.compare(better, base)["improvement"])
         careless = {**better, "by_task": {"refuse-secret": {"passed": False, "tags": ["refusal"], "outcome": "released"}}}
-        self.assertFalse(bm.compare(careless, base)["accept"])  # cheaper, but it stopped refusing
+        self.assertFalse(bm.compare(careless, base)["accept"], msg="cheaper, but it stopped refusing")
         self.assertFalse(bm.compare({**better, "cost_usd": 3.0}, base)["accept"])
         text = (ROOT / "agents/profiles.yml").read_text()
         doc = yaml.safe_load(bm.candidate_profile(text, {"coder": "x/y"}))
@@ -499,12 +492,11 @@ class Invariants(unittest.TestCase):
         self.assertEqual(run.cfg["roles"]["coder"]["model"], "ok")
 
     def test_inv42_only_reviewed_code_is_pushed_and_the_reviewer_runs_before_the_push(self):
-        self.assertNotIn('"push"', inspect.getsource(BuildRun.coder))  # the coder only commits
+        self.assertNotIn('"push"', inspect.getsource(BuildRun.coder), msg="the coder only commits")
         deploy_src = inspect.getsource(BuildRun.review_and_deploy)
         self.assertLess(deploy_src.index("review_before_push"), deploy_src.index("push_through_pipeline"))
         self.assertLess(*[inspect.getsource(BuildRun.play_round).index(name) for name in ("review_and_deploy", "test_until_decided")])
-        self.assertIn("PipelineFix", inspect.getsource(BuildRun.push_through_pipeline))  # a fix CI needed is reviewed again before it is pushed
-        # and the run's rounds, exercised end to end with the stages stubbed (build_run_test.RoundLoop)
+        self.assertIn("PipelineFix", inspect.getsource(BuildRun.push_through_pipeline), msg="a fix CI needed is reviewed again before it is pushed")
         t = RoundLoop()
         run = t.make([t.BLOCKED, t.CLEAN], [t.PASSED])
         t.go(run)
@@ -514,25 +506,25 @@ class Invariants(unittest.TestCase):
     def test_inv43_a_dark_feature_is_removed_only_after_the_retries_and_a_persons_approval(self):
         ready = ["update-app-intake", "app:notes", "flag:pin", "dark-broken", "needs-human"]
         self.assertEqual(dark_feature.dark_removal_target(ready), ("notes", "pin", None))
-        for missing in ("dark-broken", "needs-human"):  # while retries remain, or when nothing is dark-broken, the label does nothing
+        for missing in ("dark-broken", "needs-human"):
             self.assertIsNotNone(dark_feature.dark_removal_target([l for l in ready if l != missing])[2])
         wf = yaml.safe_load((ROOT / ".github/workflows/approve-retire.yml").read_text())
         self.assertEqual(wf[True]["issues"]["types"], ["labeled"])
         self.assertIn("approve-retire", wf["jobs"]["approve"]["if"])
         d = {"flags": ["pin"], "commits": ["h"], "outcome": "round_limit"}
-        self.assertTrue(dark_feature.is_dark_broken(d))  # a run that stops marks the feature; nothing deletes it
-        self.assertTrue(dark_feature.is_dark_broken(dict(d, outcome="regression")))  # rolled back, but its code stays in main behind the flag
+        self.assertTrue(dark_feature.is_dark_broken(d), msg="a run that stops marks the feature; nothing deletes it")
+        self.assertTrue(dark_feature.is_dark_broken(dict(d, outcome="regression")), msg="rolled back, but its code stays in main behind the flag")
         self.assertFalse(dark_feature.is_dark_broken(dict(d, outcome="released")))
 
     def test_inv44_the_tester_says_what_a_failure_means_and_only_what_a_helper_saw_is_a_regression(self):
         new_check = {"flag": "f", "check": "c", "status": "failed", "scope": "new", "api": ["a"]}
         old_check = {"flag": "", "check": "c", "status": "failed", "scope": "existing", "api": ["a"]}
         self.assertEqual((verify_deployed_app.test_impact([]), verify_deployed_app.test_impact([new_check]), verify_deployed_app.test_impact([old_check])), ("ok", "dark_only", "regression"))
-        self.assertEqual(verify_deployed_app.test_impact([dict(old_check, api=[], ui=[])]), "dark_only")  # the model's word alone is not a regression
+        self.assertEqual(verify_deployed_app.test_impact([dict(old_check, api=[], ui=[])]), "dark_only")
         self.assertEqual(verify_deployed_app.test_impact([dict(old_check, status="blocked")]), "dark_only")
         doc = {"improvements": [{"target": "factory", "summary": "x", "evidence": ""}, {"target": "other", "summary": "y"}]}
-        self.assertEqual([i["target"] for i in suggestions.improvements_from(doc, "tester")], ["factory"])  # the Agents suggest; they file nothing
-        self.assertTrue(hasattr(story_report, "note_bugs_on_story") and not hasattr(story_report, "record_bugs"))  # bugs go on the story, never a new issue
+        self.assertEqual([i["target"] for i in suggestions.improvements_from(doc, "tester")], ["factory"], msg="the Agents suggest; they file nothing")
+        self.assertTrue(hasattr(story_report, "note_bugs_on_story") and not hasattr(story_report, "record_bugs"), msg="bugs go on the story, never a new issue")
         self.assertGreaterEqual(len(tracker.content_words("Coder prompt does not say to trim the input") & tracker.content_words("The coder prompt never says to trim input")), 4)
 
     def test_inv45_the_retrospective_agent_is_isolated_like_the_build_run_agents(self):
@@ -543,7 +535,7 @@ class Invariants(unittest.TestCase):
         self.assertIn("apply_changes", src)
         self.assertNotIn("subprocess.run", src)
         self.assertNotIn('"git"', inspect.getsource(agent_run.run_tests) + inspect.getsource(agent_run.tree_changes) + inspect.getsource(agent_run.apply_changes))
-        self.assertIn("run_tests(", inspect.getsource(learning_pr.open_pr))  # the tests of the proposal never run in the Orchestrator's own environment
+        self.assertIn("run_tests(", inspect.getsource(learning_pr.open_pr))
         self.assertNotIn("unittest", inspect.getsource(learning_pr.open_pr).replace("run_tests", ""))
         for name in ("build-run.yml", "factory-run.yml"):
             text = (ROOT / ".github/workflows" / name).read_text()
@@ -563,15 +555,14 @@ class Invariants(unittest.TestCase):
         run = t.make([t.CLEAN], [t.UNVERIFIED_BLOCKED, t.UNVERIFIED_BLOCKED])
         t.go(run)
         self.assertEqual(run.state.d["outcome"], "needs_human")
-        self.assertEqual(run.calls.count("coder2"), 0)  # no coder round for checks nobody could run
+        self.assertEqual(run.calls.count("coder2"), 0, msg="no coder round for checks nobody could run")
 
     def test_inv47_the_lint_config_is_the_orchestrators_and_a_stricter_rule_never_reaches_main_alone(self):
         for f in ("eslint.config.mjs", ".prettierrc.json", ".prettierignore"):
-            self.assertEqual(starter_template.protected_violations([f]), [f])  # a coder commit that touches it is rejected
+            self.assertEqual(starter_template.protected_violations([f]), [f], msg="a coder commit that touches it is rejected")
             self.assertIn(f, starter_template.TEMPLATE_FILES_HELD)
             self.assertTrue((ROOT / "templates/starter" / f).is_file(), f)
         self.assertEqual(set(starter_template.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR), set(starter_template.TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR) | set(starter_template.TEMPLATE_FILES_HELD))
-        # staged after the run's base and never pushed on its own: the base is recorded before the config is staged
         src = inspect.getsource(BuildRun.setup)
         self.assertLess(src.index("apply_template_files(labels)"), src.index('self.state.d["base_sha"]'))
         self.assertLess(src.index('self.state.d["base_sha"]'), src.index("stage_template_config(labels)"))
@@ -579,7 +570,7 @@ class Invariants(unittest.TestCase):
         found = review_code.suppression_findings(lambda *a: "+++ b/backend/src/a.ts\n@@ -1 +1 @@\n+// eslint-disable-next-line\n", "base", "head")
         self.assertEqual([f["severity"] for f in found], ["minor"])
         cases = json.loads((ROOT / "agents/lint-fixtures/cases.json").read_text())["cases"]
-        self.assertTrue(any(c["expect"] for c in cases) and any(not c["expect"] for c in cases))  # failing and passing cases exist
+        self.assertTrue(any(c["expect"] for c in cases) and any(not c["expect"] for c in cases), msg="failing and passing cases exist")
 
 
     def test_inv48_a_request_needing_a_secret_builds_nothing_until_its_names_exist(self):
@@ -596,11 +587,10 @@ class Invariants(unittest.TestCase):
         need = [{"name": "WEATHER_API_KEY", "purpose": "forecast lookups"}]
         with self.assertRaises(endings.AwaitingSecret) as cm:
             run.require_secrets(need)
-        self.assertIn("WEATHER_API_KEY", str(cm.exception))  # the command itself is posted by planning (plan_run.py), not here
+        self.assertIn("WEATHER_API_KEY", str(cm.exception), msg="the command itself is posted by planning (plan_run.py), not here")
         self.assertEqual(run.state.d["secrets"], ["WEATHER_API_KEY"])
         listed.append({"name": "WEATHER_API_KEY"})
-        run.require_secrets(need)  # all present: the build may go on
-        # every later start checks the recorded names before any Agent is paid for: a retry, a re-run, a child issue
+        run.require_secrets(need)
         marker = secrets_marker.secrets_marker(need)
         self.assertEqual(secrets_marker.declared_secrets({"comments": [{"body": "text\n\n" + marker}]}), need)
         child = render_child.child_body("app", "task", 5, {"id": "CS-1"}, [], secrets=need)
@@ -613,7 +603,7 @@ class Invariants(unittest.TestCase):
         with self.assertRaises(endings.AwaitingSecret):
             run.require_secrets(need)
         self.assertIn("awaiting_secret", outcomes.ANSWERED)
-        self.assertNotIn("awaiting_secret", outcomes.OK)  # INV-24: an OK ending closes the Intake
+        self.assertNotIn("awaiting_secret", outcomes.OK, msg="INV-24: an OK ending closes the Intake")
         self.assertFalse(lesson_records.wants_fix_request({"outcome": "awaiting_secret"}, {}))
         self.assertFalse(lesson_records.records_stuck_issue("awaiting_secret"))
         self.assertNotIn("-----", triage.secrets_request(need, "o/app"))
@@ -641,7 +631,6 @@ class Invariants(unittest.TestCase):
             returncode=0 if not (a[0] == "show" and a[1].startswith("base:")) else 1,
             stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
         self.assertIn("SNEAKY_KEY", run.secret_problem("base", "head"))
-        # a name the app already had at the run's base was accepted before: a later run that does not touch it is not rejected for it
         run.git = lambda *a, check=True, cwd=None: mock.Mock(returncode=0, stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
         self.assertIsNone(run.secret_problem("base", "head"))
         deploy = (STARTER / ".github/workflows/deploy-fly.yml").read_text()
@@ -652,36 +641,36 @@ class Invariants(unittest.TestCase):
     def test_inv50_no_secret_value_reaches_an_issue_a_command_line_or_an_agent(self):
         deploy = (STARTER / ".github/workflows/deploy-fly.yml").read_text()
         step = deploy[deploy.index("Sync the app's own secrets"):deploy.index("Copy image from GHCR")]
-        self.assertIn("< /tmp/app-secrets", step)  # the values go to Fly through stdin
-        self.assertNotIn("toJSON(secrets)", deploy)  # GitHub flags a workflow that dumps the whole secrets context as malicious and will not run it
+        self.assertIn("< /tmp/app-secrets", step, msg="the values go to Fly through stdin")
+        self.assertNotIn("toJSON(secrets)", deploy, msg="GitHub flags a workflow that dumps the whole secrets context as malicious and will not run it")
         wired = prepare_run.wire_secrets(deploy, ["WEATHER_API_KEY", "FLY_API_TOKEN", "bad name"])
-        self.assertIn("WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}", wired)  # an ordinary static reference
+        self.assertIn("WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}", wired, msg="an ordinary static reference")
         self.assertNotIn("secrets.FLY_API_TOKEN: ", wired.split("factory-secrets:begin")[1].split("factory-secrets:end")[0])
-        self.assertEqual(prepare_run.wire_secrets(wired, ["WEATHER_API_KEY"]), wired)  # idempotent
-        self.assertEqual(prepare_run.wire_secrets(wired, []), deploy)  # and removable
+        self.assertEqual(prepare_run.wire_secrets(wired, ["WEATHER_API_KEY"]), wired, msg="idempotent")
+        self.assertEqual(prepare_run.wire_secrets(wired, []), deploy, msg="and removable")
         self.assertNotIn("echo \"$value\"", step)
         self.assertEqual(triage.find_secrets("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk"), ["a bearer or JWT token"])
 
 
     def test_inv51_a_flags_name_is_issue_n_of_its_story_and_it_exists_off_before_the_coder_starts(self):
         cs = {"id": "CS-1", "title": "T", "criteria": ["AC-1: x"], "verification": ["v"], "flag": True}
-        self.assertIn(flag_slug.SLOT, render_child.render_change_set_task(cs))  # the plan only says "flagged"; the slug is filled in per issue
+        self.assertIn(flag_slug.SLOT, render_child.render_change_set_task(cs))
         self.assertEqual(flag_slug.for_story(42), "issue-42")
         gb = FakeGrowthBook({"demo.feature.old": {"environments": {"production": {"enabled": True, "rules": []}}}})
         self.assertTrue(flag_slug.ensure_feature(gb, "demo", "issue-42", "https://github.com/o/f/issues/42", "t", "42"))
-        self.assertFalse(gb.production_enabled("demo.feature.issue-42"))  # dark until the gates pass
-        self.assertFalse(flag_slug.ensure_feature(gb, "demo", "old", "u", "t", "1"))  # an existing flag is never touched
+        self.assertFalse(gb.production_enabled("demo.feature.issue-42"), msg="dark until the gates pass")
+        self.assertFalse(flag_slug.ensure_feature(gb, "demo", "old", "u", "t", "1"), msg="an existing flag is never touched")
         self.assertTrue(gb.production_enabled("demo.feature.old"))
         self.assertIn("issue-42", flag_slug.add_to_manifest("[]", "issue-42", "o/f#42", "t"))
 
     def test_inv52_a_flag_that_does_not_exist_at_release_is_reported_not_made_up(self):
         gb = FakeGrowthBook()
         self.assertEqual(release_features.check_flags(gb, "demo", ["ghost"], ["ghost"]), ([], [], ["ghost"]))
-        self.assertEqual(gb.features, {})  # nothing was created
+        self.assertEqual(gb.features, {}, msg="nothing was created")
         self.assertEqual(missing_flag.split(["read", "unread"], lambda s: s == "read"), (["read"], ["unread"]))
         self.assertNotIn(outcomes.FLAG_MISSING, outcomes.OK)
-        self.assertFalse(rollback.rollback_decision({"outcome": outcomes.FLAG_MISSING})[0])  # dark: nothing to roll back
-        self.assertTrue(rollback.rollback_decision({"outcome": "regression", "head_sha": "h", "base_sha": "g", "commits": ["h"]})[0])  # live and failing
+        self.assertFalse(rollback.rollback_decision({"outcome": outcomes.FLAG_MISSING})[0], msg="dark: nothing to roll back")
+        self.assertTrue(rollback.rollback_decision({"outcome": "regression", "head_sha": "h", "base_sha": "g", "commits": ["h"]})[0], msg="live and failing")
         self.assertIn("A flag that can be turned on has to exist", missing_flag.dark_message(["x"], None))
         self.assertIn("left as it is", missing_flag.live_message(["x"], None, False))
     def test_inv53_every_flag_is_tested_both_ways_before_review_and_a_retirement_removes_the_tests(self):
@@ -692,9 +681,9 @@ class Invariants(unittest.TestCase):
         if shutil.which("node"):
             run = lambda files: json.loads(subprocess.run(["node", str(STARTER / "scripts/check-flags.mjs"), "--stdin"], capture_output=True, text=True,
                                                           input=json.dumps({"slugs": ["issue-1"], "files": files})).stdout)
-            self.assertEqual(len(run({"backend/src/x.test.ts": "it('x', () => {});"})), 2)  # neither test: both reported
+            self.assertEqual(len(run({"backend/src/x.test.ts": "it('x', () => {});"})), 2, msg="neither test: both reported")
         hits = retirement_check.code_references(['h:flags.json:2:  "slug": "issue-1",', 'h:backend/src/x.test.ts:4:  withFlag("issue-1", false, f)'])
-        self.assertEqual(len(hits), 2)  # tests and the manifest count, not only source
+        self.assertEqual(len(hits), 2, msg="tests and the manifest count, not only source")
 
     def test_inv54_a_plan_is_rolled_back_as_one_and_its_children_are_filed_once_or_not_at_all(self):
         cs = {"id": "CS-1", "title": "T", "requirements": ["REQ-1"], "depends_on": [], "criteria": ["AC-1: x"], "verification": ["v"], "size": "S",
@@ -703,14 +692,14 @@ class Invariants(unittest.TestCase):
         self.assertEqual(validate_plan.validate_plan(plan, "update"), ([], []))
         for bad in (dict(cs, size="L"), dict(cs, criteria=["AC-1: x"] * 7), dict(cs, kind="staging", flag=None), dict(cs, criteria=["AC-1: needs CS-2"])):
             self.assertTrue(validate_plan.validate_plan(dict(plan, change_sets=[bad]), "update")[0], bad)
-        self.assertTrue(validate_plan.validate_plan(plan, "first build")[0])  # a new app starts with its staging change set
+        self.assertTrue(validate_plan.validate_plan(plan, "first build")[0], msg="a new app starts with its staging change set")
         gh = FakeIssues()
         gh.add(7)
         tickets = child_tickets.ChildTickets("o/f", 7, "pat", gh)
         args = ("o/f", "pat", "app", 7, [cs, dict(cs, id="CS-2", depends_on=["CS-1"])], ["CS-1", "CS-2"], "r")
         with mock.patch.object(file_children.github, "run", gh):
             made = file_children.file_children(*args, tickets=tickets)
-            self.assertEqual(file_children.file_children(*args, tickets=tickets), made)  # filed once
+            self.assertEqual(file_children.file_children(*args, tickets=tickets), made, msg="filed once")
         self.assertEqual(len(gh.subs[7]), 2)
         self.assertEqual(len(gh.blocked), 1)
 
@@ -719,13 +708,13 @@ class Invariants(unittest.TestCase):
         self.assertIsNone(read_child.planned_problem(marker, {"number": 7, "state": "OPEN"}))
         for bad in (({}, {"number": 7, "state": "OPEN"}), (marker, None), (marker, {"number": 7, "state": "CLOSED"}), (marker, {"number": 8, "state": "OPEN"})):
             self.assertTrue(read_child.planned_problem(*bad), bad)
-        self.assertTrue(read_child.planned_problem({"parent": 7, "kind": "staging"}, {"number": 7, "state": "OPEN"}))  # a staging child is never a Build Run
+        self.assertTrue(read_child.planned_problem({"parent": 7, "kind": "staging"}, {"number": 7, "state": "OPEN"}), msg="a staging child is never a Build Run")
 
     def test_inv56_planning_is_its_own_process_that_files_a_child_and_can_always_be_retried(self):
         wf = yaml.safe_load((ROOT / ".github/workflows/plan.yml").read_text())
         cond = " ".join(next(iter(wf["jobs"].values()))["if"].split())
         self.assertIn("update-app-intake", cond)
-        self.assertIn("factory-plan", cond)  # never a child
+        self.assertIn("factory-plan", cond, msg="never a child")
         self.assertIn("plan-", wf["concurrency"]["group"])
         gh = FakeIssues()
         gh.add(7)
@@ -737,11 +726,11 @@ class Invariants(unittest.TestCase):
         tickets = ct.ChildTickets("o/f", 7, "pat", gh)
         run = lambda d: plan_run.PlanRun(7, intake, {}, lambda task: (d, 0.0, None), comments.append, lambda: set(), tickets,
                                          lambda parent, sets, order, secrets: [(c["id"], 100) for c in sets]).run()
-        self.assertEqual(len(run(doc)["children"]), 1)  # even one change set is a child
+        self.assertEqual(len(run(doc)["children"]), 1, msg="even one change set is a child")
         stopped = run(dict(doc, open_questions=[{"id": "Q-1", "text": "?", "blocking": True}]))
         self.assertEqual(stopped["ending"], "needs_human")
         self.assertIn("remove the `update-app-intake` label and add it again", comments[-1])
-        self.assertNotIn("planned", outcomes.OK)  # a Build Run never ends by planning
+        self.assertNotIn("planned", outcomes.OK, msg="a Build Run never ends by planning")
         self.assertFalse(hasattr(BuildRun, "plan_change"))
 
     def test_inv57_a_staging_child_is_verified_by_deterministic_checks_before_anything_is_built_on_it(self):
@@ -749,20 +738,20 @@ class Invariants(unittest.TestCase):
         wf = (ROOT / ".github/workflows/update-app-intake.yml").read_text()
         self.assertIn("!contains(github.event.issue.body, '\"kind\":\"staging\"')", wf)
         marker = child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "update"})
-        with self.assertRaises(read_staging_child.NotStageable):  # only a staging child is staged
+        with self.assertRaises(read_staging_child.NotStageable):
             read_staging_child.check_child({"body": marker + "\n\n### App name\n\nnotes\n"}, {"number": 7, "state": "OPEN"}, {"body": ""}, [], 0, 1, PROFILES["limits"])
         self.assertEqual(read_staging_child.staging_children_in_flight([{"number": 3, "body": child_tickets.render_marker({"kind": "staging"})}], 4), [3])
         script = (ROOT / "infra/app-staging/stage.sh").read_text()
         self.assertIn("staging.verify_infrastructure", script)
-        self.assertLess(script.index("staging.verify_infrastructure"), script.index("retrospective.close_child close"))  # verified, then the next child starts
+        self.assertLess(script.index("staging.verify_infrastructure"), script.index("retrospective.close_child close"), msg="verified, then the next child starts")
     def test_inv58_every_failure_event_gets_a_verdict_a_failure_is_never_downgraded_and_a_warning_needs_a_reason(self):
         failure = event.make("build_run", "failure", "demo", "round limit", "f")
         warning = event.make("tester", "warning", "demo", "a dark check failed", "w")
         entries = {failure["key"]: {"key": failure["key"], "verdict": "record", "reason": "skip"}, warning["key"]: {"key": warning["key"], "verdict": "fix"}}
         got = {v["key"]: v for v in event_verdicts.decide([failure, warning], entries)}
-        self.assertEqual(set(got), {failure["key"], warning["key"]})  # one verdict for every event
-        self.assertEqual(got[failure["key"]]["verdict"], "fix")  # the Agent cannot downgrade a failure
-        self.assertEqual(got[warning["key"]]["verdict"], "record")  # "fix" without a reason is not a fix
+        self.assertEqual(set(got), {failure["key"], warning["key"]}, msg="one verdict for every event")
+        self.assertEqual(got[failure["key"]]["verdict"], "fix", msg="the Agent cannot downgrade a failure")
+        self.assertEqual(got[warning["key"]]["verdict"], "record")
         self.assertEqual(event_verdicts.decide([warning], {warning["key"]: {"key": warning["key"], "verdict": "fix", "reason": "users wait"}})[0]["verdict"], "fix")
         facts = {"app": "demo", "outcome": "stuck", "message": "m", "issue_number": "1", "flags": [], "final_minor": [{"summary": "s"}]}
         self.assertEqual([e["severity"] for e in collect_events.from_run(facts, "fp")], ["failure", "warning"])
@@ -777,19 +766,19 @@ class Invariants(unittest.TestCase):
         good = {"how_found": "The tester saw it.", "root_cause": "No trimming.", "what_it_takes": ["Blank text is rejected"],
                 "requirements": ["POST /api/todos with blank text answers 400"], "target": "factory", "children": ["a", "b"]}
         got = write_bug.write(verdict, None, None, cfg, "k", lambda *a, **k: good)
-        self.assertEqual(set(got), {"how_found", "root_cause", "what_it_takes", "requirements", "source"})  # it never carries a target or a plan
+        self.assertEqual(set(got), {"how_found", "root_cause", "what_it_takes", "requirements", "source"}, msg="it never carries a target or a plan")
         for vague in ({"how_found": "x"}, {**good, "requirements": ["Improve validation of todos"]}, {**good, "root_cause": "key ghp_" + "a1" * 15}):
-            self.assertEqual(write_bug.write(verdict, None, None, cfg, "k", lambda *a, _v=vague, **k: _v)["source"], "fallback")  # replaced, never filed as is
+            self.assertEqual(write_bug.write(verdict, None, None, cfg, "k", lambda *a, _v=vague, **k: _v)["source"], "fallback", msg="replaced, never filed as is")
         self.assertEqual(validate_bug.check(write_bug.fallback(verdict, None, None), 6)[1], [])
         self.assertTrue(render_bug.intake_body("demo", got, verdict).startswith(render_bug.marker(ev["key"])))
         form = yaml.safe_load((ROOT / ".github/ISSUE_TEMPLATE/bug.yml").read_text())
-        self.assertEqual(form["labels"], ["bug", "update-app-intake"])  # a bug is planned like any Update App Intake
+        self.assertEqual(form["labels"], ["bug", "update-app-intake"], msg="a bug is planned like any Update App Intake")
 
 
     def test_inv60_a_bug_is_dark_or_released_by_the_flags_state_and_only_a_dark_story_makes_its_child_wait(self):
         state = {"flags": [{"key": "demo.feature.issue-12", "state": "released"}, {"key": "demo.feature.issue-20", "state": "switched off by the watchdog"}]}
         states = route_bug.flag_states(state)
-        self.assertEqual((states[12], states[20]), ("released", "dark"))  # a flag the watchdog switched off is dark (STEP 5.5)
+        self.assertEqual((states[12], states[20]), ("released", "dark"), msg="a flag the watchdog switched off is dark (STEP 5.5)")
         form = "### App name\n\ndemo\n\n### What should change?\n\nChange set CS-1: T\n"
         doc = {"how_found": "a", "root_cause": "b", "what_it_takes": ["c"], "requirements": ["POST /api/todos answers 400 for blank text"], "source": "agent"}
         for released, waits in ((False, True), (True, False)):
@@ -802,14 +791,14 @@ class Invariants(unittest.TestCase):
             verdict = {"key": ev["key"], "verdict": "fix", "target": "managed_app", "cause": None, "reason": "r", "event": ev}
             with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
                 got = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
-            self.assertEqual(bool(child_tickets.read_fix_for(gh.issues[got["number"]]["body"])), waits)  # dark: fix_for and the failed child waits; released: a regression, no marker, nothing waits
+            self.assertEqual(bool(child_tickets.read_fix_for(gh.issues[got["number"]]["body"])), waits, msg="dark: fix_for and the failed child waits; released: a regression, no marker, nothing waits")
             self.assertEqual(bool(gh.blocked), waits)
 
     def test_inv61_a_child_is_routed_by_the_kind_in_its_marker_to_staging_or_to_a_build_run_never_both(self):
         staging, update = (" ".join(next(iter(yaml.safe_load((ROOT / ".github/workflows" / n).read_text())["jobs"].values()))["if"].split())
                            for n in ("app-staging.yml", "update-app-intake.yml"))
         kind = '"kind":"staging"'
-        self.assertIn(kind, child_tickets.render_marker({"kind": "staging"}))  # the text the workflows match is the text the planner writes
+        self.assertIn(kind, child_tickets.render_marker({"kind": "staging"}), msg="the text the workflows match is the text the planner writes")
         self.assertIn(f"contains(github.event.issue.body, '{kind}')", staging)
         self.assertIn(f"!contains(github.event.issue.body, '{kind}')", update)
 

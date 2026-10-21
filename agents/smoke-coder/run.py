@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-# Smoke screen for coder models (.wayfinder coder-speed, ticket 14).
-#
-# Runs the real coder prompt (agents/prompts/coder.md, round 1) with a candidate model on a few small
-# tasks against a copy of the Starter Template, then scores the result with hidden acceptance tests the
-# coder never saw. A cheap screen: it is good at spotting a model that is broken, slow or sloppy, and
-# poor at separating two close ones (use agents/replay for that).
-#
-# Score for one run = a commit exists, no protected Starter Template file changed, `npm run check`
-# passes, and `npm test` passes with the task's acceptance tests added.
-#
-#   python3 agents/smoke-coder/run.py --validate    no model: prove each task's acceptance tests fail on the seed
-#                                                   and pass on its reference solution (needs npm)
-#   MODELS=a,b python3 agents/smoke-coder/run.py    run the screen (needs openhands and DEEPINFRA_API_KEY)
-#
-# Candidates (from DeepInfra's /models list; each is faster or smaller than the 480B Qwen coder, tool-call and
-# cost fields unverified, so run the T1/T2 checks of agents/smoke/run.py with MODEL=<id> first):
-#   Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo (baseline)  deepseek-ai/DeepSeek-V4.1-Flash  Qwen/Qwen3.8-Flash
-#   zai-org/GLM-5.3-Flash  Qwen/Qwen3.5-35B-A3B  openai/gpt-oss-120b-Turbo  MiniMaxAI/MiniMax-M3
-#
-# Env: MODELS (comma-separated DeepInfra ids; default the coder in agents/profiles.yml; the first is the
-# baseline the others' speed is compared with), TASKS (comma-separated ids, default all), TRIALS (per
-# model and task, default 2), WORKERS (default 3), TIMEOUT_MIN (per run, default 20), KEEP=1 (keep the
-# working directories). Writes smoke-coder-results.json.
 import json
 import os
 import re
@@ -61,7 +38,6 @@ def run(cmd, cwd, env=None, timeout=600):
 
 
 def digest(out):
-    # The lines that say what failed (test names, assertions, type errors), not npm's boilerplate tail.
     keep = [l.strip() for l in out.splitlines()
             if re.search(r"FAIL|AssertionError|expected|error TS|Error:|✗|×|Cannot find", l) and "npm error" not in l]
     return " | ".join(keep[:8])[:700] or out[-300:]
@@ -81,7 +57,6 @@ def overlay(src, dst):
 
 
 def mount(workdir, spec):
-    # Wire a solution's router into app.ts: import after the health router's, use before the static files.
     app = workdir / "backend" / "src" / "app.ts"
     text = app.read_text()
     text = text.replace('import { healthRouter } from "./routes/health";',
@@ -92,7 +67,6 @@ def mount(workdir, spec):
 
 
 def prepare_base(cache):
-    # The Starter Template with dependencies installed once; every trial starts from a copy.
     base = cache / "base"
     shutil.copytree(TEMPLATE, base, ignore=shutil.ignore_patterns("node_modules", "dist"), symlinks=True)
     code, out = run(["npm", "ci", "--no-audit", "--no-fund"], base, timeout=900)
@@ -110,7 +84,6 @@ def fresh_workdir(base, task, dest):
 
 
 def score(workdir, task, base_sha):
-    # (passed, reason). Adds the hidden acceptance tests only now, after the coder is done.
     count = run(["git", "rev-list", "--count", f"{base_sha}..HEAD"], workdir)[1].strip()
     if not count.isdigit() or int(count) == 0:
         return False, "no commit"
@@ -129,8 +102,6 @@ def score(workdir, task, base_sha):
 
 
 def fetch_prices():
-    # USD per million tokens per DeepInfra model id, from the public /models list. OpenHands reports a
-    # cost of 0 for models it has no price for, so cost is computed from tokens instead.
     try:
         with urllib.request.urlopen("https://api.deepinfra.com/v1/openai/models", timeout=30) as r:
             return {m["id"]: m.get("metadata", {}).get("pricing") or {} for m in json.load(r).get("data", [])}
@@ -139,7 +110,6 @@ def fetch_prices():
 
 
 def cost_of(state, price):
-    # Cached prompt tokens at the cache-read rate, the rest of the prompt at the input rate.
     total = 0.0
     for m in ((state.get("stats") or {}).get("usage_to_metrics") or {}).values():
         u = (m or {}).get("accumulated_token_usage") or {}
@@ -202,7 +172,6 @@ def summarize(results, models):
 
 
 def validate():
-    # No model: each task's acceptance tests must fail on the seed and pass on the reference solution.
     ok = True
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp)
@@ -214,7 +183,6 @@ def validate():
             seed_code = run(["npm", "test"], seed)[0]
             fresh_workdir(base, task, fixed)
             base_sha = run(["git", "rev-parse", "HEAD"], fixed)[1].strip()
-            # The scorer itself: an untouched checkout is "no commit"; a committed reference solution passes.
             untouched = score(fixed, task, base_sha)
             shutil.rmtree(fixed / "backend" / "src" / "__tests__" / "accept", ignore_errors=True)
             overlay(task["dir"] / "solution", fixed)

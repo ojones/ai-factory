@@ -124,7 +124,6 @@ class Run(unittest.TestCase):
 
 class JsonOutput(unittest.TestCase):
     def attempts(self, path, writes):
-        # An `attempt` that writes the next entry of `writes` (None = write nothing) and costs 0.1.
         calls = []
 
         def attempt(label, note):

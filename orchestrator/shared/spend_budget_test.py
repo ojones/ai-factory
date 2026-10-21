@@ -39,7 +39,7 @@ class BudgetAccounting(unittest.TestCase):
         self.spend[j1] = 0.6
         bud.refresh(j1)
         j2 = bud.mint("m2")
-        self.spend[j2] = 0.45  # the crossing call completes, so overshoot is allowed
+        self.spend[j2] = 0.45
         self.assertAlmostEqual(bud.refresh(j2), 1.05)
         with self.assertRaises(run_stops.BudgetExhausted):
             bud.mint("m1")

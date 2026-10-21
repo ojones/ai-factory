@@ -1,8 +1,3 @@
-# After every Build Run, released or not: record what it taught, propose the fix as a PR, and report back on the story that started it (STEP 6.2).
-# Runs as its own workflow step after `finalize`, on every run, and never fails the run. Facts, lesson issues, minor findings, improvements, the
-# Retrospective Agent and its learning PR, the fix request and the story report each have their own file in this folder.
-#
-# Usage: python -m retrospective.run_retrospective [lesson <issue> | auto-merge-check <base> <head>]   (PYTHONPATH=orchestrator)
 import json
 import os
 import sys
@@ -30,7 +25,6 @@ from retrospective.cause import name_cause
 
 
 def lesson_main(number):
-    # The Factory Run: analyse one existing lesson issue (label `ready-for-factory-run`) on demand.
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     issue = json.loads(tracker.gh(["issue", "view", str(number), "--repo", repo, "--json", "title,body,comments,labels"], token).stdout)
@@ -49,8 +43,6 @@ def lesson_main(number):
 
 
 def judge_run_events(events, result, cfg, key, repo, token, app, work, outcome):
-    # STEP 6.2: a verdict for every event of the run. The Agent's own answer is used when it ran and gave one; warnings it did not judge (it did not run, or
-    # left them out) go to one batch call under the same cost cap. Failures are always fixed, whatever the answer (event_verdicts.decide).
     entries = event_verdicts.parse(result)
     open_warnings = [e for e in events if e["severity"] == "warning" and e["key"] not in entries]
     if open_warnings and key and "retrospective" in cfg.get("roles", {}):
@@ -80,10 +72,9 @@ def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     pat, token = os.environ["FACTORY_PAT"], os.environ["FACTORY_GH_TOKEN"]
     if d.get("outcome") in outcomes.ANSWERED:
-        return 0  # a refusal, or a wait for the owner's secrets, is an answer, not a failure, not a failure to learn from or retry
+        return 0
     facts = run_facts.collect_facts(work, d)
     if d.get("outcome") == "provider_blocked":
-        # Not a lesson and not a fix request: nothing the Factory can change helps, and the Agent could not run anyway.
         try:
             log(f"provider alert: {provider_alert.file_provider_alert(repo, token, facts)}")
         except Exception as e:  # noqa: BLE001 - the retrospective never fails the run
@@ -115,7 +106,6 @@ def main():
     suggested, filed = improvement_issues.record_improvements(repo, token, facts)
     new_improvements = [n for n, proposed in suggested if not proposed and earned(n)]
     recorded = [(lesson_records.record_lesson(repo, token, x, facts), x["severe"]) for x in lessons]
-    # The Agent looks at a lesson that came back after its fix, or has earned it (severe, or seen in enough distinct runs) and has no PR yet.
     new_lessons = [n for (n, status), severe in recorded
                    if n and (status == "reopened" or (earned(n, severe) and (status == "new" or not tracker.already_proposed(repo, token, n))))]
     targets = list(dict.fromkeys(([stuck_issue] if stuck_issue else []) + new_minors + new_improvements + new_lessons))
@@ -129,7 +119,6 @@ def main():
     (work / "artifacts" / "retrospective-cause.json").write_text(json.dumps(cause, indent=2))
     filed_request, fixes = None, event_verdicts.fix_events(verdicts)
     if fixes and bool(cfg.get("limits", {}).get("fix_requests", True)):
-        # STEP 7: each event judged worth fixing becomes a bug ticket written by the Try Fix Agent and filed as an Intake (try_fix/file_bug.py)
         filed_events = file_failure.file_failures(repo, token, pat, fixes, facts, result, d.get("rollback"), cfg, key,
                                                   lambda budget, cred: write_bug.record_spend(budget, cred, repo, token, os.environ.get("GITHUB_RUN_ID", "0")))
         for got in filed_events:
@@ -137,13 +126,13 @@ def main():
         filed_request = next((g for g in filed_events if g["severity"] == "failure"), None)
     bugs = []
     if facts.get("bugs") and stuck:
-        try:  # app-side bugs go on the story's own issue; a fix child (above) already carries them in its requirements
+        try:
             carried = bool(filed_request and filed_request["action"] == "bug_intake")
             if story_report.note_bugs_on_story(repo, token, d["issue_number"], facts, carried):
                 bugs = [{"kind": x["kind"], "check": x["check"], "url": ""} for x in facts["bugs"][:story_report.MAX_BUGS]]
         except Exception as e:  # noqa: BLE001
             log(f"could not note the bugs on the story: {type(e).__name__}: {e}")
-    try:  # the story keeps what the run found, whether or not it released
+    try:
         story_report.post_retrospective(repo, token, d["issue_number"], os.environ.get("GITHUB_RUN_ID", "0"),
                            story_report.render_retrospective(facts, filed, lessons, result, bugs, cause, verdicts))
     except Exception as e:  # noqa: BLE001

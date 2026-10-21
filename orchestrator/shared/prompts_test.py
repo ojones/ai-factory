@@ -8,7 +8,6 @@ from shared import config, prompts  # noqa: E402
 
 
 class Prompts(unittest.TestCase):
-    # Every role prompt's placeholders are exactly the ones the orchestrator supplies.
     SUPPLIED = {
         "coder": {"app_name", "round", "task", "findings_path", "issue_ref"},
         "reviewer": {"app_name", "base_sha", "head_sha", "verdict_path", "rubric", "spec"},

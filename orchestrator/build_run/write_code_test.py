@@ -11,7 +11,6 @@ from build_run.run import BuildRun  # noqa: E402
 
 
 class CheckProblem(unittest.TestCase):
-    # The Orchestrator's own `npm run check` on the coder's commit, before the reviewer.
 
     def make(self, scripts, exit_code=0, output="src/a.ts(3,1): error TS2322"):
         run = object.__new__(BuildRun)

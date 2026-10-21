@@ -31,7 +31,7 @@ class FileUpdateAppIntake(unittest.TestCase):
         self.assertEqual(args[args.index("--label") + 1], "update-app-intake,app:notes,production-feedback")
         body = args[args.index("--body") + 1]
         self.assertEqual((read_form.app_name(body), read_form.read_request(body, 2.0, 10.0)[0]), ("notes", "Add tags"))
-        self.assertEqual(create[1], "the-pat")  # created by the PAT user, so its label event starts planning
+        self.assertEqual(create[1], "the-pat", msg="created by the PAT user, so its label event starts planning")
 
     def test_planning_is_started_by_the_label_at_creation_not_by_a_start_label(self):
         r = Recorder()

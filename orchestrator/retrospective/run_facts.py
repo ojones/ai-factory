@@ -1,5 +1,3 @@
-# Step 1 of the retrospective: a deterministic record of the run (outcome, blocking findings and which recurred, time and cost per stage, the
-# improvements suggested), written as an artifact for the Agent and the issues.
 import hashlib
 import json
 from pathlib import Path
@@ -11,7 +9,6 @@ from retrospective import tracker
 
 
 def collect_facts(work, d):
-    # Deterministic facts about a run. `work` holds findings-N.json written per round.
     rounds, seen, final_minor = [], {}, []
     for path in sorted(Path(work).glob("findings-*.json"), key=lambda p: p.name):
         doc = agent_output.load_json(path) or {}
@@ -38,7 +35,6 @@ def collect_facts(work, d):
 
 
 def fingerprint(facts):
-    # Stable across runs of the same failure: outcome plus the recurring (else final) findings.
     basis = facts["recurring_findings"] or sorted(tracker.normalize(s) for s in facts["final_blocking"])
     return hashlib.sha1(json.dumps([facts["outcome"], basis]).encode()).hexdigest()[:8]
 

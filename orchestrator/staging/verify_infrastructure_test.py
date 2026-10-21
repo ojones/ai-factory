@@ -10,7 +10,6 @@ GREEN = [{"name": n, "status": "completed", "conclusion": "success"} for n in v.
 
 
 class FakeApp:
-    # A deployed Starter app as far as the checks can see it: health, the front page, the preview cookie, and whether GrowthBook has its connection.
     def __init__(self, token="tok", runs=GREEN, secrets=(), health=200, cookie_for_anyone=False, connected=True, front_page=200):
         self.token, self.runs_ = token, runs
         self.secrets, self.health, self.cookie_for_anyone, self.connected, self.front_page = set(secrets), health, cookie_for_anyone, connected, front_page

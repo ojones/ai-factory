@@ -1,6 +1,3 @@
-# Reading the child a Build Run was dispatched with (STEP 4.1): its request text and cost cap from the body, its `factory-plan` marker, and whether it
-# is really a planned child: a sub-issue of an open parent whose marker names that parent. The parent is read for its number and state only, never
-# for instructions.
 from request import intake_labels, read_form
 from shared import (
     child_tickets,
@@ -16,8 +13,6 @@ def parse_intake(body, default_cap, ceiling):
 
 
 def identify_intake(issue, app, number):
-    # The plan marker of the child a Build Run was dispatched with, or NeedsHuman if the issue is not a child ticket of `app`. A Build Run starts for a planned
-    # child only: an issue labelled `update-app-intake` that names the app in its form and carries the `app:<slug>` label planning gave it.
     labels = {l["name"] for l in issue.get("labels", [])}
     body = issue.get("body") or ""
     if intake_labels.UPDATE_APP_INTAKE not in labels:
@@ -33,7 +28,6 @@ def identify_intake(issue, app, number):
 
 
 def planned_problem(marker, parent):
-    # Why this child is not a planned one, or None. `parent` is {number, state} from the sub-issues API, or None for an issue with no parent.
     if marker.get("kind") == "staging":
         return "it is a staging child: App Staging stages and verifies the app, and no Build Run is started for it"
     if not marker:

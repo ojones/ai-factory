@@ -1,5 +1,3 @@
-# Test support: a fake `gh` for the issue calls ChildTickets makes (create, sub-issues, blockers, parent, comment, close), so tests exercise the
-# real request shapes without GitHub. `fail` is a substring of "<METHOD> <path>"; a call that matches it answers with that HTTP status.
 import json
 from types import SimpleNamespace
 
@@ -7,7 +5,7 @@ from types import SimpleNamespace
 class FakeIssues:
     def __init__(self, fail=None):
         self.issues, self.subs, self.blocked, self.calls, self.fail = {}, {}, {}, [], fail or {}
-        self.comments = {}  # issue number -> [comment bodies]
+        self.comments = {}
         self.next = 100
 
     def add(self, number=None, state="open", body="", labels=()):
@@ -42,7 +40,7 @@ class FakeIssues:
                     if flag == "--remove-label":
                         labels[:] = [x for x in labels if x["name"] != value]
             return SimpleNamespace(stdout="", stderr="", returncode=0)
-        path = args[1].split("/", 3)[3]  # after repos/<owner>/<repo>/
+        path = args[1].split("/", 3)[3]
         method = args[args.index("--method") + 1]
         fields = {}
         for flag, value in zip(args, args[1:]):

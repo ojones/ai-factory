@@ -1,5 +1,3 @@
-# STEP 4.5: the single-call review of the local commit before anything is pushed: the context it is given, banded findings, the verdict, flag and
-# suppression findings.
 import json
 import re
 import time
@@ -28,9 +26,6 @@ EVIDENCE_KINDS = ("repro", "cited", "opinion")
 
 
 def finding_support(f):
-    # Why a finding the reviewer called blocking cannot block, or None when its fields support it. It blocks only if its category is one
-    # that can (not style, duplication or other) and its evidence is something to act on: a `repro` (a command or check that shows it) or
-    # a citation (a file and line). An opinion never blocks.
     if f.get("category") not in BLOCKING_CATEGORIES:
         return f"category `{f.get('category')}` cannot block"
     kind = f.get("evidence_kind")
@@ -42,10 +37,6 @@ def finding_support(f):
 
 
 def banded_findings(doc):
-    # The reviewer's findings with each one's band decided from its structured fields, never from the model's label alone. A finding
-    # the reviewer called blocking keeps that only if `finding_support` finds the fields back it; otherwise it is minor, with the reason in
-    # `downgraded`. A minor finding is never raised. A document whose findings lack the structure raises ValueError, so the caller asks again
-    # instead of trusting a label (the same way a missing findings list is handled).
     findings = doc.get("findings") if isinstance(doc, dict) else None
     if not isinstance(findings, list):
         raise ValueError("reviewer output has no findings list")
@@ -61,7 +52,6 @@ def banded_findings(doc):
 
 
 def derive_review(doc):
-    # (clean, blocking, minor). The verdict comes from the findings and their structure, never the model's own field.
     findings = banded_findings(doc)
     blocking = [f for f in findings if f.get("severity") == "blocking"]
     minor = [f for f in findings if f.get("severity") != "blocking"]
@@ -69,14 +59,12 @@ def derive_review(doc):
 
 
 def finding_view(source, summary, evidence, raw):
-    # A finding as handed to the coder: summary, evidence, and any of the detail fields present.
     out = {"source": source, "summary": summary, "evidence": evidence}
     out.update({k: raw[k] for k in DETAIL_FIELDS if str(raw.get(k) or "").strip()})
     return out
 
 
 def describe_finding(f):
-    # One finding as an indented block for the coder's fix list.
     where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or ""
     rows = [("Where", where), ("Evidence", f.get("evidence")), ("Requirement", f.get("requirement")),
             ("Suggested fix", f.get("suggested_fix")), ("Repro", f.get("repro"))]
@@ -84,15 +72,12 @@ def describe_finding(f):
     return f"- [{f['source']}] {f['summary']}{body}"
 
 
-# The two files every route passes through: the reviewer must see them even when unchanged,
-# to judge how routes are mounted and how flags fail closed.
 REVIEW_CONTEXT_FILES = ("backend/src/app.ts", "backend/src/feature-flags.ts")
 
 
 SKIP_SUFFIXES = (".lock", "-lock.json", ".png", ".jpg", ".svg", ".ico", ".woff", ".woff2", ".map")
 
 
-# Detail a finding may carry so the coder can act without exploring; all best-effort, "" when not applicable.
 DETAIL_FIELDS = ("file", "line", "requirement", "suggested_fix", "repro", "category")
 
 
@@ -124,10 +109,6 @@ FLAG_REF_RE = re.compile(r"^[\w.-]+/[\w.-]+#\d+:")
 
 
 def flag_findings(git, head, slugs):
-    # Findings about this change's own flags that need no judgement, so the reviewer is not asked for them and the severity is fixed:
-    # a flag in `flags.json` that no code outside the tests reads (it would be released with nothing behind it), and a flag whose
-    # description does not start with an issue reference (it must point back to its story). Both are minor. `git(*args)` returns a git
-    # command's stdout ('' when it fails), run in the app checkout.
     try:
         declared = {f["slug"]: f for f in json.loads(git("show", f"{head}:flags.json") or "[]") if isinstance(f, dict) and "slug" in f}
     except ValueError:
@@ -158,10 +139,6 @@ SUPPRESSION_RE = re.compile(r"eslint-disable|@ts-ignore|@ts-nocheck")
 
 
 def suppression_findings(git, base, head):
-    # A minor finding when the change adds a lint or type-check suppression (`eslint-disable`, `@ts-ignore`, `@ts-nocheck`). The lint config
-    # is the Orchestrator's, so the coder cannot loosen a rule for the whole app; a suppression is the local way around one, so it is named
-    # where the retrospective sees it and can ask for a better rule or default. Always minor: one is sometimes right. `git(*args)` returns a
-    # git command's stdout ('' when it fails), run in the app checkout.
     hits, path, line = [], "", 0
     for text in git("diff", "-U0", base, head, "--", "*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs").splitlines():
         if text.startswith("+++ b/"):
@@ -183,12 +160,10 @@ def suppression_findings(git, base, head):
 
 
 class ContextTooLarge(Exception):
-    # The change does not fit in one prompt; the caller falls back to the exploring Agent.
     pass
 
 
 class FastReviewFailed(Exception):
-    # The single call produced nothing usable; the caller falls back to the exploring Agent.
     pass
 
 
@@ -197,16 +172,9 @@ def numbered(text):
 
 
 def build_review_context(git, base, head, max_chars, spec=None):
-    # Everything the reviewer would otherwise go and look up, in one message.
-    #
-    # `git(*args)` returns a git command's stdout ('' when it fails), run in the app checkout.
-    # Raises ContextTooLarge when the change cannot be shown whole, so a partial view never
-    # stands in for a review.
     changed = [c for c in git("diff", "--name-only", "--diff-filter=d", base, head).split("\n") if c]
     shown = [c for c in changed if not c.endswith(SKIP_SUFFIXES)]
     extra = [f for f in REVIEW_CONTEXT_FILES if f not in shown]
-    # The spec is the change being made now (the child's task). INTAKE.md describes the app as first built, not this change,
-    # so it stands in only when no spec was given.
     parts = [f"# Change request (the spec for this change)\n{spec}" if spec else f"# INTAKE.md\n{git('show', f'{head}:INTAKE.md')}",
              f"# flags.json\n{git('show', f'{head}:flags.json')}",
              f"# Diff {base[:8]}..{head[:8]}\n{git('diff', base, head, '--', ':(exclude)*lock*')}"]
@@ -225,7 +193,6 @@ def build_review_context(git, base, head, max_chars, spec=None):
 
 
 def single_call_review(base_url, key, model, system, user, timeout=300, attempts=4):
-    # One structured chat completion. Retries overload and server errors; returns (document, usage).
     body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "response_format": {"type": "json_schema", "json_schema": {"name": "review_verdict", "schema": REVIEW_SCHEMA, "strict": True}}}
     last = None
@@ -251,9 +218,6 @@ def single_call_review(base_url, key, model, system, user, timeout=300, attempts
 
 class ReviewCode:
     def fast_review(self, base, head, rnd):
-        # The reviewer as one model call over a prompt the Orchestrator assembles (no tools, no
-        # exploring). Returns (document, cost, usage) like agent_json, or raises ContextTooLarge or
-        # FastReviewFailed, in which case the caller uses the exploring Agent.
         self.check_limits()
         role = self.cfg["roles"]["reviewer"]
         context = build_review_context(lambda *a: self.git(*a, check=False).stdout, base, head,
@@ -276,8 +240,6 @@ class ReviewCode:
         return doc, cost, usage
 
     def run_flags(self, base, head):
-        # The flags this change releases: new in `flags.json`, plus a retried story's own flag, which is already in the manifest (the failed
-        # attempt's code stayed, dark) but is tested and released again like a new one.
         base_flags = self.git("show", f"{base}:flags.json", check=False).stdout
         head_flags = self.git("show", f"{head}:flags.json", check=False).stdout
         flags = flag_manifest.new_flag_slugs(base_flags, head_flags)
@@ -286,13 +248,9 @@ class ReviewCode:
         return flags
 
     def note_improvements(self, doc, source):
-        # Keep the improvements an Agent suggested for the Report; the retrospective files them.
         self.state.d["improvements"] = suggestions.merge_improvements(self.state.d.get("improvements") or [], suggestions.improvements_from(doc, source))
 
     def review_before_push(self, base, head, rnd):
-        # The reviewer reads the local commit before anything is pushed or deployed, so code it blocks never reaches `main`. A single
-        # model call over a prompt the Orchestrator assembles, or the exploring Agent when the change is too big or the call fails.
-        # Returns (clean, blocking findings, minor findings).
         self.state.d["review_passes"] = rnd
         self.restore_tree()
         role_mode = self.cfg["roles"]["reviewer"].get("mode", "agent")

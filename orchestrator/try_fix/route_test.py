@@ -30,8 +30,8 @@ class Routing(unittest.TestCase):
             self.assertEqual(route.route(route.inferred_category(None, outcome)), "app", outcome)
         for outcome in ("round_limit", "needs_human", "crash", "stuck"):
             self.assertEqual(route.route(route.inferred_category(None, outcome)), "info", outcome)
-        self.assertEqual(route.inferred_category("plan_gap", "budget_exhausted"), "plan_gap")  # a named structural cause wins
-        self.assertEqual(route.route(route.inferred_category("prompt_gap", "budget_exhausted")), "app")  # a tester that ran dry looks like a prompt gap
+        self.assertEqual(route.inferred_category("plan_gap", "budget_exhausted"), "plan_gap", msg="a named structural cause wins")
+        self.assertEqual(route.route(route.inferred_category("prompt_gap", "budget_exhausted")), "app", msg="a tester that ran dry looks like a prompt gap")
         self.assertEqual(route.route(route.inferred_category("prompt_gap", "round_limit")), "factory")
 
 

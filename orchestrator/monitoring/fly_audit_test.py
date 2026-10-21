@@ -1,4 +1,3 @@
-# Tests for the Fly orphan audit. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import unittest
 
 from monitoring import fly_audit as f

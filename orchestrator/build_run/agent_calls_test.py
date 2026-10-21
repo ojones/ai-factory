@@ -20,7 +20,6 @@ class JsonOutput(unittest.TestCase):
     def test_the_problem_is_described_for_the_agent(self):
         self.assertIn("was not written", agent_output.json_problem(self.write(None)))
         self.assertIn("is empty", agent_output.json_problem(self.write("  \n")))
-        # What the tester wrote in the first real watchdog test: unescaped quotes inside a string.
         bad = agent_output.json_problem(self.write('{"evidence": "Response: {"intervalSeconds":2}"}'))
         self.assertIn("not valid JSON", bad)
         self.assertIn("line 1 column", bad)
@@ -67,7 +66,6 @@ class JsonOutput(unittest.TestCase):
             run.agent_json("tester", "t1", {}, path)
         self.assertIn("no valid output file twice", str(cm.exception))
         self.assertIn("last problem: it is not valid JSON", str(cm.exception))
-        # the money both attempts spent is in the Report as a stage of its own
         failed = [s for s in run.state.d["stages"] if s["stage"] == "Tester failed"]
         self.assertEqual(len(failed), 1)
         self.assertAlmostEqual(failed[0]["cost_usd"], 0.2)
@@ -89,7 +87,7 @@ class JsonOutput(unittest.TestCase):
         run.invoke, run.restore_tree = invoke, lambda cwd=None: None
         with self.assertRaises(run_stops.NeedsHuman) as cm:
             run.agent_json("tester", "t1", {}, path)
-        self.assertEqual(labels, ["t1"])  # no "t1b"
+        self.assertEqual(labels, ["t1"])
         self.assertIn("spent its whole credential", str(cm.exception))
         self.assertIn("would only repeat it", str(cm.exception))
         stage = run.state.d["stages"][-1]
@@ -113,7 +111,7 @@ class MisplacedFile(unittest.TestCase):
         self.assertTrue(agent_output.adopt_misplaced_file(run / "report.json", cwd))
         self.assertEqual((run / "report.json").read_text(), '{"a": 1}')
         (cwd / "report.json").write_text('{"a": 2}')
-        self.assertFalse(agent_output.adopt_misplaced_file(run / "report.json", cwd))  # the real file is never replaced
+        self.assertFalse(agent_output.adopt_misplaced_file(run / "report.json", cwd), msg="the real file is never replaced")
         self.assertEqual((run / "report.json").read_text(), '{"a": 1}')
         self.assertFalse(agent_output.adopt_misplaced_file(run / "other.json", cwd))
         self.assertFalse(agent_output.adopt_misplaced_file(run / "x.json", None))

@@ -1,6 +1,3 @@
-# An in-memory GrowthBook for tests: `gb(method, path, body)` returns (status, document) like the real API client does.
-
-
 class FakeGrowthBook:
     def __init__(self, features=None):
         self.features, self.calls = dict(features or {}), []

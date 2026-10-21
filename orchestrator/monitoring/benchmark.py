@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-# Whole-run benchmark: is a candidate model (or prompt) as good as the current one, and what does it save?
-#
-# The Factory swaps models as better, cheaper, faster or more specialised ones appear. A swap is only safe if it is measured on the real thing,
-# the whole Build Run, not on one role in isolation. This runs a fixed SUITE of Intakes (agents/benchmark/suite.json) through the real Build Run
-# workflow against one disposable bench app, resets that app to a frozen commit before every task, and scores each task with an ORACLE: `api_check`
-# scenarios run against the deployed app, plus the outcome the task expects. Code decides pass or fail, never a model. The result is compared with
-# the accepted BASELINE (agents/benchmark/baseline.json) under fixed RULES (agents/benchmark/rules.json), and the report says whether to accept the
-# candidate and how much cost and time it saves.
-#
-#   PYTHONPATH=orchestrator python3 -m monitoring.benchmark plan   [--candidate coder=ID,tester=ID] [--tasks a,b]    what a pass would do and cost (no spend)
-#   PYTHONPATH=orchestrator python3 -m monitoring.benchmark run    --label NAME [--candidate ...] [--tasks ...] [--execute]   a pass (without --execute it only prints the plan)
-#   PYTHONPATH=orchestrator python3 -m monitoring.benchmark compare RESULT.json                                       compare a result with the baseline
-#   PYTHONPATH=orchestrator python3 -m monitoring.benchmark accept  RESULT.json                                       make a result the new baseline
-#   PYTHONPATH=orchestrator python3 -m monitoring.benchmark freeze                                                    record the bench app's current main as the frozen base
-#
-# A candidate is a branch whose agents/profiles.yml names the candidate models; the runner files each task as an Update App Intake labelled `benchmark`, dispatches the
-# real `plan.yml` from that branch (so the planner it measures is the branch's), then dispatches the real `build-run.yml` from that branch for each child the plan filed,
-# in order, so production code carries no "benchmark mode" (the label only keeps the production workflows from starting the children with the production models). The branch also pins the limits that would make passes incomparable (no flag retirement
-# ride-along, a short watchdog, no daily cap). See docs/benchmark-protocol.md.
 import argparse
 import base64
 import json
@@ -43,7 +24,6 @@ DEFAULT_RULES = {"max_pass_drop": 1, "max_cost_ratio": 1.3, "max_rounds_delta": 
 
 
 def parse_candidate(text):
-    # {role: model} from 'coder=a/b,tester=c/d'. A blank string means the current profile (a baseline pass). Raises ValueError for a bad pair.
     out = {}
     for pair in [p.strip() for p in (text or "").split(",") if p.strip()]:
         role, _, model = pair.partition("=")
@@ -54,7 +34,6 @@ def parse_candidate(text):
 
 
 def candidate_profile(profile_text, overrides):
-    # The profiles.yml text for a pass: the given roles switched to the candidate models, and the limits that keep passes comparable.
     doc = yaml.safe_load(profile_text)
     for role, model in overrides.items():
         if role not in doc.get("roles", {}):
@@ -68,7 +47,6 @@ def candidate_profile(profile_text, overrides):
 
 
 def validate_suite(suite):
-    # Problems with a suite file (empty means usable).
     problems, seen = [], set()
     tasks = suite.get("tasks") if isinstance(suite, dict) else None
     if not isinstance(tasks, list) or not tasks:
@@ -95,7 +73,6 @@ def validate_suite(suite):
 
 
 def fill_request(request, pass_id, seed_flag=""):
-    # `{pass}` is a short id of the pass; `{seed_flag}` is the flag the bench app was seeded with (`issue-<n>`, named after its story), which the retirement task removes.
     return request.replace("{pass}", pass_id).replace("{seed_flag}", seed_flag)
 
 
@@ -111,8 +88,6 @@ def select_tasks(suite, names):
 
 
 def score_task(task, report, oracle_results):
-    # One task's score from its Build Run Report (state.json) and the oracle's results. The outcome must be one the task expects, the cost must
-    # stay under any `max_cost` it sets, and every oracle check must pass: nothing here asks a model.
     outcome = (report or {}).get("outcome")
     expected = task.get("expected") or {}
     cost = float((report or {}).get("spent_usd") or 0)
@@ -129,8 +104,6 @@ PLANNING_STOP = re.compile(r"\*\*Planning stopped \(([a-z ]+)\)")
 
 
 def planning_ending(comments, children):
-    # How planning ended: `planned` when it filed children, else the ending it commented ("refused", "needs_human", "awaiting_secret"), else None (it
-    # produced neither: the run failed before it could say).
     if children:
         return "planned"
     for body in reversed(comments or []):
@@ -141,8 +114,6 @@ def planning_ending(comments, children):
 
 
 def child_order(children):
-    # The issue numbers of a plan's children in the order they run: a child after every child that blocks it, otherwise by number. `children` are
-    # [{number, blockers: [numbers]}]; a blocker outside the plan is ignored.
     numbers = {c["number"] for c in children}
     waiting = {c["number"]: {b for b in c.get("blockers", []) if b in numbers} for c in children}
     out = []
@@ -156,7 +127,6 @@ def child_order(children):
 
 
 def ledger_cost(ledger_lines, run_id):
-    # What the spend ledger recorded for a run id (a planning run is recorded as `<run id>-plan`), or 0.0.
     for line in ledger_lines:
         m = re.search(rf"\b(\d+(?:\.\d+)?) run:{re.escape(str(run_id))}-plan\b", line)
         if m:
@@ -165,13 +135,10 @@ def ledger_cost(ledger_lines, run_id):
 
 
 def planning_report(ending, cost, started=None, finished=None):
-    # The Report of a task that ended at planning (no Build Run was started).
     return {"outcome": ending, "spent_usd": round(cost, 4), "review_passes": 0, "started_at": started, "finished_at": finished}
 
 
 def merge_reports(plan_cost, reports):
-    # One Report for a task whose plan filed children: the first ending that is not good, else the last; cost, rounds and time added up with the planner's cost.
-    # None when no Build Run produced a report.
     reports = [r for r in reports if r]
     if not reports:
         return None
@@ -181,13 +148,11 @@ def merge_reports(plan_cost, reports):
 
 
 def newest_run_after(runs, before_id):
-    # The id of the first run started after the dispatch: `runs` newest first, `before_id` the newest id seen before it (0 when none).
     newer = [r["databaseId"] for r in runs if r["databaseId"] > (before_id or 0)]
     return min(newer) if newer else None
 
 
 def minutes_between(a, b):
-    # Minutes between two ISO timestamps, or None if either cannot be read.
     try:
         fmt = "%Y-%m-%dT%H:%M:%S"
         return round((time.mktime(time.strptime(b[:19], fmt)) - time.mktime(time.strptime(a[:19], fmt))) / 60, 1)
@@ -196,7 +161,6 @@ def minutes_between(a, b):
 
 
 def aggregate(scores):
-    # Totals over a pass: how many tasks passed, total cost and time, mean rounds of the tasks that ran Agents, and the failures by task.
     n = len(scores)
     ran = [s for s in scores if s["rounds"]]
     minutes = [s["minutes"] for s in scores if s["minutes"] is not None]
@@ -206,10 +170,6 @@ def aggregate(scores):
 
 
 def compare(candidate, baseline, rules=None):
-    # {accept, reasons, deltas, improvement} for a candidate pass against the accepted baseline under the rules. The candidate is accepted only
-    # if its pass count is within `max_pass_drop` of the baseline's, every task tagged in `must_pass_tags` that passed in the baseline still passes,
-    # its cost is within `max_cost_ratio` times the baseline's and its mean rounds rise by at most `max_rounds_delta`. A faster or cheaper candidate
-    # that stays inside those bounds is reported as an improvement.
     rules = {**DEFAULT_RULES, **(rules or {})}
     reasons = []
     drop = baseline["passed"] - candidate["passed"]
@@ -249,8 +209,6 @@ def render_report(label, candidate_models, agg, verdict=None):
 
 
 def estimate(tasks):
-    # A rough price and duration for a pass, from what real runs have cost: planning $0.04 to $0.10 and about 5 minutes, then $0.1 to $0.6 and 16 to 35 minutes for each
-    # Build Run (a task is one child unless its plan splits); a refusal ends at planning and costs the planner at most.
     ran = [t for t in tasks if "refusal" not in t.get("tags", [])]
     return {"runs": len(ran), "refusals": len(tasks) - len(ran), "cost_low": round(0.16 * len(ran), 2), "cost_high": round(0.7 * len(ran) + 0.1 * (len(tasks) - len(ran)), 2),
             "hours_low": round(0.35 * len(ran), 1), "hours_high": round(0.7 * len(ran), 1)}
@@ -268,7 +226,6 @@ def gh(args, token=None, check=True):
 
 
 def publish_branch(repo, branch, profile_text):
-    # Create `branch` from main with agents/profiles.yml replaced by `profile_text` (through the API, so no local checkout is needed).
     sha = gh(["api", f"repos/{repo}/git/ref/heads/main", "--jq", ".object.sha"]).strip()
     gh(["api", "-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch}", "-f", f"sha={sha}"])
     file_sha = gh(["api", f"repos/{repo}/contents/agents/profiles.yml?ref={branch}", "--jq", ".sha"]).strip()
@@ -281,8 +238,6 @@ def delete_branch(repo, branch):
 
 
 def reset_bench(owner, app, base_sha):
-    # Force the bench app's main back to the frozen commit, and wait for that commit's deploy if main moved (an older deploy finishing
-    # after a newer one would put the app back). Returns True if main moved.
     header = "Authorization: Basic " + __import__("base64").b64encode(f"x-access-token:{os.environ['FACTORY_PAT']}".encode()).decode()
     env = {**os.environ, **github.git_auth_env(header)}
     work = tempfile.mkdtemp(prefix="bench-")
@@ -313,7 +268,6 @@ def file_task_issue(repo, app, pass_id, task, seed_flag=""):
 
 
 def dispatch_and_wait(repo, workflow, branch, inputs, timeout_min=75):
-    # Dispatch a real workflow (`plan.yml` or `build-run.yml`) from the candidate branch and wait for it. Returns the run id, or None if it never started.
     def runs():
         return json.loads(gh(["run", "list", "--repo", repo, "--workflow", workflow, "--branch", branch, "--limit", "10", "--json", "databaseId,status,createdAt"], check=False) or "[]")
     before = max([r["databaseId"] for r in runs()] or [0])
@@ -330,7 +284,6 @@ def dispatch_and_wait(repo, workflow, branch, inputs, timeout_min=75):
 
 
 def plan_children(repo, issue):
-    # The Intake's child tickets, [{number, blockers}], from GitHub's sub-issues and dependencies.
     out = json.loads(gh(["api", f"repos/{repo}/issues/{issue}/sub_issues?per_page=100"], check=False) or "[]")
     return [{"number": c["number"], "blockers": [b["number"] for b in json.loads(gh(["api", f"repos/{repo}/issues/{c['number']}/dependencies/blocked_by"], check=False) or "[]")]} for c in out]
 
@@ -344,8 +297,6 @@ def planning_cost(repo, run_id):
 
 
 def run_task(repo, app, branch, issue):
-    # One task end to end, as a real request: plan the Intake from the candidate branch, then run the Build Run of each child it filed, in order, stopping at the first
-    # child that does not release. Returns the task's Report (state.json shape), or None if nothing ran.
     plan_run = dispatch_and_wait(repo, "plan.yml", branch, {"issue_number": issue}, timeout_min=30)
     cost = planning_cost(repo, plan_run)
     children = plan_children(repo, issue)
@@ -371,7 +322,6 @@ def read_report(repo, run_id):
 
 
 def run_oracle(app, task):
-    # The task's setup checks, then its oracle checks, through api_check against the deployed bench app.
 
     checks = list(task.get("setup", [])) + list(task.get("oracle", {}).get("checks", []))
     if not checks:
@@ -383,7 +333,6 @@ def run_oracle(app, task):
 
 
 def archive_bench_flags(app, keep=("bench-seed",)):
-    # Archive the features a pass created (GrowthBook cannot delete one), so a later pass starts clean. Best effort.
     status, r = http_client.request("GET", f"{config.GROWTHBOOK_API}/features?limit=500", os.environ["GROWTHBOOK_ADMIN_PAT"])
     for f in (r.get("features") or []) if isinstance(r, dict) else []:
         fid = f.get("id", "")

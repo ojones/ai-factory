@@ -1,4 +1,3 @@
-# One small JSON-over-HTTP call (status, parsed body), used for the model provider, GrowthBook and Fly. Never raises on a network error.
 import json
 import urllib.error
 import urllib.request

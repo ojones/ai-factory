@@ -1,5 +1,3 @@
-# STEP 7.4: when a learning PR that fixes a Factory cause merges, the child that failed because of it is started again with the PAT. The PR says which child
-# (`failed-child` marker in its body). A child that is no longer waiting for this (closed, or already started) is left alone.
 import json
 import os
 import sys
@@ -11,7 +9,6 @@ from try_fix import factory_fix_request
 
 
 def resume(repo, pat, token, pr_body):
-    # Returns the number of the child that was started again, or None.
     number = factory_fix_request.read_failed_child(pr_body)
     if not number:
         return None
@@ -21,7 +18,7 @@ def resume(repo, pat, token, pr_body):
         return None
     github.run(["issue", "edit", str(number), "--repo", repo, "--remove-label", "needs-human"], token)
     github.run(["issue", "comment", str(number), "--repo", repo, "--body", "The fix for the Factory was merged, so this change set starts again."], token)
-    github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", intake_labels.START], pat)  # the PAT: the Actions token would not start the workflow
+    github.run(["issue", "edit", str(number), "--repo", repo, "--add-label", intake_labels.START], pat)
     return number
 
 

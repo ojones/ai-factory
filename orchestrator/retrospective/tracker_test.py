@@ -31,7 +31,7 @@ class SightingCount(unittest.TestCase):
         body, runs, apps = tracker.with_sighting("A lesson.", "https://x/runs/1", "todo")
         self.assertEqual((runs, apps), (1, 1))
         again, runs, apps = tracker.with_sighting(body, "https://x/runs/1", "todo")
-        self.assertEqual((again, runs, apps), (body, 1, 1))  # the same run reported twice changes nothing
+        self.assertEqual((again, runs, apps), (body, 1, 1), msg="the same run reported twice changes nothing")
         body, runs, apps = tracker.with_sighting(body, "https://x/runs/2", "notes")
         self.assertEqual((runs, apps), (2, 2))
         self.assertEqual(body.count("<!-- seen:"), 1)

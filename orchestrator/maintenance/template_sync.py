@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-# Template sync: a Starter Template improvement reaches the Managed Apps that were seeded before it.
-#
-# An app is seeded once from `templates/starter/`. Without this, a better linter, test script or default never reaches an app that
-# already exists, and the learning loop's fixes only help new apps. Each app carries `.factory-template`, the ai-factory commit its
-# template files correspond to (App Staging writes it; an older app has none, so the commit current when its repo was created is
-# used). When the template has changed since then, this files one Update App Intake per app that gives the coder the template's own diff
-# and starts it. The coder applies it to the app's corresponding files, keeps the app's own code, and writes the new commit into
-# `.factory-template`.
-#
-#   python3 template_sync.py       (run from a full checkout of ai-factory; nightly by template-sync.yml, or by hand)
-#
-# Only files an Agent may change are synced. The protected ones (.github/, fly.toml, fly/, feature-flags.ts) are listed in the
-# Intake as "not applied" for a person. One Intake per app and target commit (a failed one is not refiled; its fix request is), and one
-# open at a time per app. Env: FACTORY_PAT, FACTORY_GH_TOKEN, GITHUB_REPOSITORY.
 import base64
 import os
 import re
@@ -24,13 +10,12 @@ from shared import app_state_record, config, console, shell, starter_template
 LABEL = "template-sync"
 STAMP = ".factory-template"
 TEMPLATE = "templates/starter/"
-SKIP = ("package-lock.json",)  # the coder regenerates it with npm install
+SKIP = ("package-lock.json",)
 MAX_DIFF_CHARS = 20000
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def parse_name_status(text):
-    # [(status, path)] with the template prefix removed, from `git diff --name-status -M` output.
     out = []
     for line in (text or "").splitlines():
         parts = line.split("\t")
@@ -40,12 +25,10 @@ def parse_name_status(text):
 
 
 def orchestrator_applied(changes):
-    # The changed paths the Build Run copies itself (starter_template.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR), which no Agent applies or reports.
     return [path for _, path in changes if path in starter_template.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR]
 
 
 def split_changes(changes):
-    # (applicable, protected, ignored) path lists from [(status, path)]. Files the Orchestrator applies itself are in none of them.
     applicable, protected, ignored = [], [], []
     for status, path in changes:
         if path in starter_template.TEMPLATE_FILES_OWNED_BY_ORCHESTRATOR:
@@ -65,7 +48,6 @@ def stamp_value(text):
 
 
 def should_sync(applicable, target, stamp, filed_titles, open_for_app, app):
-    # True when there is something to apply, the app is behind, this target was not already filed, and nothing is open.
     if not applicable or stamp == target or open_for_app:
         return False
     return not any(f"[sync {target[:7]}]" in t for t in filed_titles)
@@ -105,7 +87,6 @@ def app_stamp(owner, app, pat):
 
 
 def baseline(owner, app, pat):
-    # The ai-factory commit the app's template files correspond to: its stamp, else the commit current when its repo was created.
     stamp = app_stamp(owner, app, pat)
     if stamp and git("cat-file", "-t", stamp).strip() == "commit":
         return stamp
@@ -130,7 +111,7 @@ def main():
             if not should_sync(applicable or by_orchestrator, target, app_stamp(owner, app, pat), titles, open_now, app):
                 continue
             paths = [p for _, p in applicable]
-            diff_text = git("diff", "-M", base, target, "--", *[TEMPLATE + p for p in paths]) if paths else ""  # no paths would diff everything
+            diff_text = git("diff", "-M", base, target, "--", *[TEMPLATE + p for p in paths]) if paths else ""
             n = file_intake.file_update_app_intake(repo, token, pat, app, f"{app}: template sync [sync {target[:7]}]",
                                sync_request(app, target, base, applicable, protected, diff_text, by_orchestrator), LABEL,
                                "Filed and started by the Orchestrator to bring an app up to the Starter Template",

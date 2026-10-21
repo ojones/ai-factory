@@ -1,4 +1,3 @@
-# Tests for the model canary. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import unittest
 
 import yaml

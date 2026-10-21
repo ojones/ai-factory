@@ -1,4 +1,3 @@
-# Looking up the Intakes already filed for an app, so a source does not file the same one twice.
 import json
 
 from shared import github

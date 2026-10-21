@@ -1,6 +1,3 @@
-# The Factory and information routes (STEP 7.2, 7.5): an issue in ai-factory for a cause that is not the app's. A Factory cause (a prompt, the planner, the
-# Starter Template, the orchestrator) is also given to the retrospective Agent, whose learning PR resumes the failed child when it merges
-# (`resume_after_merge`); the issue records which child that is. One open fix request per failed child and route: a run that fails again adds a comment.
 import hashlib
 import json
 import re
@@ -19,19 +16,15 @@ def failed_child_marker(number):
 
 
 def read_failed_child(text):
-    # The number of the child a PR or an issue says it is for, or None.
     m = FAILED_RE.search(text or "")
     return int(m.group(1)) if m else None
 
 
 def fingerprint(app, child, target):
-    # One per app, failed child and route, so a repeat failure of the same child comments instead of filing again.
     return hashlib.sha1(f"{app}|{child}|{target}".encode()).hexdigest()[:8]
 
 
 def file_bug_request(repo, token, verdict, doc, run_url, target):
-    # The Factory and information routes for a bug written by the Try Fix Agent (STEP 7.2, 7.5): the same template, in ai-factory. One open per app, failed child and route.
-    # A planned child that failed is held `needs-human` until the fix merges (a Factory cause) or a person decides.
     ev = verdict["event"]
     story = ev.get("story")
     fp = fingerprint(ev["app"], story or verdict["key"], target)
@@ -50,7 +43,6 @@ def file_bug_request(repo, token, verdict, doc, run_url, target):
 
 
 def file_request(repo, token, facts, result, rollback, target, category):
-    # Returns {"action", "url"}.
     app, number = facts.get("app"), facts.get("issue_number")
     fp = fingerprint(app, number, target)
     for name, color, desc in ((LABEL, "d93f0b", "What has to be fixed after a Build Run ended badly"), (FACTORY_LABEL, "5319e7", "A fix request for the Factory itself")):

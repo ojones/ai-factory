@@ -44,7 +44,7 @@ class Children(unittest.TestCase):
             self.tickets.file("t", "b", [])
         self.assertIn("422", str(cm.exception))
         made = [i for n, i in self.gh.issues.items() if n != 7]
-        self.assertEqual([i["state"] for i in made], ["closed"])  # no open orphan
+        self.assertEqual([i["state"] for i in made], ["closed"], msg="no open orphan")
         self.assertEqual(self.gh.subs, {})
 
     def test_a_failed_create_raises(self):
@@ -59,9 +59,9 @@ class Children(unittest.TestCase):
         self.assertTrue(self.tickets.is_ready(a))
         self.assertFalse(self.tickets.is_ready(b))
         self.gh.issues[a]["state"] = "closed"
-        self.assertTrue(self.tickets.is_ready(b))  # closing the blocker does not remove it from the list; its state decides
+        self.assertTrue(self.tickets.is_ready(b), msg="closing the blocker does not remove it from the list; its state decides")
         self.gh.issues[b]["state"] = "closed"
-        self.assertFalse(self.tickets.is_ready(b))  # a closed child is not ready to start
+        self.assertFalse(self.tickets.is_ready(b), msg="a closed child is not ready to start")
 
     def test_a_blocker_that_cannot_be_added_raises(self):
         a, b = self.tickets.file("a", "", []), self.tickets.file("b", "", [])

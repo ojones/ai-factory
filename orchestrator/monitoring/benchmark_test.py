@@ -1,4 +1,3 @@
-# Tests for the benchmark's pure logic. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import json
 import unittest
 
@@ -30,8 +29,8 @@ class Candidate(unittest.TestCase):
         text = (ROOT / "agents" / "profiles.yml").read_text()
         doc = yaml.safe_load(bm.candidate_profile(text, {"coder": "deepseek-ai/New-1"}))
         self.assertEqual(doc["roles"]["coder"]["model"], "deepseek-ai/New-1")
-        self.assertEqual(doc["roles"]["tester"]["model"], yaml.safe_load(text)["roles"]["tester"]["model"])  # untouched
-        self.assertEqual(doc["limits"]["flag_retirement"]["piggyback_max"], 0)  # a ride-along retirement would make passes incomparable
+        self.assertEqual(doc["roles"]["tester"]["model"], yaml.safe_load(text)["roles"]["tester"]["model"], msg="untouched")
+        self.assertEqual(doc["limits"]["flag_retirement"]["piggyback_max"], 0, msg="a ride-along retirement would make passes incomparable")
         self.assertEqual(doc["limits"]["daily_cost_cap_usd"], 0)
         with self.assertRaises(ValueError):
             bm.candidate_profile(text, {"nonrole": "a/b"})
@@ -44,8 +43,8 @@ class Suite(unittest.TestCase):
         for t in suite["tasks"]:
             checks = t.get("setup", []) + t["oracle"]["checks"]
             if checks:
-                self.assertIsNone(api_check.validate(checks)[1], t["id"])  # the same file format the tester's helper reads
-        self.assertTrue({"refusal"} & {tag for t in suite["tasks"] for tag in t["tags"]})  # refusals are part of the suite
+                self.assertIsNone(api_check.validate(checks)[1], t["id"])
+        self.assertTrue({"refusal"} & {tag for t in suite["tasks"] for tag in t["tags"]}, msg="refusals are part of the suite")
         json.loads((ROOT / "agents" / "benchmark" / "rules.json").read_text())
 
     def test_problems_are_found(self):
@@ -57,7 +56,7 @@ class Suite(unittest.TestCase):
         suite = {"app": "b", "base_sha": "abc", "tasks": [{"id": "r", "request": "retire-flag: {seed_flag}", "expected": {"outcomes": ["released"]}, "oracle": {"checks": []}}]}
         self.assertTrue(any("seed_flag" in x for x in bm.validate_suite(suite)))
         self.assertEqual(bm.validate_suite(dict(suite, seed_flag="issue-142")), [])
-        self.assertEqual(bm.validate_suite(dict(suite, base_sha="")), [])  # before the bench app is frozen there is nothing to check
+        self.assertEqual(bm.validate_suite(dict(suite, base_sha="")), [], msg="before the bench app is frozen there is nothing to check")
 
     def test_pass_ids_make_flag_names_unique_and_task_selection_checks_names(self):
         self.assertEqual(bm.fill_request("flag `v-{pass}`", "10141200"), "flag `v-10141200`")
@@ -75,7 +74,7 @@ class Scoring(unittest.TestCase):
         self.assertFalse(bm.score_task(t, report(cost=0.9), [])["passed"])
         failed = bm.score_task(t, report(), [{"id": "a", "ok": True}, {"id": "b", "ok": False}])
         self.assertEqual((failed["passed"], failed["oracle_failed"]), (False, ["b"]))
-        self.assertFalse(bm.score_task(t, None, [])["passed"])  # no report at all
+        self.assertFalse(bm.score_task(t, None, [])["passed"], msg="no report at all")
 
     def test_minutes_come_from_the_timestamps(self):
         self.assertEqual(bm.score_task(task(), report(), [])["minutes"], 20.0)
@@ -98,7 +97,7 @@ class Comparison(unittest.TestCase):
         self.assertFalse(bm.compare(agg(4, 1.0, 60, 1.5), self.base)["accept"])
         self.assertFalse(bm.compare(agg(6, 3.0, 100, 1.5), self.base)["accept"])
         self.assertFalse(bm.compare(agg(6, 2.0, 100, 2.5), self.base)["accept"])
-        self.assertTrue(bm.compare(agg(5, 2.0, 120, 1.5), self.base)["accept"])  # one task fewer is allowed, and not an improvement
+        self.assertTrue(bm.compare(agg(5, 2.0, 120, 1.5), self.base)["accept"], msg="one task fewer is allowed, and not an improvement")
         self.assertFalse(bm.compare(agg(5, 2.0, 120, 1.5), self.base)["improvement"])
 
     def test_a_safety_task_that_regresses_rejects_the_candidate_whatever_else_it_saves(self):
@@ -127,26 +126,26 @@ class Planned(unittest.TestCase):
         self.assertEqual(bm.planning_ending(["**Planning stopped (needs human):** a question"], []), "needs_human")
         self.assertEqual(bm.planning_ending(["**Planning stopped (awaiting secret):** x"], []), "awaiting_secret")
         self.assertIsNone(bm.planning_ending(["unrelated"], []))
-        self.assertEqual(bm.planning_ending(["**Planning stopped (needs human):** old", "**Planning stopped (refused):** new"], []), "refused")  # the last word
+        self.assertEqual(bm.planning_ending(["**Planning stopped (needs human):** old", "**Planning stopped (refused):** new"], []), "refused", msg="the last word")
 
     def test_children_run_after_what_blocks_them_and_otherwise_by_number(self):
         self.assertEqual(bm.child_order([{"number": 12, "blockers": [11]}, {"number": 11, "blockers": []}, {"number": 13, "blockers": [12]}]), [11, 12, 13])
-        self.assertEqual(bm.child_order([{"number": 9, "blockers": [99]}, {"number": 8}]), [8, 9])  # a blocker outside the plan is ignored
+        self.assertEqual(bm.child_order([{"number": 9, "blockers": [99]}, {"number": 8}]), [8, 9], msg="a blocker outside the plan is ignored")
         with self.assertRaises(ValueError):
             bm.child_order([{"number": 1, "blockers": [2]}, {"number": 2, "blockers": [1]}])
 
     def test_the_planners_cost_is_read_from_the_ledger_by_its_run_id(self):
         lines = ["ledger 2026-10-20 factory-bench 0.0482 run:111-plan", "ledger 2026-10-20 factory-bench 0.1306 run:222", "ledger 2026-10-20 factory-bench 0.0900 run:333-plan"]
         self.assertEqual(bm.ledger_cost(lines, 111), 0.0482)
-        self.assertEqual(bm.ledger_cost(lines, 222), 0.0)  # a Build Run's own line is not a planning cost
+        self.assertEqual(bm.ledger_cost(lines, 222), 0.0)
         self.assertEqual(bm.ledger_cost(lines, 1), 0.0)
 
     def test_a_task_that_ends_at_planning_scores_on_the_planning_ending_and_its_cost(self):
         refusal = task("refuse-payments", outcomes=("refused",), tags=("refusal",), max_cost=0.25)
         ok = bm.score_task(refusal, bm.planning_report("refused", 0.06), [])
         self.assertTrue(ok["passed"])
-        self.assertFalse(bm.score_task(refusal, bm.planning_report("refused", 0.5), [])["passed"])  # over its cost limit
-        self.assertFalse(bm.score_task(refusal, bm.planning_report("needs_human", 0.06), [])["passed"])  # the wrong ending
+        self.assertFalse(bm.score_task(refusal, bm.planning_report("refused", 0.5), [])["passed"], msg="over its cost limit")
+        self.assertFalse(bm.score_task(refusal, bm.planning_report("needs_human", 0.06), [])["passed"], msg="the wrong ending")
 
     def test_a_plan_with_several_children_is_one_report_with_everything_added_up(self):
         a = {"outcome": "released", "spent_usd": 0.1, "review_passes": 1, "started_at": "2026-10-20T10:00:00", "finished_at": "2026-10-20T10:20:00"}
@@ -155,27 +154,27 @@ class Planned(unittest.TestCase):
         self.assertEqual((got["outcome"], got["spent_usd"], got["review_passes"], got["started_at"], got["finished_at"]),
                          ("released", 0.35, 3, "2026-10-20T10:00:00", "2026-10-20T10:50:00"))
         stuck = bm.merge_reports(0.05, [a, dict(b, outcome="round_limit")])
-        self.assertEqual(stuck["outcome"], "round_limit")  # the first ending that is not good
-        self.assertIsNone(bm.merge_reports(0.05, [None]))  # nothing ran
+        self.assertEqual(stuck["outcome"], "round_limit", msg="the first ending that is not good")
+        self.assertIsNone(bm.merge_reports(0.05, [None]), msg="nothing ran")
 
     def test_the_run_started_by_the_dispatch_is_the_first_one_newer_than_what_was_there_before(self):
         runs = [{"databaseId": 30}, {"databaseId": 20}, {"databaseId": 10}]
         self.assertEqual(bm.newest_run_after(runs, 20), 30)
-        self.assertEqual(bm.newest_run_after(runs, 5), 10)  # the earliest new one, not a stale newest
+        self.assertEqual(bm.newest_run_after(runs, 5), 10, msg="the earliest new one, not a stale newest")
         self.assertIsNone(bm.newest_run_after(runs, 30))
         self.assertEqual(bm.newest_run_after(runs, None), 10)
 
     def test_the_seed_flag_is_filled_into_a_request_and_the_estimate_counts_a_refusal_as_planning_only(self):
         self.assertEqual(bm.fill_request("retire-flag: {seed_flag} at {pass}", "0101", "issue-142"), "retire-flag: issue-142 at 0101")
         est = bm.estimate([task("a"), task("r", tags=["refusal"])])
-        self.assertGreater(est["cost_low"], 0.12)  # the planner is in every task's price
+        self.assertGreater(est["cost_low"], 0.12)
 
 
 class DryRun(unittest.TestCase):
     def test_plan_spends_nothing_and_a_bad_candidate_is_an_error(self):
         self.assertEqual(bm.main(["benchmark.py", "plan"]), 0)
         self.assertEqual(bm.main(["benchmark.py", "plan", "--candidate", "bogus"]), 2)
-        self.assertEqual(bm.main(["benchmark.py", "run", "--tasks", "nope"]), 2)  # without --execute it is still only a plan
+        self.assertEqual(bm.main(["benchmark.py", "run", "--tasks", "nope"]), 2, msg="without --execute it is still only a plan")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,3 @@
-# STEP 6.2: how many bug tickets the Factory already filed for an app today (UTC), so `fix_events_per_app_per_day` can stop a noisy app's warnings from
-# turning into a stream of fixes. Every bug Intake counts (label `bug` and `app:<app>` in ai-factory); failures are not limited by it, only warnings.
 import json
 from datetime import datetime, timezone
 

@@ -1,4 +1,3 @@
-# STEP 4.3 and 4.4: one coder round, the checks on its commit (protected files, secrets, the retirement verifier), and the pre-review `npm run check`.
 import json
 import os
 import subprocess
@@ -18,8 +17,6 @@ from shared.shell import sh
 
 class WriteCode:
     def coder(self, label, task, findings_path):
-        # Run the coder until it leaves an acceptable commit (several attempts if the Orchestrator rejects one). It commits only: the
-        # reviewer sees the commit before it is pushed (`push`).
         task0, attempts = task, 0
         base = self.head()
         while True:
@@ -65,8 +62,6 @@ class WriteCode:
         return None
 
     def secret_problem(self, base, head):
-        # Reject a commit that adds a real secret value, or that lists in `secrets.json` a name the plan did not declare (the deploy step
-        # copies every listed name to the running app). A value is discarded with the commit and never repeated; the coder is told the kind.
         kinds = triage.diff_secrets(self.git("diff", f"{base}..{head}", check=False).stdout)
         if kinds:
             self.git("reset", "-q", "--hard", base)
@@ -84,15 +79,12 @@ class WriteCode:
             known = {x.get("name") for x in json.loads(earlier.stdout).get("secrets", [])} if earlier.returncode == 0 else set()
         except (ValueError, AttributeError):
             known = set()
-        declared = set(self.state.d.get("secrets") or []) | known  # a name already in the app's secrets.json was accepted by an earlier run
+        declared = set(self.state.d.get("secrets") or []) | known
         bad = [n for n in names if n not in declared or triage.secret_name_problem(n)]
         return (f"`secrets.json` lists {', '.join(map(str, bad))}, which the plan did not declare. List only the secrets named in the request's Secrets note."
                 if bad else None)
 
     def check_problem(self):
-        # Run the app's own `npm run check` (type-check and lint, the Test Gate's first step) on the coder's commit, as the Agent user, and
-        # return what to tell the coder when it fails, so a mechanical error costs a coder attempt and not a review, a push and a CI run.
-        # It only reads: the formatter stays the coder's. None when it passes, the app has no such script or it could not be run.
         try:
             scripts = json.loads((self.app_dir / "package.json").read_text()).get("scripts", {})
         except (OSError, ValueError):

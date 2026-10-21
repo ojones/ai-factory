@@ -1,13 +1,8 @@
-# STEP 6.2, 6.7: the Retrospective's verdict on each failure event. The Agent names, per event, a verdict (`fix` or `record`), a target (`managed_app` or
-# `factory`), a cause and a reason; this file turns that, or the lack of it, into a verdict for every event. The rules are code, not prompt:
-#   a failure is always fixed (the Agent cannot downgrade it); a warning is fixed only when the Agent says `fix` and gives a reason;
-#   with no answer a failure is `fix` and a warning is `record`; at most `fix_events_per_app_per_day` warnings are fixed per app per day.
 VERDICTS = ("fix", "record")
 TARGETS = ("managed_app", "factory")
 
 
 def parse(result):
-    # {event key: the Agent's entry} from the Agent's result, ignoring anything malformed.
     entries = (result or {}).get("events")
     if not isinstance(entries, list):
         return {}
@@ -15,7 +10,6 @@ def parse(result):
 
 
 def decide(events, agent_entries=None, limits=None, fixed_today=0):
-    # One verdict per event: {key, verdict, target, cause, reason, event}. `fixed_today` counts the warnings already fixed for the app today.
     lim, entries, used = limits or {}, agent_entries or {}, int(fixed_today)
     cap = int(lim.get("fix_events_per_app_per_day", 3))
     out = []
@@ -31,7 +25,7 @@ def decide(events, agent_entries=None, limits=None, fixed_today=0):
             verdict, why = "record", f"the daily limit of {cap} fixed warnings for this app is used"
         else:
             verdict, why = "record", reason or ("a fix needs a reason" if asked == "fix" else "no fix was asked for")
-        target = said.get("target") if said.get("target") in TARGETS else None  # none named: the filing falls back to the cause (try_fix/route.py)
+        target = said.get("target") if said.get("target") in TARGETS else None
         out.append({"key": ev["key"], "verdict": verdict, "target": target, "cause": said.get("cause") or None, "reason": why, "event": ev})
     return out
 

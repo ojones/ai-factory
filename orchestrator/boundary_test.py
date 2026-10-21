@@ -1,6 +1,3 @@
-# The import rules between domains (docs/orchestrator-map.md, Rules). A domain is a folder under orchestrator/; `shared` holds what two or more
-# domains use and imports no domain. A new edge is a deliberate edit to ALLOWED here and to the map doc.
-# Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import ast
 import unittest
 from pathlib import Path
@@ -11,7 +8,7 @@ ALLOWED = {
     "request": set(),
     "planning": {"request"},
     "staging": {"request", "try_fix"},
-    "build_run": {"request", "flag_lifecycle", "planning", "try_fix"},  # until the planning process takes plan_change out of the Build Run (ticket 13)
+    "build_run": {"request", "flag_lifecycle", "planning", "try_fix"},
     "flag_lifecycle": {"request"},
     "retrospective": {"try_fix", "request", "flag_lifecycle"},
     "try_fix": {"request", "planning"},

@@ -1,6 +1,3 @@
-# STEP 7.6: the check on what the Try Fix Agent wrote, before it becomes a ticket. Returns the cleaned document and the problems; any problem means the
-# Orchestrator writes the ticket itself (write_bug.fallback). A secret value is never allowed into a public issue (INV-50), and a requirement the
-# planner and tester cannot check ("improve", "consider") would only move the vagueness into the work.
 import re
 
 from planning import triage
@@ -16,7 +13,6 @@ REDACTED = "(secret value redacted)"
 
 
 def scrub(text):
-    # `text` with anything shaped like a secret replaced, for evidence copied from a log before it reaches the model or a public issue.
     for _, pattern in triage.SECRET_PATTERNS:
         text = pattern.sub(REDACTED, text or "")
     return text
@@ -53,5 +49,5 @@ def check(doc, max_criteria):
             problems.append(f"requirement is not checkable: {r[:80]!r}")
     kinds = triage.find_secrets(" ".join([out["how_found"], out["root_cause"]] + out["what_it_takes"] + reqs))
     if kinds:
-        problems.append("it contains " + ", ".join(kinds))  # never the value
+        problems.append("it contains " + ", ".join(kinds))
     return out, problems

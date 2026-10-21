@@ -49,7 +49,6 @@ class InstallDependencies(unittest.TestCase):
 
 class ModelFallback(unittest.TestCase):
     def run_for(self, answers, roles=None):
-        # A BuildRun whose provider answers per model id (status, body).
         run = object.__new__(BuildRun)
         run.cfg = {"provider": {"base_url": "https://llm"}, "roles": roles or {
             "coder": {"model": "a/coder", "fallback_model": "z/fallback"}, "tester": {"model": "t/tester"}, "reviewer": {"model": "r/rev"}, "planner": {"model": "p/plan"}}}
@@ -68,7 +67,7 @@ class ModelFallback(unittest.TestCase):
             run.check_models()
         self.assertEqual(run.cfg["roles"]["coder"]["model"], "z/fallback")
         self.assertEqual(run.state.d["fallbacks"]["coder"], {"from": "a/coder", "to": "z/fallback"})
-        self.assertEqual(run.cfg["roles"]["tester"]["model"], "t/tester")  # a role whose model is served is left alone
+        self.assertEqual(run.cfg["roles"]["tester"]["model"], "t/tester", msg="a role whose model is served is left alone")
 
     def test_a_missing_model_with_no_fallback_stops_the_run_with_the_reason(self):
         run, _, fake = self.run_for({"r/rev": (400, {"error": {"message": "The model `r/rev` does not exist"}})})
@@ -109,7 +108,6 @@ class ModelFallback(unittest.TestCase):
 
 
 class ChoosingFlagsToRetire(unittest.TestCase):
-    # BuildRun.choose_flags_to_retire with the State issue and manifest mocked.
 
     def run_for(self, flags, *, fix=None, task="Add a button", manifest="a,b,c,d", boom=False):
         run = object.__new__(BuildRun)
@@ -173,7 +171,6 @@ class NamingTheFlag(unittest.TestCase):
             self.assertIn("issue-12", run.spec)
 
     def test_an_issue_that_runs_again_keeps_the_flag_it_had_and_creates_and_commits_nothing(self):
-        # A failed child resumes after its fix closes: its flag exists, off, from the earlier attempt (and may already be in flags.json).
         with tempfile.TemporaryDirectory() as tmp:
             run = self.run_for(tmp)
             run.gb.features = dict(getattr(run.gb, "features", {}))
@@ -183,8 +180,8 @@ class NamingTheFlag(unittest.TestCase):
             again.gb = run.gb
             again.name_the_flag()
             self.assertIn("slug `issue-12`", again.task)
-            self.assertNotIn("created_flag", again.state.d)  # an existing feature is never touched
-            self.assertEqual(again.git_calls, [])  # nothing new to record
+            self.assertNotIn("created_flag", again.state.d, msg="an existing feature is never touched")
+            self.assertEqual(again.git_calls, [], msg="nothing new to record")
             self.assertEqual((Path(tmp) / "flags.json").read_text(), first_manifest)
             self.assertFalse(again.gb.production_enabled("app.feature.issue-12"))
 
@@ -214,7 +211,6 @@ class SuppressionsAndLintConfig(unittest.TestCase):
         self.assertEqual(review_code.suppression_findings(lambda *a: "", "base", "head"), [])
 
     def run_with_template(self, files, labels=("template-sync",)):
-        # A real app checkout with a base commit, and a Starter Template folder holding `files`.
         tmp = Path(tempfile.mkdtemp())
         starter = tmp / "factory" / "templates" / "starter"
         for rel, text in files.items():
@@ -249,11 +245,11 @@ class SuppressionsAndLintConfig(unittest.TestCase):
             run.apply_template_files({"template-sync"})
             base = run.head()
             run.stage_template_config({"template-sync"})
-        self.assertEqual(len(pushes), 1)  # only the workflow went out at once
+        self.assertEqual(len(pushes), 1, msg="only the workflow went out at once")
         self.assertEqual(git("show", "origin/main:.github/workflows/test-gate.yml"), "name: gate")
-        self.assertEqual(git("show", "origin/main:eslint.config.mjs"), "// old")  # the config alone never reaches main
+        self.assertEqual(git("show", "origin/main:eslint.config.mjs"), "// old", msg="the config alone never reaches main")
         self.assertEqual((run.app_dir / "eslint.config.mjs").read_text(), "// new rules\n")
-        self.assertEqual(git("rev-parse", "HEAD~1"), base)  # the staged config commit sits after the run's base, so a rollback target was deployed
+        self.assertEqual(git("rev-parse", "HEAD~1"), base)
         self.assertEqual(git("diff", "--name-only", base, "HEAD"), "eslint.config.mjs")
 
     def test_without_the_template_sync_label_nothing_is_copied(self):

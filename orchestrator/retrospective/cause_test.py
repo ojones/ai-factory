@@ -20,8 +20,8 @@ class NamingTheCause(unittest.TestCase):
     def test_it_is_inferred_from_the_ending_when_the_agent_did_not_run(self):
         self.assertEqual(cause.name_cause(facts("budget_exhausted"), None), {"category": "model_limit", "route": "app"})
         self.assertEqual(cause.name_cause(facts("regression"), None), {"category": "regression", "route": "app"})
-        self.assertEqual(cause.name_cause(facts("round_limit", bugs=[{"kind": "dark"}]), None)["route"], "app")  # failed checks: retry the story
-        self.assertEqual(cause.name_cause(facts("round_limit"), None), {"category": None, "route": "info"})  # no cause: a person decides
+        self.assertEqual(cause.name_cause(facts("round_limit", bugs=[{"kind": "dark"}]), None)["route"], "app", msg="failed checks: retry the story")
+        self.assertEqual(cause.name_cause(facts("round_limit"), None), {"category": None, "route": "info"}, msg="no cause: a person decides")
 
     def test_a_factory_cause_is_never_overridden_by_a_spent_budget(self):
         self.assertEqual(cause.name_cause(facts("budget_exhausted"), {"category": "orchestrator_gap"}), {"category": "orchestrator_gap", "route": "factory"})

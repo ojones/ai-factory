@@ -1,5 +1,3 @@
-# What happens to the events the Retrospective judged worth fixing (STEP 6.2 to 7.x): for each, the target (the verdict's, else by the cause: try_fix/route.py), the
-# bug text (the Try Fix Agent, write_bug.py, one credential for the whole batch) and the filing (file_bug.py). An unchanged child is never started again. Never raises.
 import contextlib
 
 from shared.console import log
@@ -10,7 +8,6 @@ TARGETS = {"app": "managed_app", "factory": "factory", "info": "info"}
 
 
 def target_for(verdict, facts, result):
-    # The verdict's own target when the Retrospective named one; otherwise a run's failure is routed by its cause, and anything else is the app's.
     if verdict.get("target"):
         return verdict["target"]
     if verdict["event"]["source"] in ("build_run", "watchdog") and facts:
@@ -19,7 +16,6 @@ def target_for(verdict, facts, result):
 
 
 def file_failures(repo, token, pat, fixes, facts, result, rollback, cfg, key=None, record_spend=None):
-    # One result per `fix` verdict: {"key", "source", "severity", "target", "action", "url", "number"}.
     lim = cfg.get("limits", {})
     cred, budget = write_bug.mint(cfg, key) if key and "try_fix" in cfg.get("roles", {}) else (None, None)
     out = []

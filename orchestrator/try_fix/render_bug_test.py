@@ -18,8 +18,6 @@ LIMITS = {"cost_cap_usd_default": 2.0, "cost_cap_usd_ceiling": 10.0}
 
 
 class Bug(unittest.TestCase):
-    # Contract with real GitHub, checked read-only on 2026-10-20: `gh issue list --search "[<8 hex>] in:title"` found the one issue whose title carries that bracketed
-    # key (ai-factory#136, #133), so the bracketed key is findable by file_bug.open_bug.
     def test_the_key_is_bracketed_hex_at_the_end_of_the_title_so_a_title_search_finds_it(self):
         self.assertRegex(EV["key"], r"^[0-9a-f]{10}$")
         self.assertTrue(render_bug.title(VERDICT, "demo").endswith(f"[{EV['key']}]"))

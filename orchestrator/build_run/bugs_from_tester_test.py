@@ -1,4 +1,3 @@
-# What the tester's failed checks become: bugs filed by the retrospective, not decided by the tester.
 import sys
 import unittest
 from pathlib import Path

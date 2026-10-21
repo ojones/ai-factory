@@ -1,4 +1,3 @@
-# STEP 4.12 and 4.13: the release gate, and the thin glue to Flag Lifecycle (release, watchdog, story link, archive) that keeps the old seams.
 import os
 import subprocess
 
@@ -22,7 +21,6 @@ from shared.shell import sh
 
 
 def release_gate(ci_green, deploy_healthy, tester_passed, reviewer_clean, reviewed_sha, head_sha):
-    # Release only when all four hold for the pushed SHA.
     return all([ci_green, deploy_healthy, tester_passed, reviewer_clean]) and reviewed_sha == head_sha
 
 
@@ -31,7 +29,6 @@ class ReleaseStep:
         return http_client.request(method, f"{config.GROWTHBOOK_API}{path}", os.environ["GROWTHBOOK_ADMIN_PAT"], body)
 
     def link_flags_to_issue(self, slugs):
-        # The story names its flag (flag_lifecycle/story_link.py). Best effort, never a reason to stop the run.
         if not slugs:
             return
         try:
@@ -41,8 +38,6 @@ class ReleaseStep:
             log(f"could not link the flag to its issue: {type(e).__name__}: {e}")
 
     def archive_retired_flags(self, base, head):
-        # Flags this run removed from flags.json are archived in GrowthBook (best effort), so a retired flag leaves nothing behind.
-        # Only when the run ended well: an outcome that is not OK did not finish, and its flags are still in use.
         if self.state.d.get("outcome") not in outcomes.OK:
             return
         try:
@@ -50,7 +45,7 @@ class ReleaseStep:
                                                                    self.git("show", f"{head}:flags.json", check=False).stdout):
                 log(f"archived retired flag {slug} in GrowthBook (HTTP {status})")
                 story = getattr(self, "flag_issues", {}).get(slug)
-                if story:  # the flag's story hears that its flag is gone
+                if story:
                     self.gh(["issue", "comment", str(story), "--repo", self.factory_repo, "--body",
                              f"Feature flag `{self.app}.feature.{slug}` retired by [Build Run {self.run_id}]({self.run_url}): its behaviour is now simply on, "
                              "and the flag is archived in GrowthBook."], token=self.factory_token, check=False)
@@ -58,9 +53,6 @@ class ReleaseStep:
             log(f"could not archive retired flags: {type(e).__name__}: {e}")
 
     def release(self, flags, head):
-        # Switch on the story's own flag(s). A flag that does not exist is never created here (flag_lifecycle/missing_flag.py): if the code reads it
-        # the change is dark with nothing to turn it on, which fails the run; if the code does not read it the change is already live, which is
-        # noted and left alone.
         to_switch, kept, missing = release_features.check_flags(self.gb, self.app, flags, list(self.story_flags))
         if missing:
             named = self.state.d.get("named_flag")
@@ -83,7 +75,6 @@ class ReleaseStep:
         self.state.stage("Release", "-", "-", 0, f"{len(released)} flag(s) released")
 
     def ungated_flags(self, head, flags):
-        # The declared flags no code reads: the change they belong to went live on deploy, whatever the flag says.
         return [s for s in flags if not flag_usage.code_reads(lambda *a: self.git(*a, check=False).stdout, head, s)]
 
     def app_error_count(self):
@@ -98,11 +89,6 @@ class ReleaseStep:
         return watchdog.disable_flags(self.gb, keys)
 
     def watch_release(self):
-        # After a release, watch the app (flag_lifecycle/watchdog.py). A run of failed health checks, or a rise in error-level log lines,
-        # switches the flags this run released off by itself (never one that already existed, which the owner controls) and ends the run
-        # as `watchdog_disabled` so finalize opens the Issue. The flag is the rollback lever, and the release step never turns it back on.
-        # The outcome was set just before this call and is not on disk yet. Save it now: the watch below can take
-        # minutes, and a run cancelled during it must still report `released`, not look like a crash.
         self.state.save()
         keys = list((self.state.d.get("release") or {}).get("released") or [])
         if float(self.lim.get("watchdog_minutes", 0)) > 0 and keys:

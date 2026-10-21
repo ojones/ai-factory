@@ -1,11 +1,3 @@
-# STEP 8.3: watch production. Each Managed App's recent Fly log and the owner's `escaped-defect` issues are read, and what repeats becomes a failure event (to_event.py)
-# written to a file. Nothing is filed here: the events are judged by the Retrospective (STEP 6.7, `retrospective.judge_events`) and Try Fix writes and files the bug
-# (`try_fix.file_events`), exactly as for a failed Build Run. The three run one after the other in production-feedback.yml.
-#
-# A repeat of an error that already has an open bug only adds a comment with the count. A defect report comes first: while an app has one to report, its logs wait.
-#
-# Usage: python -m bugs.scan_production <events.json>   (PYTHONPATH=orchestrator; env FLY_API_TOKEN, FACTORY_PAT, FACTORY_GH_TOKEN, GITHUB_REPOSITORY)
-# Config: `limits.production_feedback` in agents/profiles.yml.
 import json
 import os
 import sys
@@ -23,7 +15,6 @@ BUG_LABEL = "bug"
 
 
 def counts(repo, token, app):
-    # (open bugs for the app, bugs filed today, titles of the open ones, titles of all of them).
     open_now = find_intakes.intakes_with(repo, token, app, BUG_LABEL, "open")
     every = find_intakes.intakes_with(repo, token, app, BUG_LABEL, "all")
     today = time.strftime("%Y-%m-%d", time.gmtime())
@@ -59,7 +50,6 @@ def scan_errors(repo, token, app, cfg, open_for_app, created_today, open_now, lo
 
 
 def scan_app(repo, token, pat, app, cfg, logs=scan_logs.app_logs):
-    # The failure events for one app.
     open_for_app, created_today, open_now, every = counts(repo, token, app)
     events = scan_defects(repo, pat, app, cfg, open_for_app, created_today, every)
     return events or scan_errors(repo, token, app, cfg, open_for_app, created_today, open_now, logs(app), flag_states(repo, pat, app))

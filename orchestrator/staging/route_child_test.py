@@ -17,8 +17,6 @@ def job_if(name):
 
 
 class RouteTheChildByKind(unittest.TestCase):
-    # STEP 2.6: a child with `proceed-with-change` goes to App Staging when its marker says `kind: staging` and to a Build Run otherwise, never to both. The workflows
-    # decide with a text match on the body, so the match is checked against the marker the planner actually writes.
     def test_the_text_both_workflows_match_is_what_the_marker_renders_for_a_staging_child(self):
         self.assertIn(KIND_STAGING, child_tickets.render_marker({"parent": 7, "cs": "CS-1", "kind": "staging"}))
         self.assertNotIn(KIND_STAGING, child_tickets.render_marker({"parent": 7, "cs": "CS-2", "kind": "update"}))
@@ -29,10 +27,10 @@ class RouteTheChildByKind(unittest.TestCase):
         self.assertNotIn(f"!contains(github.event.issue.body, '{KIND_STAGING}')", staging)
         self.assertIn(f"!contains(github.event.issue.body, '{KIND_STAGING}')", update)
         for cond in (staging, update):
-            self.assertIn("github.event.label.name == 'proceed-with-change'", cond)  # only the start label routes anything
+            self.assertIn("github.event.label.name == 'proceed-with-change'", cond, msg="only the start label routes anything")
 
     def test_a_benchmark_child_is_not_started_by_the_production_workflow(self):
-        self.assertIn("!contains(github.event.issue.labels.*.name, 'benchmark')", job_if("update-app-intake.yml"))  # its Build Run is dispatched by the benchmark
+        self.assertIn("!contains(github.event.issue.labels.*.name, 'benchmark')", job_if("update-app-intake.yml"), msg="its Build Run is dispatched by the benchmark")
 
 
 if __name__ == "__main__":

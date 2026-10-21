@@ -1,17 +1,12 @@
-# Filing a plan's child tickets: one sub-issue per change set under the Intake, each with its complete instructions and its marker, dependencies
-# first, the dependencies as GitHub blockers. Filing is idempotent (a parent that already has children is left alone) and all-or-nothing (if any
-# call fails, the children made so far are closed and the error is raised, so the Intake can be planned again with no orphans).
 from request import intake_labels
 from shared import child_tickets, github
 
 from planning.render_child import child_body, one_line, render_change_set_task
 
-INHERITED = ("benchmark",)  # labels of the Intake that its children carry too
+INHERITED = ("benchmark",)
 
 
 def file_children(repo, pat, app, parent, change_sets, order, request, cap=None, secrets=None, tickets=None, fix=None, inherit=()):
-    # Returns [(change set id, issue number)]. Raises ChildTicketError. `fix` is the bug Intake's fix-for marker (planning/fix_for.py): the one child is filed
-    # as an ordinary child with the markers that say what it fixes.
     tickets = tickets or child_tickets.ChildTickets(repo, parent, pat)
     existing = tickets.children()
     if existing:
@@ -40,8 +35,6 @@ def file_children(repo, pat, app, parent, change_sets, order, request, cap=None,
         for _, number in made:
             tickets.withdraw(number, "Closed: the plan could not be filed completely, so no child of it will run. Plan the Intake again.")
         raise
-    # Start the first one with nothing to wait for. Done last, so every child exists before the first run begins; the
-    # rest are started one at a time by `advance` as each finishes.
     first = next((cs_id for cs_id in order if not by_id[cs_id].get("depends_on")), None)
     if first:
         github.run(["issue", "edit", str(numbers[first]), "--repo", repo, "--remove-label", child_tickets.WAIT, "--add-label", intake_labels.START], pat)

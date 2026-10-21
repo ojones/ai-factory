@@ -1,7 +1,3 @@
-# Closing a child and moving the plan on (STEP 6.1, 6.3, 6.4). A child that finished is closed and starts the next one that is waiting; one that
-# stopped loses `proceed-with-change`, so adding the label again retries it (a label that is still there cannot fire again). The children are the
-# parent's sub-issues, and what a waiting child waits for is its GitHub blockers: it is ready when every blocker is closed. The last child to
-# close closes the parent.
 import json
 import os
 import sys
@@ -12,11 +8,6 @@ from shared.shell import sh
 
 
 def ready_to_start(children, blockers):
-    # The number of the one child to start now, as a list (empty when none). `children` are the parent's sub-issues, each {number, state,
-    # labels}; `blockers(number)` gives that child's blockers as [{number, state}]. A child is ready when it is open, waiting, and every
-    # blocker is closed. At most one starts, and none while another is in flight (open with `proceed-with-change`: one app runs one Build Run
-    # at a time, and GitHub keeps only one pending run) or stalled (open with neither label: its run stopped, so it blocks the others until
-    # it is retried or closed).
     open_ = [c for c in children if c["state"] == "OPEN"]
     if any(intake_labels.START in c["labels"] or child_tickets.WAIT not in c["labels"] for c in open_):
         return []
@@ -30,8 +21,6 @@ def start_child(repo, pat, number):
 
 
 def settle_fix(repo, pat, parent, run=None):
-    # STEP 7.4: a plan that closed was a bug Intake's (its body carries a `fix-for` marker): the story it fixed hears that the fix is done, and the plan the failed
-    # child belongs to moves on, which starts that child again (it was blocked by the Intake and is waiting). Returns the numbers started.
     run = run or github.run
     p = run(["issue", "view", str(parent), "--repo", repo, "--json", "body"], pat)
     fix = child_tickets.read_fix_for(json.loads(p.stdout or "{}").get("body") if p.returncode == 0 else "")
@@ -43,7 +32,6 @@ def settle_fix(repo, pat, parent, run=None):
 
 
 def advance_plan(repo, pat, parent, tickets=None):
-    # Move plan `parent` on: close it if every child is closed, otherwise start the child that is ready. Returns {"started": [numbers], "parent_closed": bool}.
     tickets = tickets or child_tickets.ChildTickets(repo, parent, pat)
     children = tickets.children()
     if children and all(c["state"] == "CLOSED" for c in children):
@@ -56,9 +44,6 @@ def advance_plan(repo, pat, parent, tickets=None):
 
 
 def advance(repo, pat, number, tickets=None):
-    # After child `number` closed: close the parent if that was the last child, otherwise start the child that was waiting for it. Returns
-    # {"started": [numbers], "parent_closed": bool}. An issue with no parent (a child of no plan) does nothing. A closing bug Intake also moves on the plan of
-    # the child it fixed (settle_fix), and `started` then lists that plan's child.
     parent = tickets.parent if tickets else child_tickets.parent_of(repo, number, pat)
     if not parent:
         return {"started": [], "parent_closed": False}
@@ -78,7 +63,6 @@ def finish_update_intake(ok, repo, number, pat):
 
 
 def main(argv):
-    # python -m retrospective.close_child close <repo> <issue>: a child that is done is closed and the next one started (the staging workflow ends so).
     if len(argv) == 4 and argv[1] == "close":
         finish_update_intake(True, argv[2], argv[3], os.environ["FACTORY_PAT"])
         return 0

@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-# Replay the coder over the recorded Managed Apps' real tasks (.wayfinder coder-speed, ticket 15).
-#
-# The recorded apps' histories are kept as bundles beside this script (data/). Each app's base commit is
-# the seed repository whose INTAKE.md Spec is the task the coder was given. For each model and task, this
-# checks out the base, runs the real coder prompt (round 1), then scores the result the way a Build Run
-# would judge it:
-#
-#   built     a commit exists, no protected Starter Template file changed, `npm run build` and `npm test` pass
-#   clean     the production single-call reviewer (agents/profiles.yml) finds no blocking issue in the diff
-#
-# A run that is built and clean would have needed no further review round, so `ok` (both) is the figure
-# that predicts speed: a model that is fast per round but misses often costs extra rounds.
-#
-#   MODELS=a,b REPEAT=3 python3 agents/replay/coder_replay.py
-#
-# Env: DEEPINFRA_API_KEY, MODELS (comma-separated; the first is the baseline), APPS (default all apps in
-# cases.json), REPEAT (runs per model and task, default 2), WORKERS (default 3), TIMEOUT_MIN (default 25),
-# KEEP=1. Writes coder-replay-results.json.
 import importlib.util
 import json
 import os
@@ -61,7 +43,6 @@ def spec_of(intake):
 
 
 def prepare(app, base_sha, root):
-    # The app at its base commit with dependencies installed once; every run starts from a copy.
     bundle = HERE / "data" / f"{app}.bundle"
     source = str(bundle) if bundle.exists() else f"https://github.com/ojones/{app}.git"
     prep = root / f"prep-{app}"

@@ -39,10 +39,9 @@ class ReadyToStart(unittest.TestCase):
         self.assertEqual(close_child.ready_to_start(kids, blockers({})), [2])
 
     def test_a_stalled_child_blocks_its_siblings_until_it_is_retried_or_closed(self):
-        # it lost `proceed-with-change` when its run stopped, and it is not waiting any more: nothing else may start behind it
         kids = [kid(1, "OPEN"), kid(2, "OPEN", [W]), kid(3, "OPEN", [W])]
         self.assertEqual(close_child.ready_to_start(kids, blockers({})), [])
-        kids[0]["labels"] = {S}  # retried: in flight again
+        kids[0]["labels"] = {S}
         self.assertEqual(close_child.ready_to_start(kids, blockers({})), [])
         kids[0]["state"] = "CLOSED"
         self.assertEqual(close_child.ready_to_start(kids, blockers({})), [2])
@@ -86,7 +85,7 @@ class Advance(unittest.TestCase):
     def test_a_child_whose_blocker_is_still_open_does_not_start(self):
         self.close(self.a)
         self.gh.issues[self.b]["state"] = "open"
-        self.gh.blocked[self.b] = [self.a, self.c]  # also blocked by a later, still open child
+        self.gh.blocked[self.b] = [self.a, self.c]
         self.assertEqual(self.advance(self.a)[0]["started"], [])
 
     def test_the_parent_closes_only_when_the_last_child_closes(self):
@@ -99,10 +98,9 @@ class Advance(unittest.TestCase):
         result, edits = self.advance(self.c)
         self.assertEqual(result, {"started": [], "parent_closed": True})
         self.assertEqual(self.gh.issues[self.parent]["state"], "closed")
-        self.assertEqual(edits, [])  # nothing is started once everything is done
+        self.assertEqual(edits, [], msg="nothing is started once everything is done")
 
     def test_a_failed_child_blocks_the_ones_after_it(self):
-        # b was started and its run stopped: it lost the go label, so c may not start even though a is closed
         self.close(self.a)
         self.gh.issues[self.b]["labels"] = []
         self.assertEqual(self.advance(self.a)[0]["started"], [])
@@ -134,7 +132,6 @@ class Finishing(unittest.TestCase):
 
 
 class SettleFix(unittest.TestCase):
-    # Plan 5 has the failed child 12 (waiting, blocked by the bug Intake 50) and a sibling 13; the bug Intake 50 has its one fix child 51.
     def setUp(self):
         self.gh = FakeIssues()
         self.gh.add(5)
@@ -155,11 +152,11 @@ class SettleFix(unittest.TestCase):
 
     def test_when_the_bug_intake_closes_the_story_hears_it_and_the_failed_child_starts_again_not_its_sibling(self):
         result, edits = self.close_fix()
-        self.assertTrue(result["parent_closed"])  # the fix child was the Intake's last child
+        self.assertTrue(result["parent_closed"])
         self.assertEqual(self.gh.issues[50]["state"], "closed")
         self.assertEqual(result["started"], [12])
         self.assertTrue(any("The fix for this change set is done" in c for c in self.gh.comments[12]))
-        self.assertEqual([e[3] for e in edits], ["12"])  # only the failed child starts, never the sibling behind it
+        self.assertEqual([e[3] for e in edits], ["12"], msg="only the failed child starts, never the sibling behind it")
 
     def test_the_story_hears_the_failed_child_runs_again_behind_its_own_flag(self):
         self.close_fix()
@@ -168,7 +165,6 @@ class SettleFix(unittest.TestCase):
         self.assertNotIn("same flag", said)
 
     def test_a_fix_that_itself_needed_a_fix_resumes_each_failed_child_in_turn_up_the_chain(self):
-        # Fix child 51 (under bug Intake 50) failed and waits for bug Intake 60, whose fix child is 61: closing 61 restarts 51, and 51 closing restarts 12.
         self.gh.add(60, body=child_tickets.render_fix_for(51, 50, 2) + "\n\n### App name\n\ndemo\n")
         self.gh.add(61, labels=["update-app-intake", S])
         self.gh.subs[60] = [61]
@@ -178,7 +174,7 @@ class SettleFix(unittest.TestCase):
         with mock.patch.object(close_child, "sh"), mock.patch.object(close_child.github, "run", self.gh):
             first = close_child.advance("o/f", "pat", 61, child_tickets.ChildTickets("o/f", 60, "pat", self.gh))
         self.assertEqual(first["started"], [51])
-        self.assertEqual(self.gh.issues[50]["state"], "open")  # the original bug Intake is not done until its own child is
+        self.assertEqual(self.gh.issues[50]["state"], "open", msg="the original bug Intake is not done until its own child is")
         self.gh.issues[51]["state"] = "closed"
         with mock.patch.object(close_child, "sh") as sh2, mock.patch.object(close_child.github, "run", self.gh):
             second = close_child.advance("o/f", "pat", 51, child_tickets.ChildTickets("o/f", 50, "pat", self.gh))

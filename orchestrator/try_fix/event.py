@@ -1,7 +1,3 @@
-# STEP 6.2, 6.7: the failure event, the one record every source of trouble writes so the Retrospective can judge it. An event is a plain dict:
-#   key, source, severity ("failure" or "warning"), app, story (the story issue number, or None), fingerprint, summary, evidence, flag, released
-# `released` is True when the story's flag was released and is still on, False when it is dark (never released, off, or switched off by the
-# watchdog), None when the source cannot tell (the Bugs domain fills it in from the App State).
 import hashlib
 import json
 

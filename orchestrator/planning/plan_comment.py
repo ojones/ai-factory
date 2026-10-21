@@ -1,10 +1,7 @@
-# The plan as a comment on the Intake issue.
 from planning.render_child import one_line
 
 
 def render_plan_comment(plan, questions=()):
-    # The plan as a comment on the Update App Intake: change sets with their flags, the assumptions the planner made on the
-    # owner's behalf, and any question it needs answered. Anything the owner disagrees with can be corrected in the issue.
     sets = plan.get("change_sets") or []
     lines = [f"**Plan: {len(sets)} change set{'s' if len(sets) != 1 else ''}.**", ""]
     for cs in sets:

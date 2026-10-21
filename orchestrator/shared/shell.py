@@ -1,4 +1,3 @@
-# Run a command and fail loudly.
 import subprocess
 
 

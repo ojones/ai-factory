@@ -1,10 +1,7 @@
-# Step 6: the short summary of the retrospective commented on the story that started the run, and the bugs noted on it.
-
 from shared import outcomes
 
 from retrospective import tracker
 
-# What each cause leads to, in words for the story.
 ROUTES = {"app": "a fix to the app's change, the failed change runs again once it is fixed", "factory": "a fix request for the Factory",
           "info": "left for a person"}
 MAX_BUGS = 5
@@ -14,7 +11,6 @@ BUG_LABEL = "bug"
 
 
 def bug_notes(facts):
-    # The bugs the tester noted, as the text added to the story's own issue.
     lines = ["## Bugs the tester saw", "", f"Run: {facts['run_url']}", ""]
     for x in facts["bugs"][:MAX_BUGS]:
         what = "behaviour that was live before this change stopped working" if x["kind"] == "regression" else f"a check of the new change failed (flag `{x['flag'] or 'none'}`)"
@@ -23,9 +19,6 @@ def bug_notes(facts):
 
 
 def note_bugs_on_story(repo, token, number, facts, carried):
-    # The bugs belong to the Managed App's own story, so they go on the Update App Intake that started the run, not into a new issue: the
-    # story gets the `bug` label and, unless the retry comment already carries them (`carried`), a comment listing them. The retry (the
-    # start label added again) is the bug Intake's job and is bounded by `fix_attempts_max`. Once per run.
     if not facts.get("bugs"):
         return False
     tracker.gh(["label", "create", BUG_LABEL, "--repo", repo, "--color", "d73a4a", "--description", "Something is not working"], token)
@@ -40,7 +33,6 @@ def note_bugs_on_story(repo, token, number, facts, carried):
 
 
 def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None, verdicts=()):
-    # The short summary commented on the issue that started the run.
     notes = []
     if facts.get("dark_broken"):
         notes.append("**Dark feature left behind**: its flag stays off and the next attempt fixes it forward.")
@@ -73,7 +65,6 @@ def render_retrospective(facts, filed, lessons, result=None, bugs=(), cause=None
 
 
 def post_retrospective(repo, token, number, run_id, body):
-    # Comment the summary on the issue that started the run, once per run (a re-run of this step does not post it twice).
     marker = f"<!-- retrospective:{run_id} -->"
     seen = tracker.gh(["issue", "view", str(number), "--repo", repo, "--json", "comments"], token).stdout or ""
     if marker in seen:

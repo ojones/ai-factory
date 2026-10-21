@@ -23,7 +23,7 @@ class DarkFeatureRemoval(unittest.TestCase):
         self.assertIn("#12", task)
         self.assertIn("`flags.json`", task)
         self.assertIn("never released", task)
-        self.assertEqual(retirement_check.retire_slugs(task), [])  # not the keep-it-on retirement of a released flag
+        self.assertEqual(retirement_check.retire_slugs(task), [], msg="not the keep-it-on retirement of a released flag")
 
 
 if __name__ == "__main__":

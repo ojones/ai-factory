@@ -1,18 +1,9 @@
-# Check a finished Build Run's Report against the design invariants (docs/invariants.md).
-#
-# The unit tests prove the code does what the rules say; this checks that a real run did. It reads only the
-# Report (`state.json`, as `finalize` writes it) and returns the rules it finds broken, so a bug that only
-# shows up in production, or a run that went around the code, still leaves a record. `finalize` stores the
-# result in the Report (`audit`) and the Summary; the retrospective turns a violation into a lesson.
-#
-# Pure functions, no network. Usage: audit.py <build-run-report.json>   (exit 1 if anything is violated)
 import json
 import sys
 
 from shared import outcomes
 
-# One review-and-test pass is a Review stage and a Test stage with the same round number.
-COST_OVERSHOOT_USD = 0.50  # the call that crosses the cap completes (ARCHITECTURE.md: Cost guardrails)
+COST_OVERSHOOT_USD = 0.50
 
 
 def _stages(d, name):
@@ -20,7 +11,6 @@ def _stages(d, name):
 
 
 def audit_report(d, overshoot=COST_OVERSHOOT_USD):
-    # A list of {"rule", "detail"} for every invariant the run's Report contradicts; empty when none.
     problems = []
 
     def bad(rule, detail):

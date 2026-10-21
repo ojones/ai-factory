@@ -1,6 +1,3 @@
-# The format of the App State record, which Maintenance, Flag Lifecycle, Bugs and the Build Run all read: each issue body carries its data as
-# JSON in an HTML comment, so a rewrite never has to parse the tables. The App State issue (label `factory-state`) lives in each Managed App's
-# repo; the registry issue (label `factory-registry`) in ai-factory has one row per Managed App.
 import json
 import re
 
@@ -24,7 +21,6 @@ def load(body):
 
 
 def dump(data):
-    # "--" inside an HTML comment could end it early; as a JSON escape it survives a round trip unchanged.
     return "<!-- factory-data:" + json.dumps(data, separators=(",", ":")).replace("--", "\\u002d\\u002d") + " -->"
 
 

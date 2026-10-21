@@ -1,5 +1,3 @@
-# STEP 8.3: read a Managed App's recent Fly log and group its errors. Error-level JSON lines are grouped by a fingerprint (the message with ids and numbers
-# removed, plus the first application stack frame); the Fly log buffer is short, so the scan runs every few hours (production-feedback.yml). Pure parsing, tested alone.
 import hashlib
 import json
 import os
@@ -13,7 +11,6 @@ FRAME = re.compile(r"\(?((?:/|[A-Za-z]:)?[^\s()]*?[\w.-]+\.(?:ts|js|mjs|cjs|tsx|
 
 
 def parse_events(log_text):
-    # The error-level structured log entries in `flyctl logs` output. Lines carry a prefix (time, machine, region) before the JSON.
     out = []
     for line in (log_text or "").splitlines():
         start = line.find("{")
@@ -29,7 +26,6 @@ def parse_events(log_text):
 
 
 def first_frame(entry):
-    # The first application stack frame (a file path, no line number), or ''. node_modules and node internals are skipped.
     for key in ("stack", "err", "error"):
         text = entry.get(key)
         text = text.get("stack") if isinstance(text, dict) else text
@@ -56,7 +52,6 @@ def fingerprint(entry):
 
 
 def group(events):
-    # {fingerprint: {"count", "message", "frame", "sample"}} for a scan; `sample` is the first raw entry, only used to tie the error to a flag (route_bug.py).
     out = {}
     for e in events:
         fp = fingerprint(e)

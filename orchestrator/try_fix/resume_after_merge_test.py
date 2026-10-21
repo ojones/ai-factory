@@ -29,7 +29,7 @@ class Resume(unittest.TestCase):
         got, calls = self.go("Proposed.\n" + factory_fix_request.failed_child_marker(66))
         self.assertEqual(got, 66)
         start = next((a, t) for a, t in calls if a[:2] == ["issue", "edit"] and "proceed-with-change" in a)
-        self.assertEqual((start[0][2], start[1]), ("66", "the-pat"))  # events from the Actions token would not start the run
+        self.assertEqual((start[0][2], start[1]), ("66", "the-pat"), msg="events from the Actions token would not start the run")
         self.assertTrue(any(a[:2] == ["issue", "edit"] and "--remove-label" in a and "needs-human" in a for a, _ in calls))
 
     def test_a_pr_that_names_no_child_resumes_nothing(self):
@@ -52,7 +52,7 @@ class Resume(unittest.TestCase):
         self.assertIn("github.event.pull_request.merged == true", cond)
         self.assertIn("failed-child:", cond)
         merge = (root / ".github/workflows/factory-checks.yml").read_text()
-        self.assertIn("GH_TOKEN: ${{ secrets.FACTORY_PAT }}", merge[merge.index("- name: Merge"):])  # a merge by the Actions token would start no workflow
+        self.assertIn("GH_TOKEN: ${{ secrets.FACTORY_PAT }}", merge[merge.index("- name: Merge"):], msg="a merge by the Actions token would start no workflow")
 
 
 if __name__ == "__main__":

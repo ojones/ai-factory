@@ -23,7 +23,6 @@ class Paths(unittest.TestCase):
 
 
 class Isolation(unittest.TestCase):
-    # The retrospective Agent runs in a copy of the tree as the Agent user, and only allowed files come back.
 
     def tree(self, files):
         root = Path(tempfile.mkdtemp())
@@ -38,7 +37,7 @@ class Isolation(unittest.TestCase):
         (after / "templates-link").symlink_to("/etc/passwd")
         changes, links = agent_run.tree_changes(before, after)
         self.assertEqual(changes, {"agents/a.md": "M", "orchestrator/y.py": "A", "orchestrator/x.py": "D"})
-        self.assertEqual(links, ["templates-link"])  # the .git difference is invisible, a symlink is reported and never followed
+        self.assertEqual(links, ["templates-link"], msg="the .git difference is invisible, a symlink is reported and never followed")
 
     def test_only_allowed_paths_are_carried_into_the_checkout_git_runs_in(self):
         before = self.tree({"agents/a.md": "one", "orchestrator/x.py": "x", ".github/workflows/w.yml": "w"})
@@ -48,10 +47,10 @@ class Isolation(unittest.TestCase):
         applied = agent_run.apply_changes(before, after, changes)
         self.assertEqual(sorted(applied), ["agents/a.md", "orchestrator/new_test.py", "orchestrator/x.py"])
         self.assertEqual((before / "agents/a.md").read_text(), "two")
-        self.assertEqual((before / ".github/workflows/w.yml").read_text(), "w")  # a workflow is never touched
+        self.assertEqual((before / ".github/workflows/w.yml").read_text(), "w", msg="a workflow is never touched")
         self.assertFalse((before / ".github/workflows/new.yml").exists())
-        self.assertFalse((before / "agents/huge.md").exists())  # too big to be a prompt or a rule
-        self.assertFalse((before / "orchestrator/x.py").exists())  # a deletion inside an allowed path is carried over
+        self.assertFalse((before / "agents/huge.md").exists(), msg="too big to be a prompt or a rule")
+        self.assertFalse((before / "orchestrator/x.py").exists(), msg="a deletion inside an allowed path is carried over")
 
     def agent_run(self, problems=(), user="agent"):
         factory = self.tree({"agents/a.md": "one", "orchestrator/x.py": "x"})
@@ -82,7 +81,7 @@ class Isolation(unittest.TestCase):
         self.assertEqual(seen["env"]["LLM_API_KEY"], "scoped-key")
         self.assertNotIn("PAT-SECRET", " ".join(seen["env"].values()))
         self.assertNotIn("PARENT-KEY", " ".join(seen["env"].values()))
-        self.assertEqual((factory / "agents/a.md").read_text(), "changed by the agent")  # an allowed change came back
+        self.assertEqual((factory / "agents/a.md").read_text(), "changed by the agent", msg="an allowed change came back")
         self.assertEqual(json.loads(result.read_text())["category"], "prompt_gap")
 
     def test_an_isolation_that_cannot_be_proven_means_no_agent_runs(self):

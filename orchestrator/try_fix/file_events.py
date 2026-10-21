@@ -1,7 +1,3 @@
-# STEP 7: file the bugs for events with no Build Run, after the Retrospective judged them (`retrospective.judge_events` writes the verdicts). Each `fix` verdict gets its
-# text from the Try Fix Agent and is filed exactly as for a failed run (file_failure.py); a `record` verdict files nothing. Used by production-feedback.yml.
-#
-# Usage: python -m try_fix.file_events <verdicts.json>   (PYTHONPATH=orchestrator; env GITHUB_REPOSITORY, FACTORY_PAT, FACTORY_GH_TOKEN, DEEPINFRA_API_KEY)
 import json
 import os
 import sys

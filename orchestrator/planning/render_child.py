@@ -1,5 +1,3 @@
-# What a child ticket says: the task text for one change set, the whole issue body (the Update App Intake form fields plus the marker), and a title line.
-
 from shared import child_tickets
 
 
@@ -8,7 +6,6 @@ def one_line(text, limit=80):
 
 
 def render_change_set_task(cs, request=None, parent=None):
-    # The task text for one change set: what the coder, tester and reviewer are given as the spec.
     lines = [f"Change set {cs['id']}: {cs['title']}", ""]
     if parent:
         lines += ["Part of a larger request that was planned into change sets. Do only this change set. This ticket is all you need: the code is in your working directory, and nothing is to be looked up on GitHub (the plan's issue number is in the ticket's marker for people, not for you).", ""]
@@ -28,8 +25,6 @@ def render_change_set_task(cs, request=None, parent=None):
 
 
 def child_body(app, task, parent, cs, cap=None, secrets=None, kind="update", fix_for=None, fix_attempt=None):
-    # A child issue's body: the marker, then the Update App Intake form fields, so the child reads like any Update App Intake.
-    # The marker goes first: text after the last "### " heading would be read as part of that field.
     meta = child_tickets.marker_for(cs, parent, kind, secrets, fix_for, fix_attempt)
     return (f"{child_tickets.render_marker(meta)}\n\n"
             f"### App name\n\n{app}\n\n### What should change?\n\n{task}\n\n### Cost cap override (USD)\n\n{cap if cap else '_No response_'}\n")

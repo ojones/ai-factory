@@ -1,4 +1,3 @@
-# Tests for triage: secrets in public text and infeasible requests. Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import sys
 import unittest
 from pathlib import Path

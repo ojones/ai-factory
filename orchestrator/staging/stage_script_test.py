@@ -1,5 +1,3 @@
-# infra/app-staging/stage.sh in its dry-run mode, with a fake `gh` first on the PATH: the child is read and checked, what would be staged is printed, and nothing
-# is created (no Fly, GrowthBook, repository or secret call is made; only reads and, on a refusal, a comment).
 import json
 import os
 import subprocess

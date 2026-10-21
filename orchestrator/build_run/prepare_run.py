@@ -1,5 +1,3 @@
-# STEP 4.1 and the setup before it: read the child, record the flag, wire the secrets, sync the Starter's protected files, pick the flags to retire,
-# check the models, prepare the Agent account, install dependencies, and hold the daily cap and the capacity wait.
 import contextlib
 import json
 import os
@@ -37,14 +35,16 @@ DEPLOY_WORKFLOW = ".github/workflows/deploy-fly.yml"
 SECRETS_REGION_RE = re.compile(r"^([ \t]*)# factory-secrets:begin\n(?:.*\n)*?[ \t]*# factory-secrets:end$", re.M)
 
 
+def static_secret_reference(indent, name):
+    return f"{indent}{name}: ${{{{ secrets.{name} }}}}"
+
+
 def wire_secrets(workflow_text, names):
-    # The deploy workflow with each declared secret listed as an ordinary `NAME: ${{ secrets.NAME }}` line between its markers. Static
-    # references, because a workflow that dumps the whole `secrets` context is flagged by GitHub as possibly malicious and never runs.
     names = sorted({n for n in names if isinstance(n, str) and not triage.secret_name_problem(n)})
 
     def region(m):
         indent = m.group(1)
-        return "\n".join([f"{indent}# factory-secrets:begin"] + [f"{indent}{n}: ${{{{ secrets.{n} }}}}" for n in names] + [f"{indent}# factory-secrets:end"])
+        return "\n".join([f"{indent}# factory-secrets:begin"] + [static_secret_reference(indent, n) for n in names] + [f"{indent}# factory-secrets:end"])
     return SECRETS_REGION_RE.sub(region, workflow_text, count=1)
 
 
@@ -55,7 +55,6 @@ class PrepareRun:
         issue = json.loads(out)
         self.plan_meta = read_child.identify_intake(issue, self.app, self.issue)
         self.locate_plan()
-        # A fix child (STEP 7.1) carries `fix_for` in its marker: the child it fixes.
         self.fix_for = self.plan_meta.get("fix_for")
         if self.fix_for:
             self.state.d["fix_for"] = self.fix_for
@@ -66,14 +65,11 @@ class PrepareRun:
             raise endings.Refused(triage.secret_refusal(secrets))
         self.declared_secrets = secrets_marker.declared_secrets(issue)
         if self.declared_secrets:
-            # Checked before the planner, the coder, the reviewer or the tester is paid for, on every start (a retry, a child, a re-run).
             self.require_secrets(self.declared_secrets)
             if self.plan_meta:
                 self.task += secrets_check.secrets_note(self.declared_secrets)
-        self.spec = self.task  # what the reviewer and tester check the work against; the planner may narrow it
-        # The cap the issue asked for, if it asked for one, so child issues of a plan keep it instead of the default.
-        raw_cap = read_form.form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
-        self.cap_override = raw_cap if raw_cap and raw_cap != "_No response_" else None
+        self.spec = self.task
+        self.cap_override = self.requested_cap_override(issue)
         self.issue_title = issue.get("title", "")
         self.state.d["cap_usd"] = self.cap
         self.state.d["context_goal_tokens"] = self.lim.get("context_goal_tokens", 100000)
@@ -86,11 +82,7 @@ class PrepareRun:
         self.make_runner()
         self.preview = preview_token.for_app(os.environ["PREVIEW_MASTER_SECRET"], self.app)
         print(f"::add-mask::{self.preview}", flush=True)
-        # Clone with the PAT passed per command only, so the checkout stores no credential
-        # and the coder (who runs in it) cannot push or read one.
-        sh(["git", "clone", "-q", f"https://github.com/{self.app_repo}.git", str(self.app_dir)],
-           env={**os.environ, **github.git_auth_env(self.auth_header)})
-        self.share_with_agent(self.app_dir)
+        self.clone_without_storing_credential()
         self.install_dependencies()
         self.git("config", "user.name", "ai-factory-coder")
         self.git("config", "user.email", "coder@ai-factory.local")
@@ -103,18 +95,22 @@ class PrepareRun:
         self.state.save()
         log(f"Intake #{self.issue}: app {self.app}, cap ${self.cap:.2f}, base {self.state.d['base_sha'][:8]}")
 
+    def requested_cap_override(self, issue):
+        raw_cap = read_form.form_section(issue["body"] or "", "Cost cap override (USD)").lstrip("$")
+        return raw_cap if raw_cap and raw_cap != "_No response_" else None
+
+    def clone_without_storing_credential(self):
+        sh(["git", "clone", "-q", f"https://github.com/{self.app_repo}.git", str(self.app_dir)],
+           env={**os.environ, **github.git_auth_env(self.auth_header)})
+        self.share_with_agent(self.app_dir)
+
     def locate_plan(self):
-        # The plan this child belongs to, from the sub-issues API (not a label or the title): only the parent's number and state are read, never its
-        # body. A child must carry a marker and be a sub-issue of the open plan the marker names, or it is refused as not planned yet.
         found = child_tickets.parent_info(self.factory_repo, self.issue, self.factory_token, lambda args, token: self.gh(args, token=token, check=False))
         read_child.require_planned(self.issue, self.plan_meta, found)
         self.parent = found["number"]
         self.state.d["parent"] = self.parent
 
     def require_secrets(self, needed):
-        # Stop (AwaitingSecret) until every secret declared for this request exists as a GitHub Actions secret on the app's repository. The planning
-        # process made the first check and left the declared names in a marker; this check runs again at the start of every Build Run, before any
-        # Agent is paid for (a retry, a child, a re-run). Nothing here reads a value.
         try:
             have = secrets_check.present_names(lambda args: self.gh(args, check=False), self.app_repo)
         except secrets_check.SecretsUnreadable as e:
@@ -125,15 +121,12 @@ class PrepareRun:
             raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, "add `proceed-with-change` again"))
 
     def copy_template_files(self, group):
-        # Copy the Starter Template files in `group` that differ into the app checkout and commit them locally. Returns the paths changed.
         changed = []
         for rel in group:
             src, dst = config.FACTORY_DIR / "templates" / "starter" / rel, self.app_dir / rel
             if not src.is_file():
                 continue
-            wanted = src.read_bytes()
-            if rel == DEPLOY_WORKFLOW:  # the app's declared secrets stay listed in the workflow when the template is copied over it
-                wanted = wire_secrets(wanted.decode(), self.secret_names()).encode()
+            wanted = self.content_keeping_declared_secrets(rel, src.read_bytes())
             if not dst.is_file() or dst.read_bytes() != wanted:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(wanted)
@@ -145,16 +138,18 @@ class PrepareRun:
             self.share_with_agent(self.app_dir)
         return changed
 
+    def content_keeping_declared_secrets(self, rel, content):
+        if rel != DEPLOY_WORKFLOW:
+            return content
+        return wire_secrets(content.decode(), self.secret_names()).encode()
+
     def secret_names(self):
-        # The secret names this app declares: in its committed `secrets.json`, and the plan's declared ones for this run.
         names = list(self.state.d.get("secrets") or [])
         with contextlib.suppress(OSError, ValueError, AttributeError):
             names += [x.get("name") for x in json.loads((self.app_dir / "secrets.json").read_text()).get("secrets", [])]
         return names
 
     def stage_secret_wiring(self):
-        # List the run's declared secrets in the deploy workflow (an Orchestrator-owned file), committed locally and pushed with the coder's
-        # reviewed work, like the lint config. Before the coder starts, so its protected-file check starts from this commit.
         if not self.state.d.get("secrets"):
             return
         try:
@@ -164,9 +159,6 @@ class PrepareRun:
             log(f"could not list the secrets in the deploy workflow: {type(e).__name__}: {e}")
 
     def apply_template_files(self, labels):
-        # A template-sync Intake: copy the protected Starter Template files in TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR into the app and
-        # push them before the planner and coder start, so the run's starting point already has them. No Agent touches them. A failure is
-        # logged and the run goes on: the rest of the sync does not depend on these files.
         if "template-sync" not in labels:
             return
         try:
@@ -178,8 +170,6 @@ class PrepareRun:
             log(f"could not sync protected template files: {type(e).__name__}: {e}")
 
     def stage_template_config(self, labels):
-        # The lint and formatter config (TEMPLATE_FILES_HELD) is committed locally, after the run's base, and goes out with the coder's first
-        # reviewed push: on its own it could turn the app's Test Gate red, and the coder, only the coder, fixes what the new rules report.
         if "template-sync" not in labels:
             return
         try:
@@ -190,7 +180,6 @@ class PrepareRun:
             log(f"could not stage the lint config: {type(e).__name__}: {e}")
 
     def choose_flags_to_retire(self):
-        # The proven flags that ride along with this run (flag_lifecycle/retirement_selection.py).
         picked, issues = retirement_selection.choose(
             not self.fix_for, self.task, self.app_repo.split("/")[0], self.app,
             self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout,
@@ -200,10 +189,6 @@ class PrepareRun:
         return picked
 
     def check_models(self):
-        # Before any work: a one-token request per distinct model this run will use. A model the provider no longer serves is replaced by the role's
-        # `fallback_model` for this run (recorded in the Report), or stops the run with the reason if there is none, instead of failing after a clone,
-        # a checkout and a planner call. Models get cheaper and are retired; this is how an unattended night survives a retirement. A balance of zero
-        # raises ProviderBlocked as before.
         base, key = self.cfg["provider"]["base_url"], os.environ["DEEPINFRA_API_KEY"]
         seen, swapped = {}, {}
 
@@ -232,8 +217,6 @@ class PrepareRun:
             self.state.save()
 
     def prepare_agent_user(self):
-        # With isolation on: put the helper the tester calls where the Agent user can read it, and prove isolation holds before
-        # any Agent runs. A run that cannot prove it stops, because an Agent next to the Orchestrator's secrets is what this prevents.
         if not self.agent_user:
             return
         tools = self.work / "tools"
@@ -253,16 +236,10 @@ class PrepareRun:
         return agent_process.run_isolation_probes(self.agent_user)
 
     def share_with_agent(self, path):
-        # Make `path` readable and writable by both the Agent user and this process (what was just cloned or installed was created
-        # by one of them). No-op without isolation.
         if self.agent_user:
             sh(["sudo", "-n", "setfacl", "-R", "-m", f"u:{self.agent_user}:rwX,u:{os.environ.get('USER', 'runner')}:rwX", str(path)], check=False)
 
     def install_dependencies(self):
-        # Install once, here, so the coder starts with node_modules instead of spending agent turns on it.
-        # Later rounds reuse the checkout, and restore_tree/clean leave ignored node_modules alone. Runs with
-        # the coder's minimal environment, so the dependencies' install scripts never see the runner's secrets.
-        # A failure is only logged: the coder can still install for itself.
         if not (self.app_dir / "package-lock.json").exists():
             return
         began = time.time()
@@ -276,15 +253,12 @@ class PrepareRun:
         log(f"npm ci {'ok' if code == 0 else f'failed ({code}); the coder will install for itself'} in {time.time() - began:.0f}s")
 
     def ledger_issue(self):
-        # The number of the open spend-ledger issue in ai-factory, or None before the first run has made one.
         out = self.gh(["issue", "list", "--repo", self.factory_repo, "--label", spend_ledger.LEDGER_LABEL, "--state", "open",
                        "--json", "number"], token=self.factory_token, check=False).stdout
         found = json.loads(out or "[]")
         return found[0]["number"] if found else None
 
     def check_daily_cap(self):
-        # Refuse to start a Build Run once today's finished runs have spent `daily_cost_cap_usd`. Runs still
-        # in flight are not counted until they finish, so concurrent runs can overshoot by their own caps.
         cap = float(self.lim.get("daily_cost_cap_usd", 0) or 0)
         if cap <= 0:
             return
@@ -315,9 +289,6 @@ class PrepareRun:
             time.sleep(60)
 
     def name_the_flag(self):
-        # A flagged change set's task carries a placeholder for the flag's slug (flag_lifecycle/flag_slug.py). Fill it with the story's flag: `issue-<n>` of this
-        # issue. Create the GrowthBook feature (production off) and record
-        # the flag in `flags.json` before the coder starts, so the coder only wraps code; the flag exists while it and the tester work.
         if flag_slug.SLOT not in (self.task or ""):
             return
         slug = flag_slug.for_story(self.issue)

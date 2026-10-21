@@ -1,6 +1,3 @@
-# Step 3: each improvement the reviewer or tester suggested for the Factory becomes a `factory-learning` issue in ai-factory, deduplicated and capped per run. One for
-# the Managed App is a failure event (try_fix/collect_events.py) that the Retrospective judges; no suggestion issue is filed in the app's repo any more.
-# The Agents only suggest; the Orchestrator files.
 import hashlib
 import re
 
@@ -12,9 +9,6 @@ def improvement_title(i):
 
 
 def record_improvements(repo, token, facts):
-    # File what the reviewer and tester suggested for the Factory: a `factory-learning` issue in ai-factory (a comment when it is already open). A
-    # `managed_app` improvement files nothing here and is only listed for the report. Capped per run.
-    # Returns ([(factory issue number, already proposed)], [{target, summary, url}]) for the Agent and for the report.
     tracker.gh(["label", "create", tracker.LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
     for_agent, filed = [], []
     for i in facts.get("improvements", [])[:minor_findings.MAX_MINORS]:

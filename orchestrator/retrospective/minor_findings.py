@@ -1,15 +1,11 @@
-# Minor findings still open at the end of a run become a `factory-learning` issue in ai-factory (so a pattern can become a prompt or lint change). Whether one is
-# also fixed in the app is the Retrospective's verdict on its failure event (event_verdicts.py); no suggestion issue is filed in the app's repo any more.
 import re
 
 from retrospective import tracker
 
-MAX_MINORS = 5  # per run, so one noisy review cannot flood the trackers
+MAX_MINORS = 5
 
 
 def record_minors(repo, token, facts):
-    # One factory-learning issue per distinct finding.
-    # Returns [(factory issue number, already proposed)].
     tracker.gh(["label", "create", tracker.LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
     recorded = []
     for m in facts["final_minor"][:MAX_MINORS]:

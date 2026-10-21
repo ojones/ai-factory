@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-# Maintenance: dependency and base-image updates reach the Managed Apps through the same gate as any other change.
-#
-# Each app carries `.github/dependabot.yml` (from the Starter Template), so Dependabot watches its npm packages, its Docker base image
-# and its GitHub Actions every day, and opens a pull request for each update or security fix. Dependabot only detects here: nothing
-# merges those pull requests. This daily pass reads each app's open Dependabot pull requests and, when there are updates an Agent can
-# apply (npm packages and the Docker image), files one Update App Intake that lists them and starts it. The planner, coder, tester and
-# reviewer apply them, and the change ships like any other; a dependency bump needs no flag (users see no difference).
-# Dependabot closes its own pull requests once the dependency is updated. Updates to GitHub Actions live in `.github/`, which Agents
-# may not edit, so they are only reported.
-#
-#   python3 maintenance.py        Env: FACTORY_PAT, FACTORY_GH_TOKEN, GITHUB_REPOSITORY.   Switch: limits.maintenance.enabled
-# One Intake per app and set of updates (a failed one is not refiled; its fix request is), one open at a time per app.
 import hashlib
 import json
 import os
@@ -26,7 +14,6 @@ APPLICABLE = ("npm", "docker")
 
 
 def ecosystem(pr):
-    # npm | docker | actions | other, from Dependabot's branch name (dependabot/<ecosystem>/...).
     ref = pr.get("headRefName") or ""
     for key, name in ECOSYSTEMS:
         if ref.startswith(f"dependabot/{key}/"):
@@ -39,13 +26,11 @@ def is_security(pr):
 
 
 def split_prs(prs):
-    # (applicable, only reported): the pull requests an Agent can apply, and the ones it cannot (Actions, anything unknown).
     mine = [p for p in prs if ecosystem(p) in APPLICABLE]
     return mine, [p for p in prs if p not in mine]
 
 
 def update_key(prs):
-    # A short stable key for this set of updates (their titles name the versions), so the same set is filed once.
     return hashlib.sha1("\n".join(sorted(p["title"] for p in prs)).encode()).hexdigest()[:8]
 
 
@@ -80,7 +65,6 @@ def dependabot_prs(owner, app, pat):
 
 
 def enable_security_updates(owner, app, pat):
-    # Dependabot alerts and security updates on for the app's repo (idempotent; best effort, since the PAT may lack the scope).
     env = {**os.environ, "GH_TOKEN": pat}
     for endpoint in ("vulnerability-alerts", "automated-security-fixes"):
         p = shell.sh(["gh", "api", "-X", "PUT", f"repos/{owner}/{app}/{endpoint}"], env=env, check=False)

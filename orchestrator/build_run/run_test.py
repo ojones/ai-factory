@@ -11,14 +11,11 @@ from build_run.run import BuildRun  # noqa: E402
 
 
 def finding(**over):
-    # A reviewer finding as the schema requires it: blocking, backed by a cited file and line.
     return {"severity": "blocking", "category": "correctness", "evidence_kind": "cited", "summary": "x", "evidence": "e",
             "file": "backend/src/a.ts", "line": "3", "requirement": "", "suggested_fix": "", "repro": "", **over}
 
 
 class RoundLoop(unittest.TestCase):
-    # The order of a Build Run's rounds with every stage stubbed: review the local commit, push only a clean one, wait for the deploy,
-    # then test it.
 
     def make(self, reviews, tests, pipeline_fix=False):
         run = object.__new__(BuildRun)
@@ -45,7 +42,7 @@ class RoundLoop(unittest.TestCase):
         def pipeline(sha):
             run.calls.append(f"pipeline {sha}")
             if next(fixes, False):
-                run.last = "fix1"  # the coder's fix is now HEAD
+                run.last = "fix1"
                 raise endings.PipelineFix("fix1")
             return sha
         run.pipeline = pipeline
@@ -67,7 +64,6 @@ class RoundLoop(unittest.TestCase):
         return run
 
     def go(self, run):
-        # the coder's last commit is what HEAD points at
         orig = run.coder
         run.coder = lambda *a: setattr(run, "last", orig(*a)) or run.last
         run.last = None
@@ -100,7 +96,7 @@ class RoundLoop(unittest.TestCase):
         run = self.make([self.BLOCKED, self.CLEAN], [self.PASSED])
         self.go(run)
         self.assertEqual(run.calls[:4], ["coder1", "review c1", "coder2", "review c2"])
-        self.assertNotIn("push c1", run.calls)  # the blocked commit never reached main
+        self.assertNotIn("push c1", run.calls, msg="the blocked commit never reached main")
         self.assertEqual(run.state.d["commits"], ["c2"])
         self.assertEqual(run.state.d["outcome"], "released")
 
@@ -178,7 +174,7 @@ class RoundLoop(unittest.TestCase):
         self.go(run)
         self.assertEqual(run.state.d["outcome"], "regression")
         self.assertNotIn("release", run.calls)
-        self.assertEqual(run.calls.count("coder2"), 0)  # no more rounds on top of a regression
+        self.assertEqual(run.calls.count("coder2"), 0, msg="no more rounds on top of a regression")
 
     def test_a_fix_the_pipeline_needed_is_reviewed_before_it_is_pushed(self):
         run = self.make([self.CLEAN, self.CLEAN], [self.PASSED], pipeline_fix=True)
@@ -194,7 +190,6 @@ class RoundLoop(unittest.TestCase):
 
 
 class ReviewBeforePushThenTest(unittest.TestCase):
-    # The reviewer reads the local commit before the push; the tester drives the deployed app after it. Agents are stubbed; git is faked.
 
     def make(self, head_flags, agent):
         run = object.__new__(BuildRun)
@@ -206,7 +201,7 @@ class ReviewBeforePushThenTest(unittest.TestCase):
         run.state.save = lambda: None
         shown = {"base": "[]", "head": head_flags}
 
-        class R:  # stands in for subprocess.CompletedProcess
+        class R:
             def __init__(self, out): self.stdout, self.returncode = out, 0
 
         def git(*args, check=True, cwd=None):
@@ -230,8 +225,8 @@ class ReviewBeforePushThenTest(unittest.TestCase):
         run = self.make(self.FLAGS, agent)
         clean, blocking, minor = run.review_before_push("base1", "head1", 1)
         self.assertEqual((clean, blocking), (True, []))
-        self.assertEqual({m["source"] for m in minor}, {"orchestrator"})  # the flag in this change has no use and no issue reference
-        self.assertEqual(roles, ["reviewer"])  # no tester, no deploy: nothing is live yet
+        self.assertEqual({m["source"] for m in minor}, {"orchestrator"}, msg="the flag in this change has no use and no issue reference")
+        self.assertEqual(roles, ["reviewer"], msg="no tester, no deploy: nothing is live yet")
         self.assertEqual(run.run_flags("base1", "head1"), ["f"])
         self.assertEqual([x["stage"] for x in run.state.d["stages"]], ["Review"])
 
@@ -239,7 +234,7 @@ class ReviewBeforePushThenTest(unittest.TestCase):
         doc = dict(self.CLEAN, verdict="clean", findings=[finding(summary="injection", category="security")])
         run = self.make(self.FLAGS, lambda *a, **k: (doc, 0.1, None))
         clean, blocking, _ = run.review_before_push("base1", "head1", 1)
-        self.assertFalse(clean)  # the model's own "clean" verdict is ignored
+        self.assertFalse(clean)
         self.assertEqual(len(blocking), 1)
 
     def test_mechanical_flag_findings_come_from_the_orchestrator_and_are_always_minor(self):
@@ -255,7 +250,7 @@ class ReviewBeforePushThenTest(unittest.TestCase):
         self.assertEqual([(f["summary"].split("`")[1], "no code outside the tests" in f["summary"]) for f in found],
                          [("idle", True), ("bare", False)])
         self.assertTrue(all(f["severity"] == "minor" and f["category"] == "flag_misuse" and f["source"] == "orchestrator" for f in found))
-        self.assertEqual(review_code.flag_findings(lambda *a: "not json", "head", ["used"]), [])  # an unreadable manifest is not a finding
+        self.assertEqual(review_code.flag_findings(lambda *a: "not json", "head", ["used"]), [], msg="an unreadable manifest is not a finding")
 
     def test_a_flag_read_only_by_a_test_counts_as_unused(self):
         git = lambda *a: json.dumps([{"slug": "t", "description": "o/r#1: x"}]) if a[0] == "show" else "head:backend/src/x.test.ts:3:'t'"
@@ -283,7 +278,6 @@ class ReviewBeforePushThenTest(unittest.TestCase):
         self.assertEqual(verify_deployed_app.test_impact([]), "ok")
         self.assertEqual(verify_deployed_app.test_impact([broken_new]), "dark_only")
         self.assertEqual(verify_deployed_app.test_impact([broken_new, broken_old]), "regression")
-        # the model's word alone is not enough: no helper observation, no regression; and blocked or not_run is not "broken"
         self.assertEqual(verify_deployed_app.test_impact([dict(broken_old, api=[])]), "dark_only")
         self.assertEqual(verify_deployed_app.test_impact([dict(broken_old, status="blocked")]), "dark_only")
         self.assertEqual(verify_deployed_app.test_impact([dict(broken_old, status="not_run")]), "dark_only")
@@ -304,7 +298,7 @@ class ReviewBeforePushThenTest(unittest.TestCase):
             {"target": "nobody", "summary": "ignored"}, {"target": "factory", "summary": "  "}, "junk"])
         run = self.make(self.FLAGS, lambda *a, **k: (doc, 0.1, None))
         run.review_before_push("base1", "head1", 1)
-        run.note_improvements(doc, "reviewer")  # a second sighting adds nothing
+        run.note_improvements(doc, "reviewer")
         kept = run.state.d["improvements"]
         self.assertEqual([(i["source"], i["target"]) for i in kept], [("reviewer", "factory"), ("reviewer", "managed_app")])
 

@@ -1,13 +1,3 @@
-# The planning process (STEP 2.1 to 2.5): read an Intake, ask the planner Agent for a plan, check it, and file one child ticket per change set. It is
-# its own workflow (`plan.yml`), started by the Intake's label, before any code is written, and it files at least one child. `PlanRun` is the
-# sequencing over parts that are tested alone (validate_plan, triage, secrets_check, render_child, file_children); everything it touches in the
-# world (the Agent, GitHub, the clock) is handed in, so each ending is tested without any of them.
-#
-# Endings: planned (children filed), refused (the Factory cannot build it), awaiting_secret (the owner sets secrets, then re-adds the label),
-# needs_human (a blocking question, a rejected plan, a request that cannot be read), skipped (a child ticket, or an Intake already planned). Every
-# ending but planned and skipped comments on the Intake and leaves it as it was: retry = edit the issue, remove its label, add it again.
-#
-# Usage: python -m planning.plan_run   (PYTHONPATH=orchestrator; env as set by .github/workflows/plan.yml)
 import base64
 import json
 import os
@@ -35,7 +25,7 @@ from shared.shell import sh
 from planning import file_children, fix_for, plan_comment, secrets_check, secrets_marker, triage, validate_plan
 
 PLANNED, REFUSED, AWAITING_SECRET, NEEDS_HUMAN, SKIPPED = "planned", "refused", "awaiting_secret", "needs_human", "skipped"
-ANSWERED = (PLANNED, SKIPPED, REFUSED, AWAITING_SECRET)  # a workflow that ends this way succeeded; only needs_human is red
+ANSWERED = (PLANNED, SKIPPED, REFUSED, AWAITING_SECRET)
 
 
 class Stop(Exception):
@@ -45,7 +35,6 @@ class Stop(Exception):
 
 
 def read_intake(issue, repo, repo_info, limits):
-    # What the Intake asks for, or Stop. `repo_info(app)` is the GitHub API answer for the app's repository (a process with returncode and stdout).
     labels = {x["name"] for x in issue.get("labels") or []}
     body = issue.get("body") or ""
     if child_tickets.read_marker(body):
@@ -78,8 +67,6 @@ def read_intake(issue, repo, repo_info, limits):
 
 
 class PlanRun:
-    # `ask(task)` runs the planner and returns (plan document, cost, usage), raising NeedsHuman when no valid plan comes back; `comment(text)` posts on the
-    # Intake; `secret_names()` is the set of secrets the app's repo has; `tickets` is the parent's ChildTickets; `file(...)` is file_children.
     def __init__(self, number, intake, limits, ask, comment, secret_names, tickets, file, repo="o/f", pat=""):
         self.number, self.intake, self.lim = int(number), intake, limits
         self.ask, self.comment, self.secret_names, self.tickets, self.file = ask, comment, secret_names, tickets, file
@@ -97,7 +84,7 @@ class PlanRun:
         kind = self.intake["kind"]
         build_kind = "update" if kind == "update" else "first build"
         declared = self.intake["declared"]
-        if declared:  # checked before the planner is paid for, on every planning
+        if declared:
             missing = secrets_check.missing_secrets(declared, self.secret_names())
             if missing:
                 return self.stop(AWAITING_SECRET, secrets_check.waiting_message(missing, self.intake["app"], "re-add the label"))
@@ -130,14 +117,11 @@ class PlanRun:
 
 
 def seed_workdir(app_dir, starter=None):
-    # A new app has no code yet, so the planner reads the Starter Template it will start from (a copy, so reading it changes nothing): the same AGENTS.md, flag client and
-    # routes the coder will find. Without it the planner asked people questions the code answers (found by the second and third live planning).
     starter = Path(starter or config.FACTORY_DIR / "templates" / "starter")
     shutil.copytree(starter, app_dir, ignore=shutil.ignore_patterns("node_modules", ".git", "dist", "build"), dirs_exist_ok=True)
 
 
 def available_model(cfg, role, key):
-    # The role's model, or its fallback when the provider no longer serves it; NeedsHuman when neither is served.
     profile = cfg["roles"][role]
     base = cfg["provider"]["base_url"]
     if provider.model_status(base, key, profile["model"]) != "missing":

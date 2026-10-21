@@ -1,4 +1,3 @@
-# STEP 4.6 to 4.8: push the reviewed commit, wait for CI and the dark deploy, and diagnose a pipeline failure.
 import json
 import os
 import subprocess
@@ -14,7 +13,7 @@ from shared.shell import sh
 
 from build_run import endings
 
-NOT_STARTED_CONCLUSIONS = ("action_required", "startup_failure")  # a workflow run GitHub ended before any job started: no log to diagnose
+NOT_STARTED_CONCLUSIONS = ("action_required", "startup_failure")
 
 
 PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to Fly", "deploy-fly.yml")]
@@ -22,8 +21,6 @@ PIPELINE = [("Test Gate", "test-gate.yml"), ("Build", "build.yml"), ("Deploy to 
 
 class ShipCode:
     def push(self, head):
-        # Push the reviewed commit to `main` (which deploys it, dark if it is flagged). Only the Orchestrator pushes, and only code the
-        # reviewer has passed.
         self.check_limits()
         sh(["git", "push", "-q", "origin", "HEAD:main"], cwd=self.app_dir, env={**os.environ, **github.git_auth_env(self.auth_header)})
         self.state.d["head_sha"] = head
@@ -37,9 +34,6 @@ class ShipCode:
             out = self.gh(["run", "list", "--repo", self.app_repo, "--workflow", workflow, "--limit", "30",
                            "--json", "databaseId,headSha,status,conclusion,url"]).stdout
             runs = sorted((r for r in json.loads(out) if r["headSha"] == sha), key=lambda r: r["databaseId"])
-            # Test Gate and Build finish at different times and each starts a Deploy run; the first one
-            # finds the other not done and skips its deploy job. That run says "success" but deployed
-            # nothing, so it is not the run to wait for.
             runs = [r for r in runs if not (workflow == "deploy-fly.yml" and r["status"] == "completed"
                                             and self.deploy_skipped(r["databaseId"]))]
             if runs and runs[-1]["status"] == "completed":
@@ -81,8 +75,6 @@ class ShipCode:
         return ctx
 
     def pipeline(self, sha):
-        # Wait for Test Gate → Build → Deploy on sha, handling failures; returns the green SHA. A failure caused by the code raises
-        # PipelineFix with the coder's local fix, which the caller reviews and pushes.
         retries, n = self.lim["pipeline_retries"], 0
         while True:
             failed = None
@@ -97,7 +89,6 @@ class ShipCode:
                 self.state.stage("CI / Build / Deploy", "-", "-", 0, f"green, deployed {sha[:8]}")
                 return sha
             if failed[1] and failed[1]["conclusion"] in NOT_STARTED_CONCLUSIONS:
-                # GitHub did not run it (no jobs, no log), so there is nothing for the Pipeline Agent to read: say so, and spend nothing.
                 raise run_stops.NeedsHuman("pipeline", f"{failed[0]} did not start: GitHub ended the run as {failed[1]['conclusion']!r} before any job ran "
                                              f"({failed[1]['url']}). Approve or fix it in the app's Actions tab, then add `proceed-with-change` again.")
             n += 1

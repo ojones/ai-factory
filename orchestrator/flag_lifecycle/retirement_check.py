@@ -1,11 +1,9 @@
-# The rules a flag retirement is held to: the `retire-flag:` lines in a task, and no code may mention a retiring slug afterwards.
 import re
 
-RETIRE_RE = re.compile(r"^retire-flag: ([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*$", re.M)  # one line per flag to retire
+RETIRE_RE = re.compile(r"^retire-flag: ([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\s*$", re.M)
 
 
 def retire_slugs(task):
-    # The slugs a task asks to retire (its `retire-flag: <slug>` lines), in order, without repeats.
     return list(dict.fromkeys(RETIRE_RE.findall(task or "")))
 
 
@@ -13,8 +11,6 @@ COMMENT_START = ("//", "/*", "*", "#", "<!--")
 
 
 def code_references(grep_lines):
-    # The `git grep -n <tree> -e slug` hits that are code, not comments. The grep covers the whole tree, so source, tests (a `withFlag(slug, ...)`
-    # call) and `flags.json` all count. Format: <tree>:<path>:<line>:<text>.
     hits = []
     for line in grep_lines:
         parts = line.split(":", 3)

@@ -26,7 +26,6 @@ class Improvements(unittest.TestCase):
             return run_facts.collect_facts(tmp, {**STATE, "outcome": "released", "improvements": self.IMPS, **over})
 
     def run_main(self, state):
-        # main() with gh mocked; returns the gh calls.
         work = Path(tempfile.mkdtemp())
         (work / "state.json").write_text(json.dumps(state))
         calls = []
@@ -55,7 +54,7 @@ class Improvements(unittest.TestCase):
             return mock.Mock(stdout="[]")
         with mock.patch.object(tracker, "gh", fake_gh), mock.patch.object(tracker, "already_proposed", return_value=False):
             for_agent, filed = improvement_issues.record_improvements("o/ai-factory", "tok", self.facts())
-        self.assertEqual([r for r, _ in created], ["o/ai-factory"])  # nothing is filed in the app's repo: the Retrospective judges that event
+        self.assertEqual([r for r, _ in created], ["o/ai-factory"])
         self.assertTrue(created[0][1].startswith("Improvement ["))
         self.assertEqual(len(for_agent), 1)
         self.assertEqual([f["target"] for f in filed], ["factory", "managed_app"])
@@ -68,7 +67,7 @@ class Improvements(unittest.TestCase):
                 facts = run_facts.collect_facts(tmp, dict(STATE, outcome="released", improvements=many))
             _, filed = improvement_issues.record_improvements("o/ai-factory", "tok", facts)
         self.assertEqual(len(filed), minor_findings.MAX_MINORS)
-        self.assertEqual(len(created), 0)  # app improvements file nothing here
+        self.assertEqual(len(created), 0, msg="app improvements file nothing here")
 
     def test_a_clean_release_is_still_examined_and_reported_on_the_story(self):
         calls = self.run_main(dict(STATE, outcome="released", message="Released 1 flag(s).", improvements=self.IMPS, issue_number="7"))

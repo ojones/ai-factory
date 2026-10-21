@@ -1,5 +1,3 @@
-# A model provider that refuses every request because the account has no balance (found when DeepInfra answered 402 mid-session).
-# Nothing retries, files a self-starting fix request or runs a retrospective Agent for it; one alert asks for a top-up.
 import json
 import sys
 import tempfile
@@ -23,7 +21,6 @@ from shared import (  # noqa: E402
 )
 from try_fix import provider_alert  # noqa: E402
 
-# The event OpenHands printed, taken from the real log.
 REAL_EVENT = ('{"id": "af67", "timestamp": "2026-10-12T14:10:40", "source": "environment", "code": "LLMBadRequestError", '
               '"detail": "litellm.BadRequestError: OpenAIException - You need positive balance to do inference. '
               'Please add balance manually or setup top-up", "kind": "ConversationErrorEvent"}')
@@ -42,7 +39,7 @@ class Detection(unittest.TestCase):
     def test_a_prompt_or_a_log_that_only_mentions_balances_is_not(self):
         self.assertFalse(provider.provider_blocked_text("The spec says: check the account has a positive balance before charging."))
         self.assertFalse(provider.provider_blocked_text('{"kind": "ConversationErrorEvent", "detail": "context length exceeded"}'))
-        self.assertFalse(provider.provider_blocked_text("insufficient funds in the checkout test"))  # no error event on the line
+        self.assertFalse(provider.provider_blocked_text("insufficient funds in the checkout test"), msg="no error event on the line")
         self.assertFalse(provider.provider_blocked_text(""))
         self.assertFalse(provider.provider_blocked_text(None))
 
@@ -50,7 +47,7 @@ class Detection(unittest.TestCase):
         self.assertEqual(provider.scan_for_provider_block(tmpfile("a\n" * 100 + REAL_EVENT + "\n")), provider.BLOCKED_MESSAGE)
         self.assertIsNone(provider.scan_for_provider_block(tmpfile('{"kind": "ActionEvent"}\n')))
         self.assertIsNone(provider.scan_for_provider_block("/nonexistent/agent.jsonl"))
-        early = REAL_EVENT + "\n" + ("x" * 100 + "\n") * 5000  # an old error followed by plenty of normal output
+        early = REAL_EVENT + "\n" + ("x" * 100 + "\n") * 5000
         self.assertIsNone(provider.scan_for_provider_block(tmpfile(early), tail_bytes=20_000))
 
     def test_the_message_says_what_to_do(self):
@@ -71,7 +68,7 @@ class Places(unittest.TestCase):
         for answer in ((200, {"choices": []}), (500, "boom"), (0, "timed out"), (429, "slow down"), (403, "token spending limit exceeded"),
                        (400, "BadRequestError: context length")):
             with mock.patch.object(http_client, "request", return_value=answer):
-                provider.provider_check("https://x/v1", "key", "m")  # does not raise
+                provider.provider_check("https://x/v1", "key", "m")
 
     def test_a_402_when_minting_a_credential_is_a_provider_block_and_other_failures_are_not(self):
         with mock.patch.object(http_client, "request", return_value=(402, {})):
@@ -103,7 +100,7 @@ class Run(unittest.TestCase):
     def test_it_is_not_a_good_ending_and_is_not_rolled_back_either(self):
         self.assertNotIn("provider_blocked", outcomes.OK)
         d = {"outcome": "provider_blocked", "commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
-        self.assertFalse(rollback.rollback_decision(d)[0])  # code is fixed forward; only a regression rolls the deploy back
+        self.assertFalse(rollback.rollback_decision(d)[0], msg="code is fixed forward; only a regression rolls the deploy back")
 
 
 class AfterwardsOnlyOneAlert(unittest.TestCase):

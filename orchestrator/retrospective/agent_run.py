@@ -1,5 +1,3 @@
-# Step 4: the Retrospective Agent. It reads the facts, names a root-cause category, and edits a scratch copy of the Factory checkout with the smallest
-# change that would have prevented the failure. The Orchestrator mints its credential, runs it in isolation, and copies back only allowed paths.
 import filecmp
 import os
 import shutil
@@ -15,8 +13,6 @@ from shared.shell import sh
 CATEGORIES = ("prompt_gap", "template_gap", "orchestrator_gap", "plan_gap", "spec_ambiguity", "model_limit", "infra", "unknown")
 
 
-# Where the retrospective Agent may propose changes. Never workflows (they hold the secrets), the Starter
-# Template's protected files, or anything outside the Factory's own prompts, template, orchestrator and docs.
 ALLOWED_PREFIXES = ("agents/", "templates/starter/", "orchestrator/", "STANDARDS", "ARCHITECTURE.md", "GLOSSARY.md")
 
 
@@ -28,8 +24,6 @@ def allowed_path(path):
 
 
 def mint_agent(cfg, parent_key):
-    # (credential, budget): a single-model DeepInfra credential limited to `retrospective_cost_cap_usd`, so the Agent never
-    # holds the parent key and one analysis cannot spend more than the cap. (None, None) if one cannot be minted.
     try:
         limits = cfg["limits"]
         budget = spend_budget.Budget(parent_key, float(limits.get("retrospective_cost_cap_usd", 0.5)), int(limits["jwt_ttl_seconds"]))
@@ -44,11 +38,10 @@ def mint_agent_key(cfg, parent_key):
 
 
 def record_agent_spend(budget, key, repo, token, run_id):
-    # Add what the Agent actually spent to the spend ledger, so the daily cap sees it (best effort, never fails the run).
     try:
         spent = budget.refresh(key)
         log(f"retrospective agent spent ${spent:.4f}")
-        spend_ledger.record_spend_in_ledger({"app": "retrospective", "spent_usd": spent}, repo, f"{run_id}-pm", token)  # own id: the ledger counts a run id once
+        spend_ledger.record_spend_in_ledger({"app": "retrospective", "spent_usd": spent}, repo, f"{run_id}-pm", token)
     except Exception as e:  # noqa: BLE001
         log(f"could not record the retrospective Agent's spend: {type(e).__name__}")
 
@@ -61,13 +54,11 @@ def agent_user():
 
 
 def share_with(path, user):
-    # Make what the Orchestrator just created readable and writable by the Agent user too (a copy's permissions drop the ACL's reach).
     if user:
         sh(["sudo", "-n", "setfacl", "-R", "-m", f"u:{user}:rwX,u:{os.environ.get('USER', 'runner')}:rwX", str(path)], check=False)
 
 
 def listing(root):
-    # ({relative path: file} for regular files, {relative path: target} for symlinks) of a tree, skipping `.git`.
     files, links = {}, {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
@@ -82,8 +73,6 @@ def listing(root):
 
 
 def tree_changes(before, after):
-    # What the Agent did to its copy of the tree: ({path: "A" | "M" | "D"} for regular files, [symlinks it added or changed]). Two
-    # plain trees are compared, never a git directory the Agent could have booby-trapped (a hook or config the Orchestrator would run).
     bf, bl = listing(before)
     af, al = listing(after)
     changes = {}
@@ -99,8 +88,6 @@ def tree_changes(before, after):
 
 
 def apply_changes(before, after, changes):
-    # Copy the Agent's changes into the Orchestrator's own checkout, only for paths the Agent may change and files of a sane size.
-    # Returns the paths applied. Nothing the Agent made outside those paths ever reaches the checkout git runs in.
     applied = []
     for rel, kind in sorted(changes.items()):
         if not allowed_path(rel):
@@ -118,8 +105,6 @@ def apply_changes(before, after, changes):
 
 
 def scratch_root():
-    # A fresh directory for one Agent run, inside the Agent user's area when isolation is on (the Orchestrator's own temp
-    # directories are closed to it).
     base = Path(os.environ.get("BUILD_RUN_DIR") or tempfile.gettempdir())
     root = base / f"retrospective-{os.getpid()}-{int(time.time())}"
     root.mkdir(parents=True)
@@ -127,8 +112,6 @@ def scratch_root():
 
 
 def run_tests(factory, root, user):
-    # The orchestrator's unit tests over the Factory tree as it will be proposed, run as the Agent user in a throwaway copy with no
-    # credential in its environment: the Agent may have edited test files, and a test is code. True when they pass.
     verify = root / "verify"
     shutil.copytree(factory, verify, ignore=shutil.ignore_patterns(".git", "node_modules"), symlinks=True)
     share_with(verify, user)
@@ -144,10 +127,6 @@ def run_tests(factory, root, user):
 
 
 def run_agent(factory, cfg, key, facts_path, result_path, timeout_min):
-    # Run the retrospective Agent in a copy of the Factory tree, as the unprivileged Agent user when isolation is on (the same
-    # account and self-check as the Build Run's Agents), with a scrubbed environment and a capped scoped key. Whatever it changes is
-    # carried back into `factory` by `apply_changes`, only for allowed paths; its answer is copied to `result_path`. Returns False when
-    # isolation is on but cannot be proven, in which case no Agent runs.
     user = agent_user()
     if user:
         problems = agent_process.run_isolation_probes(user)

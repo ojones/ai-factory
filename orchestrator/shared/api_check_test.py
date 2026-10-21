@@ -1,4 +1,3 @@
-# Tests for the api-check helper (pure logic, plus a run against a throwaway local server). Run: python3 -m unittest discover -p "*_test.py" orchestrator
 import json
 import tempfile
 import threading
@@ -25,7 +24,7 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         if self.headers.get("X-Preview-Token") != "tok":
             return self._send(404, {"error": "nope"})
-        self._send(200, {"id": 7, "text": json.loads(self.rfile.read(n))["text"], "echo": self.headers.get("X-Preview-Token")})  # 200, not 201: a seeded bug
+        self._send(200, {"id": 7, "text": json.loads(self.rfile.read(n))["text"], "echo": self.headers.get("X-Preview-Token")})
 
     def do_GET(self):
         self._send(200, {"items": [{"id": 7}]} if self.path == "/api/notes" else {"id": 7})
@@ -34,7 +33,7 @@ class Handler(BaseHTTPRequestHandler):
 class Logic(unittest.TestCase):
     def test_subset_match_and_types(self):
         self.assertEqual(a.mismatches({"id": "<integer>", "t": "a"}, {"id": 3, "t": "a", "extra": 1}), [])
-        self.assertTrue(a.mismatches({"id": "<integer>"}, {"id": True}))  # a boolean is not an integer
+        self.assertTrue(a.mismatches({"id": "<integer>"}, {"id": True}), msg="a boolean is not an integer")
         self.assertTrue(a.mismatches({"t": "a"}, {"t": "b"}))
         self.assertTrue(a.mismatches({"t": "a"}, {}))
         self.assertTrue(a.mismatches([1, 2], [1]))
@@ -85,7 +84,7 @@ class Live(unittest.TestCase):
         self.assertIn("expected 201, got 200", results[0]["problems"][0])
         lines = [json.loads(line) for line in log.read_text().splitlines()]
         self.assertEqual([x["id"] for x in lines], ["create", "get", "anon"])
-        self.assertNotIn("tok", log.read_text().replace('"text"', ""))  # echoed token is scrubbed from the logged body
+        self.assertNotIn("tok", log.read_text().replace('"text"', ""), msg="echoed token is scrubbed from the logged body")
 
     def test_a_preview_check_without_a_token_fails_instead_of_passing(self):
         r = a.run_checks([{"id": "c", "request": {"path": "/x", "auth": "preview"}, "expect": {"status": 200}}], self.base, None)

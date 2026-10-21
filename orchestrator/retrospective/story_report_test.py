@@ -81,7 +81,7 @@ class Bugs(unittest.TestCase):
         calls = self.run_main(state, "factory")
         story = [c for c in calls if c[:2] == ["issue", "comment"] and c[2] == "7" and "Bugs the tester saw" in c[c.index("--body") + 1]]
         self.assertEqual(len(story), 1)
-        calls = self.run_main(state, "app")  # the bug Intake's requirements carry them already
+        calls = self.run_main(state, "app")
         self.assertFalse([c for c in calls if c[:2] == ["issue", "comment"] and "Bugs the tester saw" in c[c.index("--body") + 1]])
         self.assertTrue(any(c[:3] == ["issue", "edit", "7"] and "bug" in c for c in calls))
 

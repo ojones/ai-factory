@@ -167,7 +167,7 @@ class Run(unittest.TestCase):
         got = self.go(doc)
         self.assertEqual(got["ending"], "awaiting_secret")
         self.assertIn("WEATHER_API_KEY", self.comments[-1])
-        self.assertIn("factory-secrets", self.comments[-1])  # the hidden marker every later start checks
+        self.assertIn("factory-secrets", self.comments[-1], msg="the hidden marker every later start checks")
         self.assertEqual(self.filed, [])
         done = self.go(doc, have=["WEATHER_API_KEY"])
         self.assertEqual(done["ending"], "planned")
@@ -204,9 +204,9 @@ class Trigger(unittest.TestCase):
         cond = " ".join(job["if"].split())
         for label in ("new-app-intake", "update-app-intake"):
             self.assertIn(f"github.event.label.name == '{label}'", cond)
-        self.assertIn("factory-plan", cond)  # a child ticket (it carries the update-app-intake label) is never planned
+        self.assertIn("factory-plan", cond, msg="a child ticket (it carries the update-app-intake label) is never planned")
         self.assertIn("benchmark", cond)
-        self.assertIn("github.event_name == 'workflow_dispatch'", cond)  # only the benchmark dispatches it, with an issue number
+        self.assertIn("github.event_name == 'workflow_dispatch'", cond, msg="only the benchmark dispatches it, with an issue number")
         self.assertIn("issue_number", wf[True]["workflow_dispatch"]["inputs"])
         self.assertIn("plan-${{ github.event.issue.number || inputs.issue_number }}", wf["concurrency"]["group"])
         self.assertIs(wf["concurrency"]["cancel-in-progress"], False)
@@ -231,7 +231,7 @@ class Inheritance(unittest.TestCase):
         child = next(i for n, i in gh.issues.items() if n != 7)
         self.assertEqual({x["name"] for x in child["labels"]} >= {"benchmark", "update-app-intake", "app:notes"}, True)
         wf = (ROOT / ".github/workflows/update-app-intake.yml").read_text()
-        self.assertIn("!contains(github.event.issue.labels.*.name, 'benchmark')", wf)  # and so is the production start of such a child
+        self.assertIn("!contains(github.event.issue.labels.*.name, 'benchmark')", wf, msg="and so is the production start of such a child")
 
 
 class SeedWorkdir(unittest.TestCase):
@@ -247,7 +247,7 @@ class SeedWorkdir(unittest.TestCase):
             self.assertTrue((work / "backend" / "src" / "app.ts").exists())
             self.assertFalse((work / "node_modules").exists())
             (work / "AGENTS.md").write_text("changed")
-            self.assertEqual((starter / "AGENTS.md").read_text(), "rules")  # a copy: reading or editing it never touches the Starter
+            self.assertEqual((starter / "AGENTS.md").read_text(), "rules", msg="a copy: reading or editing it never touches the Starter")
 
     def test_the_real_starter_has_what_the_planner_is_told_to_read(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,5 +1,3 @@
-# The flag of a story is named after its issue and created before any code is written (STEP 4.1, 5.1): `issue-<n>`, `<n>` the story's own number.
-# A plan only says whether a change set is flagged; its task text carries SLOT where the slug goes, and the Build Run fills it in.
 import json
 
 from shared import child_tickets
@@ -19,8 +17,6 @@ def name_in(text, slug):
 
 
 def ensure_feature(gb, app, slug, issue_url, issue_title, issue_number):
-    # Creates the GrowthBook feature with production OFF (and the story's link and tag) unless it already exists; an existing feature is never
-    # touched. Returns True when it was created. `gb(method, path, body)` returns (status, document).
     key = f"{app}.feature.{slug}"
     status, _ = gb("GET", f"/features/{key}")
     if status == 200:
@@ -30,7 +26,6 @@ def ensure_feature(gb, app, slug, issue_url, issue_title, issue_number):
         raise NeedsHuman("other", f"could not create the flag {key}: GrowthBook answered HTTP {status} for its projects")
     feature = {"id": key, "owner": "ai-factory", "valueType": "boolean", "defaultValue": "true", "project": projects["projects"][0]["id"],
                "environments": {"production": {"enabled": False, "rules": []}}}
-    # The extras are the pointer back to the story; if GrowthBook refuses them the flag is still created without them.
     status, r = gb("POST", "/features", {**feature, "description": story_link.flag_description(issue_url, issue_title),
                                           "tags": story_link.flag_tags(issue_number, app)})
     if status == 400:
@@ -41,7 +36,6 @@ def ensure_feature(gb, app, slug, issue_url, issue_title, issue_number):
 
 
 def add_to_manifest(flags_json, slug, issue_ref, summary):
-    # `flags.json` text with the story's flag recorded, its description starting with the issue reference. Unchanged text when it is already there.
     try:
         flags = json.loads(flags_json) if (flags_json or "").strip() else []
     except ValueError:

@@ -1,4 +1,3 @@
-# Step 5: the Orchestrator, not the Agent, validates the changed paths, runs the unit tests, commits to a branch and opens a PR for a human to review.
 import json
 import os
 import re
@@ -12,13 +11,10 @@ from try_fix import factory_fix_request, route
 
 from retrospective import agent_run, tracker
 
-# Auto-merge is limited to additive changes to lint and formatter config in the Starter Template: they
-# only add or tighten a deterministic check, and the Starter Template's own checks run on the PR first.
 AUTO_MERGE_RE = re.compile(r"^templates/starter/(\.eslintrc[^/]*|eslint\.config\.[cm]?[jt]s|\.prettierrc[^/]*|"
                            r"prettier\.config\.[cm]?[jt]s|\.editorconfig)$")
 
 
-# A lesson's change should come with something that would have caught it: a smoke or replay case, a test.
 FIXTURE_RE = re.compile(r"^(agents/replay/cases\.json|agents/lint-fixtures/|agents/smoke-coder/tasks/|orchestrator/[^/]+_test\.py|templates/starter/.*(\.test\.|\.spec\.|/tests?/))")
 
 
@@ -28,7 +24,6 @@ SMOKE_DIFF_RE = re.compile(r"^agents/smoke/fixtures/[^/]+\.diff$")
 SMOKE_EXPECTED = "agents/smoke/expected.json"
 
 
-# Emphasis a prompt change must not add: a louder sentence is not a fix, and a model that was told so still adds it.
 EMPHASIS_RE = re.compile(r"\b(CRITICAL|WARNING|ACTION REQUIRED|IMPORTANT|MUST NOT|MUST)\b|\u26a0|\*\*(CRITICAL|WARNING|IMPORTANT)")
 
 
@@ -36,20 +31,14 @@ APP_PATH_RE = re.compile(r"^diff --git a/(backend|frontend)/", re.M)
 
 
 def added_lines(patch_text):
-    # The lines a unified diff adds (not the `+++` file headers).
     return [l[1:] for l in patch_text.splitlines() if l.startswith("+") and not l.startswith("+++")]
 
 
 def adds_emphasis(patch_text):
-    # True if a diff of agents/prompts/*.md adds shouting (CRITICAL, WARNING, MUST, a warning sign...). Only the
-    # added lines count, so a prompt that already says MUST somewhere is not blamed for it.
     return any(EMPHASIS_RE.search(l) for l in added_lines(patch_text))
 
 
 def bad_fixture_reason(fixture_diffs):
-    # Why new reviewer smoke fixtures cannot be used, or None. `fixture_diffs` maps each new
-    # agents/smoke/fixtures/*.diff path to its text. The reviewer is shown a Managed App's change, so a fixture that is
-    # not a diff of app code (for example a diff of a Factory prompt) tests nothing the reviewer ever sees.
     for path, text in fixture_diffs.items():
         if not APP_PATH_RE.search(text):
             return f"{path} is not a diff of Managed App code (it must change files under backend/ or frontend/)"
@@ -57,17 +46,12 @@ def bad_fixture_reason(fixture_diffs):
 
 
 def lesson_has_fixture(paths):
-    # True when a change set includes a test, smoke case or replay case alongside the fix.
-    # A reviewer smoke fixture only counts as a pair: the diff the reviewer is shown and its expected.json entry. The
-    # harness runs every fixtures/*.diff, so stray files in that folder would exercise nothing.
     if any(SMOKE_DIFF_RE.match(p) for p in paths) and SMOKE_EXPECTED in paths:
         return True
     return any(FIXTURE_RE.match(p) for p in paths)
 
 
 def auto_merge_eligible(numstat):
-    # `git diff --numstat` lines -> True only if every changed file is lint/formatter config in the
-    # Starter Template and nothing was deleted (the change can only add or tighten a check).
     rows = [line.split("\t") for line in numstat.splitlines() if line.strip()]
     if not rows:
         return False
@@ -86,7 +70,6 @@ def open_learning_prs(repo, token):
 
 
 def rejected_proposal(factory, paths):
-    # The guardrails that look at what the Agent actually changed. Returns the reason to discard it, or None.
     prompts = [p for p in paths if p.startswith("agents/prompts/") and p.endswith(".md")]
     if prompts:
         patch_text = sh(["git", "diff", "HEAD", "--", *prompts], cwd=factory).stdout
@@ -98,12 +81,9 @@ def rejected_proposal(factory, paths):
 
 
 def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3, failed_child=None):
-    # Validate what the Agent changed, test it, and open a PR. Returns the PR URL or None.
-    # The PR is labelled `auto-merge-candidate` only for an additive lint/formatter change; the PR checks
-    # workflow recomputes that and merges after its checks pass. Everything else waits for a human.
     changed = [l[3:].strip() for l in sh(["git", "status", "--porcelain"], cwd=factory).stdout.splitlines() if l]
     bad = [c for c in changed if not agent_run.allowed_path(c)]
-    for c in bad:  # drop anything outside the allowed paths rather than refusing the whole proposal
+    for c in bad:
         sh(["git", "checkout", "--", c], cwd=factory, check=False)
         sh(["git", "clean", "-fdq", "--", c], cwd=factory, check=False)
     keep = [c for c in changed if c not in bad]
@@ -114,7 +94,7 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3, failed_chi
         log(f"retrospective proposal rejected: {bad}")
         tracker.gh(["issue", "comment", str(issue_no), "--repo", repo, "--body",
             f"The retrospective Agent's proposed change was discarded by the guardrails: {bad}. No PR was opened."], pat)
-        for c in keep:  # leave the checkout clean for whatever runs next
+        for c in keep:
             sh(["git", "checkout", "--", c], cwd=factory, check=False)
             sh(["git", "clean", "-fdq", "--", c], cwd=factory, check=False)
         return None
@@ -145,10 +125,10 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3, failed_chi
             f"**Regression fixture**: {'included' if fixture else ('the lint rule is itself the check' if auto else ('none: ' + reason if reason else 'NONE, and no reason given'))}\n\n"
             + ("**Auto-merge candidate**: an additive lint or formatter change. It merges itself once the PR checks pass.\n\n" if auto
                else "Review before merging: this edits shared prompts, the Starter Template, the orchestrator or the Standards.\n\n"))
-    if failed_child:  # merging this fixes the Factory cause of a failed child, which then starts again (try_fix/resume_after_merge.py)
+    if failed_child:
         body += factory_fix_request.failed_child_marker(failed_child) + "\n"
     label = []
-    if auto:  # the label must exist, and be on the PR from the start: the checks workflow reads it from the opened event
+    if auto:
         tracker.gh(["label", "create", "auto-merge-candidate", "--repo", repo, "--color", "0e8a16", "--description", "Merges itself after the PR checks pass"], pat)
         label = ["--label", "auto-merge-candidate"]
     out = tracker.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title",
@@ -157,7 +137,6 @@ def open_pr(factory, repo, pat, issue_no, result, run_id, max_open=3, failed_chi
 
 
 def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path, targets, run_id, failed=None):
-    # Run the Agent once for these lesson issues, comment its analysis on each, and open the PR.
     key, budget = agent_run.mint_agent(cfg, parent_key)
     if not key:
         return None
@@ -171,7 +150,6 @@ def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path,
         for n in targets:
             tracker.gh(["issue", "comment", str(n), "--repo", repo, "--body", "The retrospective Agent produced no usable analysis."], token)
         return None
-    # `failed`: {child, outcome, has_bugs} of the run that failed; when its cause is the Factory's, the PR says which child its merge resumes.
     cause = route.inferred_category(result.get("category"), failed["outcome"], failed["has_bugs"]) if failed else None
     resumes = failed["child"] if failed and route.route(cause) == "factory" else None
     pr = open_pr(factory, repo, pat, targets[0], result, run_id, int(cfg["limits"].get("max_open_learning_prs", 3)), resumes)
@@ -184,8 +162,6 @@ def propose(factory, cfg, repo, pat, token, parent_key, facts_path, result_path,
 
 
 def auto_merge_check(base, head):
-    # Exit 0 only if the diff base...head is an additive lint/formatter change. The PR checks workflow
-    # calls this before merging a PR labelled `auto-merge-candidate`; it does not trust the label.
     numstat = sh(["git", "diff", "--numstat", f"{base}...{head}"], cwd=config.FACTORY_DIR).stdout
     ok = auto_merge_eligible(numstat)
     print("auto-merge eligible" if ok else "not eligible for auto-merge (a human merges this)")

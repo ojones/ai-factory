@@ -1,7 +1,3 @@
-# STEP 7.6: write the bug ticket's text for an event the retrospective judged worth fixing. The Try Fix Agent has one job: how it was found, the cause (already
-# named, never decided here), what it takes to resolve and checkable requirements. It is one model call with no tools under its own capped credential; the
-# answer is validated (validate_bug.py), and when there is no key, the call fails or the answer is unusable the Orchestrator writes the same four fields from
-# the facts (fallback), so a filing never depends on the model. It plans nothing and splits nothing: that is the planner's job.
 import json
 
 from shared import model_call, prompts, spend_budget, spend_ledger
@@ -26,13 +22,11 @@ GUIDANCE = {
 
 
 def scrubbed(verdict):
-    # The verdict with secret-shaped text taken out of the event (a log excerpt can hold one), before anything else reads it.
     ev = {**verdict["event"], **{k: validate_bug.scrub(verdict["event"].get(k)) for k in ("summary", "evidence")}}
     return {**verdict, "event": ev}
 
 
 def fallback(verdict, facts=None, rollback=None, max_criteria=6):
-    # The ticket text from the facts alone: the same four fields the Agent writes.
     ev, facts = verdict["event"], facts or {}
     where = f" ({facts['run_url']})" if facts.get("run_url") else (f" ({ev['evidence']})" if ev.get("source") in ("staging", "production_feedback", "escaped_defect") and ev.get("evidence") else "")
     cause = verdict.get("cause")
@@ -56,7 +50,6 @@ def agent_input(verdict, facts, rollback):
 
 
 def mint(cfg, parent_key):
-    # (credential, budget) limited to `try_fix_cost_cap_usd`, or (None, None).
     try:
         lim = cfg["limits"]
         budget = spend_budget.Budget(parent_key, float(lim.get("try_fix_cost_cap_usd", 0.25)), int(lim["jwt_ttl_seconds"]))
@@ -67,7 +60,6 @@ def mint(cfg, parent_key):
 
 
 def write(verdict, facts, rollback, cfg, key, ask=model_call.json_chat):
-    # {how_found, root_cause, what_it_takes, requirements, source: "agent" | "fallback"}; never raises. `key` is the Agent's own credential.
     verdict = scrubbed(verdict)
     max_criteria = int(cfg.get("limits", {}).get("planner_max_criteria", 6))
     plain = fallback(verdict, facts, rollback, max_criteria)
@@ -87,7 +79,6 @@ def write(verdict, facts, rollback, cfg, key, ask=model_call.json_chat):
 
 
 def record_spend(budget, key, repo, token, run_id):
-    # What the Agent spent goes to the spend ledger under its own id (best effort).
     try:
         spent = budget.refresh(key)
         spend_ledger.record_spend_in_ledger({"app": "try-fix", "spent_usd": spent}, repo, f"{run_id}-tf", token)

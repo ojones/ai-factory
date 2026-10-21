@@ -8,7 +8,6 @@ from build_run import track_progress  # noqa: E402
 
 
 def finding(**over):
-    # A reviewer finding as the schema requires it: blocking, backed by a cited file and line.
     return {"severity": "blocking", "category": "correctness", "evidence_kind": "cited", "summary": "x", "evidence": "e",
             "file": "backend/src/a.ts", "line": "3", "requirement": "", "suggested_fix": "", "repro": "", **over}
 
@@ -17,7 +16,7 @@ class PreviousReport(unittest.TestCase):
     def test_round_one_has_none_and_later_rounds_point_at_the_last_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertIn("none", str(track_progress.previous_report(tmp, 1)))
-            self.assertIn("none", str(track_progress.previous_report(tmp, 2)))  # no file yet
+            self.assertIn("none", str(track_progress.previous_report(tmp, 2)), msg="no file yet")
             (Path(tmp) / "test-report-1.json").write_text("{}")
             self.assertEqual(track_progress.previous_report(tmp, 2), Path(tmp) / "test-report-1.json")
 

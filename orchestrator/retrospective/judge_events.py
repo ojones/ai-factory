@@ -1,8 +1,3 @@
-# STEP 6.7: judge failure events that have no Build Run (a scan of production errors, escaped defects, a failed staging check). One model call for the
-# whole batch, from the event records and the App State only, under `retrospective_cost_cap_usd`; the answer goes through the same rules as a run's
-# (event_verdicts.decide). Filing a ticket for a `fix` verdict is Try Fix's job (tickets 15c and 15d); this file only returns and prints the verdicts.
-#
-# Usage: python -m retrospective.judge_events <events.json> <verdicts.json>   (PYTHONPATH=orchestrator; DEEPINFRA_API_KEY)
 import json
 import os
 import sys
@@ -28,10 +23,7 @@ def ask_model(base_url, key, model, system, user):
 
 
 def answer(events, cfg, key, ask=ask_model, app_state=None):
-    # The model's entries for a batch, {event key: entry}. A model that cannot be reached, or whose answer is not JSON, gives none, and the
-    # defaults apply: failures fix, warnings record.
     answer = {}
-    # A batch of failures alone needs no opinion: every failure is fixed whatever is answered (event_verdicts.decide), so the model is asked only when a warning is in it.
     if any(e["severity"] == "warning" for e in events) and key and "retrospective" in cfg.get("roles", {}):
         role = cfg["roles"]["retrospective"]
         user = json.dumps({"events": events, "app_state": app_state or {}}, indent=2)
@@ -49,7 +41,7 @@ def judge(events, cfg, key, ask=ask_model, app_state=None, fixed_today=0):
 
 def main(argv):
     events, cfg, parent = event.load(Path(argv[1])), config.load(), os.environ.get("DEEPINFRA_API_KEY")
-    key, budget = agent_run.mint_agent(cfg, parent) if events and parent else (None, None)  # a credential limited to the cap, never the parent key
+    key, budget = agent_run.mint_agent(cfg, parent) if events and parent else (None, None)
     verdicts = judge(events, cfg, key)
     if budget and os.environ.get("GITHUB_REPOSITORY") and os.environ.get("FACTORY_GH_TOKEN"):
         agent_run.record_agent_spend(budget, key, os.environ["GITHUB_REPOSITORY"], os.environ["FACTORY_GH_TOKEN"], os.environ.get("GITHUB_RUN_ID", "0"))

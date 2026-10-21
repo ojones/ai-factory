@@ -1,38 +1,15 @@
-# Plan validation for the planner role (agents/prompts/planner.md).
-#
-# The planner Agent turns a larger Intake into a plan: requirements, the questions only a person can answer, and
-# an ordered set of change sets, each one Build Run's work with its own acceptance criteria and flag. This module
-# is the deterministic gate between that plan and any coding: nothing is dispatched from a plan that fails it, and
-# a plan with an unanswered blocking question ends in a needs-human Issue instead of a guess.
-#
-# The plan format (JSON):
-#
-#   {"requirements": [{"id": "REQ-1", "text": "..."}],
-#    "assumptions": ["..."],
-#    "open_questions": [{"id": "Q-1", "text": "...", "blocking": true}],
-#    "change_sets": [{"id": "CS-1", "title": "...", "requirements": ["REQ-1"], "depends_on": [],
-#                     "criteria": ["AC-1: ..."], "verification": ["..."], "flag": "slug-or-null",
-#                     "internal_only": false, "out_of_scope": ["..."]}]}
-#
-# Used by the Build Run for an Update App Intake (`BuildRun.plan_change`): one change set becomes that run's task; several
-# are filed as child Update App Intake issues by `planning.file_children`, each its own Build Run, in this order.
 import re
 
 from planning import triage
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-# A change set that exists only to add tests. Every change set includes its own tests, so this one has no outcome of its own.
-# A change set that retires or removes a flag. Its flag must be null: the feature is already live, so a new flag would
-# switch it off. (A run that invented `retire-delete-flag` for this turned a live DELETE endpoint dark.)
 RETIRES_FLAG_RE = re.compile(r"\b(retire|retiring|remove|removing|delete|deleting|drop|dropping|clean ?up|get rid of)\b[^.]{0,60}\b(feature[- ]?)?flags?\b", re.I)
 TESTS_ONLY_RE = re.compile(r"^\s*(add|write|create|update|improve|expand|implement)\b[^.]*\b(unit |integration |comprehensive |more |additional |extra )*(tests?|test coverage|test suite)(?![\w-])", re.I)
-# A change set that bumps dependencies is a different kind of work from retiring a flag; they ship and fail separately.
 DEPENDENCY_WORK_RE = re.compile(r"\b(bump|upgrad\w*|updat\w*|dependabot)\b[^.]{0,40}\b(dependenc\w*|packages?|npm|base image)\b", re.I)
-# An HTTP route or a screen element in the criteria: something a user or a client can reach.
 USER_REACHABLE_RE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+/|\bendpoints?\b|\broutes?\b|\bbuttons?\b|\bscreens?\b|\bpage\b", re.I)
 MAX_CHANGE_SETS = 8
-MAX_CRITERIA = 6  # per change set: more means it is not one releasable, revertible slice
-SIZES = ("S", "M")  # a change set that would be "L" is split before it is filed
+MAX_CRITERIA = 6
+SIZES = ("S", "M")
 KINDS = ("staging", "update")
 CS_MENTION_RE = re.compile(r"\bCS-\d+\b")
 
@@ -42,7 +19,6 @@ def _ids(items, key="id"):
 
 
 def secret_problems(secrets):
-    # Problems with a plan's `secrets` list: [{name, purpose, read_by}], one entry per service secret the build needs.
     if secrets in (None, []):
         return []
     if not isinstance(secrets, list):
@@ -64,15 +40,13 @@ def secret_problems(secrets):
 
 
 def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, max_criteria=MAX_CRITERIA):
-    # (problems, questions). `problems` are reasons the plan cannot be used and must be redone; `questions` are
-    # the blocking open questions a person has to answer first. A plan is ready only when both are empty.
     problems, questions = [], []
     if not isinstance(plan, dict):
         return ["the plan is not a JSON object"], []
     if isinstance(plan.get("feasibility"), dict) and plan["feasibility"].get("status") == "blocked":
         if not plan["feasibility"].get("reasons"):
             return ["a blocked request needs `reasons`: one plain sentence each, naming what in the request needs it"], []
-        return [], []  # a refusal has no change sets to check
+        return [], []
 
     reqs = plan.get("requirements")
     sets = plan.get("change_sets")
@@ -133,7 +107,7 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, ma
             problems.append(f"{name} says nothing about how it will be verified")
         links = cs.get("requirements")
         if kind == "staging" and not links:
-            links = []  # the staging change set serves the infrastructure, not a requirement of the request, so it may link none
+            links = []
         elif not isinstance(links, list) or not links:
             problems.append(f"{name} is not linked to any requirement")
         else:
@@ -157,7 +131,7 @@ def validate_plan(plan, build_kind="update", max_change_sets=MAX_CHANGE_SETS, ma
             problems.append(f"{name} is marked internal_only but its criteria name an endpoint, route or screen a user can reach: "
                             "a change to those is user-visible, so give it its own flag (describing it as tooling does not make it internal)")
         if flag is True:
-            pass  # the Orchestrator names it after the story's issue (flag_lifecycle/flag_slug.py), so there is no slug to check
+            pass
         elif flag is not None:
             if not isinstance(flag, str) or not SLUG_RE.fullmatch(flag):
                 problems.append(f"{name} has an invalid flag slug {flag!r}")
@@ -201,7 +175,6 @@ def _ancestors(by_id, cs_id):
 
 
 def topological_order(change_sets):
-    # Change set ids in an order that respects `depends_on` (ties keep the listed order), or None if there is a cycle.
     sets = [cs for cs in change_sets if isinstance(cs, dict) and cs.get("id")]
     deps = {cs["id"]: [d for d in cs.get("depends_on") or [] if d in {c["id"] for c in sets}] for cs in sets}
     order, done = [], set()

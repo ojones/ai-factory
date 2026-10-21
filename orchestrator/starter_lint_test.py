@@ -1,4 +1,3 @@
-# The Starter Template's custom lint rules, run against the cases in agents/lint-fixtures/cases.json with the real ESLint.
 import json
 import shutil
 import subprocess

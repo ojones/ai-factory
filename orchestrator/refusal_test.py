@@ -1,4 +1,3 @@
-# A refusal is an ending of its own: not a failure to retry or learn from (planning/triage.py decides it; the Build Run and the retrospective treat it).
 import sys
 import unittest
 from pathlib import Path

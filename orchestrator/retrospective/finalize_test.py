@@ -1,4 +1,3 @@
-# The finalize step end to end for a failed run: a real git repo, gh mocked.
 import json
 import os
 import sys
@@ -26,7 +25,6 @@ def stages():
 
 
 class Run:
-    # A run that pushed one commit on top of its base.
     d = {"app": "demo", "outcome": "round_limit", "message": "4 rounds without a clean pass", "base_sha": "b" * 40, "head_sha": "h" * 40,
          "commits": ["h" * 40], "release": None}
 
@@ -63,8 +61,7 @@ class Finalize(unittest.TestCase):
         self.assertEqual(report["rollback"]["status"], "skipped" if False else "rolled_back")
         self.deploy.assert_called_once()
         self.assertIn("**Rollback**: the live app was redeployed from", summary)
-        self.assertEqual(report["audit"], [])  # a rollback that worked is not an audit finding
-        # the retrospective reads state.json, so the rollback and the audit must be saved there
+        self.assertEqual(report["audit"], [], msg="a rollback that worked is not an audit finding")
         self.assertEqual(saved["rollback"]["status"], "rolled_back")
         self.assertIn("audit", saved)
         self.assertFalse([c for c in calls if c[0] == "git"], "nothing is committed, pushed or reverted in git")
@@ -113,7 +110,7 @@ class Finalize(unittest.TestCase):
         facts = run_facts.collect_facts(tempfile.mkdtemp(), saved)
         self.assertIn("rollback failed", failure_text.requirements(facts, None, saved["rollback"])[0])
         lessons = lesson_records.lessons_from(facts)
-        self.assertEqual(lessons[0]["kind"], "audit_violation")  # reachable now that state.json carries the audit
+        self.assertEqual(lessons[0]["kind"], "audit_violation", msg="reachable now that state.json carries the audit")
 
 
 class Policy(unittest.TestCase):
@@ -132,8 +129,8 @@ class Policy(unittest.TestCase):
         self.assertEqual(rules(dict(base, rollback={"status": "failed", "reason": "x"})), ["A-07"])
         self.assertEqual(rules(dict(base, commits=[])), [])
         forward = dict(base, outcome="round_limit")
-        self.assertEqual(rules(forward), [])  # fixed forward: no rollback expected
-        self.assertEqual(rules(dict(forward, revert={"status": "reverted"})), ["A-08"])  # a git revert in a Report is a broken rule
+        self.assertEqual(rules(forward), [], msg="fixed forward: no rollback expected")
+        self.assertEqual(rules(dict(forward, revert={"status": "reverted"})), ["A-08"], msg="a git revert in a Report is a broken rule")
 
 
 if __name__ == "__main__":

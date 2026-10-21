@@ -1,5 +1,3 @@
-# One flag through STEP 5.1 to 5.7, with an in-memory GrowthBook: dark, released, eligible, retired; switched off by the watchdog and released
-# again; and the dark feature a person approves for removal.
 import json
 import unittest
 
@@ -15,7 +13,7 @@ def state_entry(slug, run, date, state="released"):
 
 class OneFlagThroughItsLife(unittest.TestCase):
     def start(self, gb, slug="pin-notes"):
-        flag_slug.ensure_feature(gb, APP, slug, "https://github.com/o/f/issues/9", "app: pin notes", "9")  # 5.1: created off before the coder starts
+        flag_slug.ensure_feature(gb, APP, slug, "https://github.com/o/f/issues/9", "app: pin notes", "9")
 
     def release(self, gb, flags, own=("pin-notes",)):
         to_switch, kept, missing = release_features.check_flags(gb, APP, flags, list(own))
@@ -25,14 +23,14 @@ class OneFlagThroughItsLife(unittest.TestCase):
     def test_5_1_to_5_4_dark_then_released_then_eligible_then_retired(self):
         gb = FakeGrowthBook()
         self.start(gb)
-        self.assertFalse(gb.production_enabled(KEY))  # 5.1: dark: the code is deployed, the flag exists and is off
-        released, _, _ = self.release(gb, ["pin-notes"])  # 5.2
+        self.assertFalse(gb.production_enabled(KEY), msg="5.1: dark: the code is deployed, the flag exists and is off")
+        released, _, _ = self.release(gb, ["pin-notes"])
         self.assertEqual(released, [KEY])
         self.assertTrue(gb.production_enabled(KEY))
         state = [state_entry("pin-notes", 100, "2026-10-10"), state_entry("later", 200, "2026-10-11")]
-        self.assertEqual(retirement_selection.piggyback_slugs(state, {"pin-notes", "later"}, "2026-10-12", 1, 5), ["pin-notes"])  # 5.3
-        self.assertEqual(retirement_selection.piggyback_slugs(state[:1], {"pin-notes"}, "2026-10-12", 1, 5), [])  # the newest release keeps its flag
-        task = "Add a thing" + retirement_selection.retirement_block(["pin-notes"])  # 5.4: the coder is told, the verifier holds it to it
+        self.assertEqual(retirement_selection.piggyback_slugs(state, {"pin-notes", "later"}, "2026-10-12", 1, 5), ["pin-notes"], msg="5.3")
+        self.assertEqual(retirement_selection.piggyback_slugs(state[:1], {"pin-notes"}, "2026-10-12", 1, 5), [], msg="the newest release keeps its flag")
+        task = "Add a thing" + retirement_selection.retirement_block(["pin-notes"])
         self.assertEqual(retirement_check.retire_slugs(task), ["pin-notes"])
         still_there = retirement_check.code_references(["abc:backend/src/a.ts:3:  isFeatureEnabled(res, \"pin-notes\")"])
         self.assertIsNotNone(retirement_check.retirement_problem("pin-notes", still_there))
@@ -45,11 +43,11 @@ class OneFlagThroughItsLife(unittest.TestCase):
         gb = FakeGrowthBook()
         self.start(gb)
         self.release(gb, ["pin-notes"])
-        self.assertEqual(watchdog.disable_flags(gb, [KEY]), [])  # 5.5: off, the code stays in main
+        self.assertEqual(watchdog.disable_flags(gb, [KEY]), [], msg="5.5: off, the code stays in main")
         self.assertFalse(gb.production_enabled(KEY))
-        released, kept, _ = self.release(gb, ["pin-notes"], own=())  # a run that does not own the flag leaves it alone
+        released, kept, _ = self.release(gb, ["pin-notes"], own=())
         self.assertEqual((released, kept, gb.production_enabled(KEY)), ([], [KEY], False))
-        released, _, _ = self.release(gb, ["pin-notes"])  # the story's own run switches the same flag back on
+        released, _, _ = self.release(gb, ["pin-notes"])
         self.assertEqual((released, gb.production_enabled(KEY)), ([KEY], True))
 
     def test_a_flag_that_was_never_created_is_not_made_up_at_release(self):
@@ -59,9 +57,9 @@ class OneFlagThroughItsLife(unittest.TestCase):
 
     def test_5_5_to_5_7_a_dark_feature_a_person_approves_is_removed_as_a_flagless_change(self):
         labels = ["update-app-intake", "app:app", "flag:pin-notes", "dark-broken", "needs-human"]
-        app, slug, why = dark_feature.dark_removal_target(labels)  # 5.6: the owner added approve-retire
+        app, slug, why = dark_feature.dark_removal_target(labels)
         self.assertEqual((app, slug, why), ("app", "pin-notes", None))
-        task = dark_feature.dark_removal_task(slug, 9)  # 5.7: one request, no new flag, delete the check, the code, the tests and the line
+        task = dark_feature.dark_removal_task(slug, 9)
         self.assertIn("flags.json", task)
         self.assertEqual(retirement_check.retire_slugs(task), [])
         self.assertTrue(dark_feature.is_dark_broken({"flags": ["pin-notes"], "commits": ["h"], "outcome": "stuck"}))
