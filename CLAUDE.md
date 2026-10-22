@@ -12,7 +12,7 @@ Tests are named `<name>_test.py`, beside the module (`build_run/run.py` has `bui
 ## Enforced by a check
 
 - Functions are short: aim for 5 to 10 lines, over 20 fails. If a step wants a comment, extract it into a function named for the step.
-- No comments and no docstrings: name things so they are not needed. `# noqa`, `# type:`, `# pragma` and a shebang are allowed. The reasoning behind a line goes in `docs/module-notes.md` only when a name cannot carry it.
+- No comments and no docstrings: name things so they are not needed. `# noqa`, `# type:`, `# pragma` and a shebang are allowed.
 - Indentation depth is at most 4 (`style_test`). `style_baseline.json` lists code older than these rules: a listed function may not grow, nothing new may break a limit. After shortening code run `python3 orchestrator/style_test.py --update`; `--report` shows the distance to the goal.
 - pathlib over `os.path`, absolute imports, imports at module level (a deliberate lazy import carries `# noqa: PLC0415`), an explicit encoding on every file read and write, no re-export aliases, no `try`/`except`/`pass`.
 

@@ -227,7 +227,7 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 | 2.2 | Refuse | Orchestrator | `planning/triage.feasibility`, `Refused` | 09, 13 | triage tests, refusal_test; INV-40; no live refusal |
 | 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` | 09, 13 | plan_run_test, secrets_check_test; INV-48; live: needs_human twice on #140 |
 | 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` | 09 | file_children_test, child_tickets_test; INV-54, INV-56; live #140, #145 |
-| 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` | 09, 10 | close_child_test (ready_to_start); INV-24; live: #141, #146 started by the planner, #142, #147 by the advance |
+| 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` | 09, 10 | close_child_test (ready_to_start); INV-24, INV-55; live: #141, #146 started by the planner, #142, #147 by the advance |
 | 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` | 12, 14 | staging/route_child_test, INV-57, INV-61; live #140, #145 |
 | 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh`, `staging/read_staging_child.py` | 14 | stage_script_test, read_staging_child_test; INV-57; live #141 |
 | 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` | 14 | verify_infrastructure_test; INV-57; live #141 (six checks passed) |
@@ -253,7 +253,7 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 | 6.5 | App live and recorded | Orchestrator | `retrospective/app_state.py` | 10 | app_state_test; live: the App State issue was not read |
 | 6.6 | Ongoing signals | scheduled workflows | `template_sync`, `maintenance` | 07 | dependency_updates_test, template_sync_test; INV-33, INV-35; live: scheduled runs succeed daily |
 | 6.7 | Judge events with no run | Retrospective Agent | `retrospective/judge_events.py`, `retrospective/event_verdicts.py` | 15b | judge_events_test, event_verdicts_test; INV-58; no live batch yet (production-feedback.yml runs every six hours) |
-| 7.1 | File the bug Intake | Orchestrator | `try_fix/file_bug.py`, `planning/fix_for.py`, `retrospective/close_child.settle_fix` | 15, 15d | file_bug_test, file_failure_test; INV-26, INV-27, INV-39; no live bug Intake |
+| 7.1 | File the bug Intake | Orchestrator | `try_fix/file_bug.py`, `planning/fix_for.py`, `retrospective/close_child.settle_fix` | 15, 15d | file_bug_test, file_failure_test; INV-26, INV-27, INV-39, INV-68; no live bug Intake |
 | 7.2 | Factory fix request | Orchestrator | `try_fix/factory_fix_request.py`, bug template (ticket 15c) | 15, 15d | factory_fix_request_test, file_bug_test; INV-26; no live Factory cause |
 | 7.3 | Learning PR | Retrospective Agent | `factory-run.yml` | 10 | learning_pr_test; INV-15; no live learning PR in this redesign |
 | 7.4 | Resume the failed child | Orchestrator | `retrospective/close_child.advance`, `try_fix/resume_after_merge.py` | 15, 15d | resume_after_merge_test, close_child_test (settle_fix); INV-27; no live resume |
@@ -263,7 +263,7 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 | 9.1 | File the Factory Change Intake | Orchestrator | `factory_change/file_change.py`, `factory_change/promote.py`, `factory-change-promote.yml`, `.github/ISSUE_TEMPLATE/factory-change.yml` | 32 | file_change_test, promote_test; INV-65; not run live |
 | 9.2 | Plan | Planner Agent | `agents/prompts/factory-planner.md`, `factory_change/plan.py`, `planning/plan_run.py` (kind `factory`), `planning/file_children.py` | 32 | plan_test, plan_run_test (FactoryChange), validate_plan_test with `agents/planner-fixtures/cases.json`; the prompt has not run against a live model |
 | 9.3 | Code | Factory Coder Agent | `agents/prompts/factory-coder.md`, `factory_change/write_change.py`, `factory_change/run.py`, `factory-change.yml` | 32 | write_change_test, run_test; model unmeasured on Python; target: a smoke case for Python changes |
-| 9.4 | Vet the proposal | Orchestrator | `factory_change/vet_change.py`, `factory_change/tiers.py` (carries the Agent's changes over with `agent_run.carry_over_changes`) | 32 | vet_change_test, tiers_test, run_test; INV-63, INV-66 |
+| 9.4 | Vet the proposal | Orchestrator | `factory_change/vet_change.py`, `factory_change/tiers.py` (carries the Agent's changes over with `agent_run.carry_over_changes`) | 32 | vet_change_test, tiers_test, run_test; INV-63, INV-66, INV-67 |
 | 9.5 | Review | Factory Reviewer Agent | `agents/prompts/factory-reviewer.md`, `factory_change/review_change.py` | 32 | review_change_test, output_contracts_test; verdict derived from findings as in INV-04; not run live |
 | 9.6 | Open the PR | Orchestrator | `factory_change/open_pr.py` (pushes with `learning_pr.push_branch`) | 32 | open_pr_test; INV-66 |
 | 9.7 | Gate | `factory-checks.yml`, Orchestrator | `factory-change-gate` job, `factory_change/gate.py`, `factory_change/prove_reproduction.py` | 32 | gate_test, prove_reproduction_test, run_test; INV-64; target: live smoke when the diff touches the coder, reviewer or prompt path (FC-42) |
@@ -358,7 +358,7 @@ There is no Analyst role (decision D2): the Planner plans, one Coder codes, the 
 
 - FC-70 Group 9 in `flow-spec.md` with stable `STEP 9.n` IDs.
 - FC-71 New `INV-nn` rows are added by a person, each backed by `invariants_test.py::test_invNN_*`: protected paths, no direct push to main, reproduction fails on main, breaker pause, and the amended INV-15 (see FC-43).
-- FC-72 A `factory_change` domain in `orchestrator-map.md` and `boundary_test.py`; rationale in `module-notes.md` (no comments in code).
+- FC-72 A `factory_change` domain in the Code layout of ARCHITECTURE.md and in `boundary_test.py`.
 
 ### Decisions
 

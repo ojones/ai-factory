@@ -41,7 +41,7 @@ A GitHub issue (label `update-app-intake`) asking the Factory to change a Manage
 _Avoid_: Update Intake (former term), ticket, change ticket
 
 **Planning**:
-The process, separate from any Build Run, that reads an Intake (a New App Intake from its spec, an Update App Intake also from the app's code) and files child tickets. It can end by refusing the request, stopping for a person, or planning. Run by the Planner Agent and the deterministic gate in `planner.py`.
+The process, separate from any Build Run, that reads an Intake (a New App Intake from its spec, an Update App Intake also from the app's code) and files child tickets. It can end by refusing the request, stopping for a person, or planning. Run by the Planner Agent and the deterministic gate in `planning/validate_plan.py`.
 _Avoid_: triage (that is the refusal checks inside planning)
 
 **Child ticket**:
