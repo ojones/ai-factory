@@ -174,8 +174,8 @@ limits:
   planner_max_change_sets: 8
   # More acceptance criteria than this in one change set means it is not one slice to release and revert together; the plan is rejected.
   planner_max_criteria: 6
-  # Nothing is ever reverted in git: code is fixed forward and `main` keeps every commit. The one exception is a regression (the tester
-  # finds behaviour that was live before the run stops working): the app's own CI then redeploys the previous version (the starting
+  # Nothing is ever reverted in git: code is fixed forward and `main` keeps every commit. The one exception is a regression (users are exposed to broken behaviour: the tester
+  # sees behaviour that was live before the run stop working, or a change with no gate fails a check): the app's own CI then redeploys the previous version (the starting
   # commit's image) with `rollback-fly.yml`. A change that only breaks itself stays dark, because its flag is never released, and is
   # fixed by a later run.
   rollback_regressions: true

@@ -15,3 +15,5 @@ Work like this:
 Stay inside `orchestrator/`, `agents/prompts/` and `agents/replay/`. Do not touch `.github/`, `pyproject.toml`, `orchestrator/style_baseline.json` (never raise a limit there), secrets, or model and spending lines in `agents/profiles.yml`. The Orchestrator discards a change that does, and refuses one that edits both the control path and other files. Do not run git commands that change anything and do not push: the Orchestrator reads your files and delivers the change itself.
 
 You are done when the reproduction passes, the full unit tests and `ruff check .` pass, and `{{result_path}}` exists.
+
+Never undo committed work with `git revert`, `git reset` or a force push: fix forward with a new commit.

@@ -58,9 +58,9 @@ flowchart TD
         S4_6["<b>4.6 Push</b><br/>Orchestrator pushes with the PAT"]
         S4_7["<b>4.7 CI and dark deploy</b><br/>app CI: Test Gate, then deploy DARK<br/>flag off, nothing visible to users"]
         S4_8["<b>4.8 Diagnose pipeline failure</b><br/>PIPELINE Agent reads the logs<br/>coder fixes, reviewed again before any push"]
-        S4_9["<b>4.9 Test the deployed app</b><br/>TESTER Agent runs AFTER the push<br/>Preview Token reaches the dark feature<br/>api-check and ui-check record every result<br/>repo tests, spot-check of behaviour that was live<br/>each check: passed / failed / blocked / not_run<br/>scope: new or existing"]
+        S4_9["<b>4.9 Test the deployed app</b><br/>TESTER Agent runs AFTER the push<br/>Preview Token reaches the dark feature<br/>api-check and ui-check record every result<br/>repo tests, spot-check of behaviour that was live<br/>each check: passed / failed / blocked / not_run<br/>scope: new or existing<br/>regression: behaviour live before the run broke,<br/>or an ungated change (no flag, or flag read by no code) failed"]
         S4_10["<b>4.10 Retest</b><br/>look again at the same deployed commit<br/>(test_retries 1), then needs-human"]
-        S4_11["<b>4.11 Roll back the deploy</b><br/>rollback-fly: redeploy previous image<br/>flag stays off"]
+        S4_11["<b>4.11 Roll back the deploy</b><br/>only for a regression (INV-25); no other ending rolls back<br/>rollback-fly: redeploy previous image<br/>flag stays off"]
         S4_12{"<b>4.12 Release gate</b><br/>CI green, deploy healthy,<br/>tester passed, reviewer clean,<br/>same SHA reviewed and pushed"}
         S4_13["<b>4.13 Release</b><br/>existing flag issue-N turned ON<br/>story labelled flag:issue-N<br/>watchdog watches the release"]
         S4_14["<b>4.14 Child fails</b><br/>child stays open, siblings keep waiting"]
@@ -137,14 +137,15 @@ flowchart TD
     subgraph g7["7. Try fix (fix first, never retry the unchanged child)"]
         S7_6["<b>7.6 Write the bug ticket</b><br/>Try Fix Agent, one job: a good ticket<br/>from the bug template: how it was found,<br/>root cause, what it takes to resolve,<br/>numbered checkable requirements<br/>never decides cause or target, never plans"]
         S7_1["<b>7.1 File the bug Intake</b><br/>update-app-intake + bug, filed with the PAT<br/>planned by 2.1 like any Intake<br/>failed child: marker fix_for,<br/>exactly one child with a flag of its own, blocks the failed child<br/>released story: no marker, blocks nothing"]
-        S7_2["<b>7.2 Factory fix request</b><br/>same bug template, in ai-factory<br/>factory-fix-request issue"]
+        S7_2["<b>7.2 Factory fix request</b><br/>same bug template, in ai-factory<br/>factory-fix-request issue, sightings counted"]
         S7_3["<b>7.3 Learning PR</b><br/>auto-merge if additive lint/format,<br/>else a human"]
         S7_4["<b>7.4 Resume the failed child</b><br/>the bug Intake closes: the story gets a<br/>solution comment, the origin parent advances"]
         S7_5["<b>7.5 Needs human</b><br/>nothing runs until the owner edits and re-labels"]
         S7_2 --> S7_3
         S7_3 -->|"merged; resume-failed-child.yml restarts the child"| S7_4
         S7_6 --> S7_1
-        S7_6 -->|"factory target, not orchestrator_gap"| S7_2
+        S7_6 -->|"factory target"| S7_2
+    S7_2 -->|"orchestrator_gap seen<br/>promote_after_runs times"| S9_1
         S7_1 -->|"bug Intake closes"| S7_4
     end
 
@@ -173,9 +174,9 @@ flowchart TD
     S5_5 -.-> S8_1
 
     subgraph g9["9. Factory Change (orchestrator_gap, its own process, PR to main)"]
-        S9_1["<b>9.1 File the Factory Change Intake</b><br/>label factory-change, filed with the PAT<br/>dedupe by fingerprint, acts at promote_after_runs<br/>checks the ticket: numbered requirements, evidence,<br/>a named reproduction that fails on main<br/>refuses to file while paused (9.12)"]
+        S9_1["<b>9.1 File the Factory Change Intake</b><br/>label factory-change, filed with the PAT<br/>dedupe by fingerprint, acts at promote_after_runs<br/>checks the ticket: numbered requirements, evidence,<br/>a reproduction that fails on main, or none<br/>refuses to file while paused (9.12)"]
         S9_2["<b>9.2 Plan</b><br/>Planner Agent (2.1), factory-planner prompt<br/>decides one change set or several, no flags<br/>2.4 files them as sub-issues under the Intake<br/>always at least one child"]
-        S9_3["<b>9.3 Code</b><br/>FACTORY CODER Agent, one child at a time<br/>writes the failing reproduction first if the ticket has none<br/>scratch copy, isolated<br/>no PAT, no Fly or GrowthBook key<br/>spend cap, timeout, stall limit<br/>style: CLAUDE.md, Factory Python"]
+        S9_3["<b>9.3 Code</b><br/>FACTORY CODER Agent, one child at a time<br/>writes the failing reproduction first if the ticket says none<br/>scratch copy, isolated<br/>no PAT, no Fly or GrowthBook key<br/>spend cap, timeout, stall limit<br/>style: CLAUDE.md, Factory Python"]
         S9_4["<b>9.4 Vet the proposal</b><br/>Orchestrator: allowed paths, tier list,<br/>diff size, no emphasis words,<br/>no weakened check or deleted test"]
         S9_5["<b>9.5 Review</b><br/>FACTORY REVIEWER Agent reads the diff<br/>against the ticket and the standards<br/>the orchestrator never trusts its verdict"]
         S9_6["<b>9.6 Open the PR</b><br/>branch factory-change/N, pushed by the Orchestrator<br/>max K open, one per fingerprint"]
@@ -184,7 +185,7 @@ flowchart TD
         S9_9["<b>9.9 Self-merge</b><br/>tier 1 only: squash-merge with the PAT"]
         S9_10["<b>9.10 Wait for a person</b><br/>tier 2: the Factory's own control path<br/>comment on the PR, label awaiting-human"]
         S9_11["<b>9.11 Watch after merge</b><br/>the finding coming back, a model-drift alert<br/>fix-ineffective on the lesson counts too"]
-        S9_12["<b>9.12 Revert and pause</b><br/>revert PR, label factory-change-paused<br/>nothing new starts until a person clears it"]
+        S9_12["<b>9.12 Pause</b><br/>label factory-change-paused, nothing is reverted<br/>the change stays in main and is fixed forward<br/>nothing new starts until a person clears it"]
         S9_13["<b>9.13 Refuse or stop</b><br/>not an orchestrator gap, no reproduction,<br/>diff over limit, rounds or cap used up,<br/>fix_attempts_max reached"]
 
         S9_1 --> S9_2
@@ -206,7 +207,7 @@ flowchart TD
         S9_11 -->|"the finding returns, model drift,<br/>or two fix-ineffective in a row"| S9_12
     end
 
-    S7_6 -->|"factory target,<br/>orchestrator_gap"| S9_1
+    S2_6 -->|"factory-change"| S9_3
     S9_12 -.->|"pause"| S9_1
     S9_11 -->|"clean"| S7_4
     S9_13 --> S7_5
@@ -270,7 +271,7 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 | 9.9 | Self-merge | Orchestrator | `factory-change-merge` job in `factory-checks.yml`, `factory_change/gate.py merge-check` | 32 | gate_test; INV-66 (INV-15 stays for learning PRs) |
 | 9.10 | Wait for a person | Orchestrator | `factory_change/hold_for_person.py` | 32 | run_test; INV-66 |
 | 9.11 | Watch after merge | Orchestrator | `factory_change/watch_merged.py`, `factory-change-watch.yml` | 32 | watch_merged_test |
-| 9.12 | Revert and pause | Orchestrator | `factory_change/pause.py`, `factory_change/watch_merged.py` (GitHub's `revertPullRequest`) | 32 | pause_test, watch_merged_test; INV-65 |
+| 9.12 | Pause | Orchestrator | `factory_change/pause.py`, `factory_change/watch_merged.py` | 32 | pause_test, watch_merged_test; INV-65, INV-68 |
 | 9.13 | Refuse or stop | Orchestrator | `factory_change/stop.py` | 32 | stop_test, run_test, plan_test |
 
 ## Flag lifecycle mechanics
@@ -291,7 +292,7 @@ One rule for every failure and warning, whatever found it (a failed child, a fai
 1. **An event.** Whatever finds it writes a failure event: source, severity (`failure` or `warning`), app, the story it belongs to if any, a fingerprint, a summary and the evidence. A Build Run's events come from its facts; a scan's events (8.3, a failed staging check 3.2) are handed to the Retrospective.
 2. **A verdict (6.2, 6.7).** The Retrospective Agent alone names the cause and the target (`managed_app` or `factory`) and gives every event a verdict, `fix` or `record`, with a reason. A failure is always `fix`; a warning is `record` unless the Agent says why a fix is worth it. A scan with no Build Run is judged in one batch (6.7). `record` keeps today's learning record and files nothing; the Factory no longer files Suggestion issues in a Managed App's repo.
 3. **A ticket (7.6).** The Try Fix Agent writes one bug ticket from the bug template for each `fix` verdict. It does not decide the cause or target, and it does not plan or split work. If it fails or its output does not validate, the Orchestrator writes the ticket from the facts.
-4. **An Intake (7.1, 7.2, 9.1).** An app fix is an `update-app-intake` labelled `bug`, planned by 2.1, so it has the same size and criteria limits as any change. An `orchestrator_gap` ticket is filed as a Factory Change Intake (9.1) and planned by 9.2, the same planner and child filing (2.4). Any other Factory cause (`prompt_gap`, `template_gap`, `plan_gap`) is a `factory-fix-request` issue (7.2), which is not planned: a person adds `ready-for-factory-run` and the Retrospective Agent writes a learning PR (7.3).
+4. **An Intake (7.1, 7.2, 9.1).** An app fix is an `update-app-intake` labelled `bug`, planned by 2.1, so it has the same size and criteria limits as any change. Every Factory cause starts as a `factory-fix-request` issue (7.2) that counts its sightings (the issue plus each "Failed again" comment). An `orchestrator_gap` one that reaches `promote_after_runs` sightings is filed as a Factory Change Intake (9.1) and planned by 9.2, the same planner and child filing (2.4). Any other Factory cause (`prompt_gap`, `template_gap`, `plan_gap`) stays a fix request, which is not planned: a person adds `ready-for-factory-run` and the Retrospective Agent writes a learning PR (7.3).
 5. **Dark or released.** If the story's flag was never released, is off, or was switched off by the watchdog (8.1), the failure is added as a comment on the story, the bug Intake carries `fix_for` (the failed child), the plan has exactly one child, an ordinary child with a flag of its own (or none), and the failed child waits on it. If the flag was released and is still on (8.2), a bug is a regression (8.4): a new bug Intake with no marker that nothing waits for, and the story gets a comment linking it.
 6. **Closing the loop (7.4).** When the bug Intake closes, the story gets a solution comment and the origin parent advances; the failed child resumes through the normal advance and runs again behind its own flag, which already exists, off.
 7. **Bounded.** A fix that fails is handled like any failed child: a follow-up bug Intake whose `fix_for` is the failed fix. Attempts are counted along that chain back to the original story; after `fix_attempts_max` (2) the child is held `needs-human` and nothing more is filed. One bug per event key.
@@ -309,10 +310,10 @@ Out of scope: Managed App changes, automation of the other categories, replacing
 ### 1. Intake (STEP 9.1)
 
 - FC-10 A `factory-change` issue form and label. Fields: what the Factory did wrong, evidence (run URL, event keys), what a person should see after the fix, cost cap. Issues are public, so no secrets (same rule as `golden-intakes.md`).
-- FC-11 Sources file with `file_intake`-style PAT filing: the Orchestrator after step 7.6 routes an `orchestrator_gap` verdict at or past `promote_after_runs`, and a person by hand. The Try Fix Agent never decides cause or target and is not a source.
+- FC-11 Sources file with `file_intake`-style PAT filing: `factory_change/promote.py` moves an `orchestrator_gap` fix request (7.2) once its sightings reach `promote_after_runs`, and a person files by hand. The Try Fix Agent never decides cause or target and is not a source.
 - FC-12 Replaces the human `ready-for-factory-run` step for `orchestrator_gap` only.
 - FC-13 Dedupe by fingerprint and `similar_open_issue`. A repeat adds a "Seen again" comment; a closed one that returns is reopened with `fix-ineffective`.
-- FC-14 Requirements in the ticket are numbered and checkable. The ticket names the observable failure and a reproduction (a failing test or replay case) before an agent starts; the Orchestrator checks the shape and runs a named reproduction on `main`, which must fail. No agent is spent on a ticket that does not meet this.
+- FC-14 Requirements in the ticket are numbered and checkable. The ticket names the observable failure and either a reproduction (a failing test or replay case) or `none`; the Orchestrator checks the shape and runs a named reproduction on `main`, which must fail. With `none` the Coder writes the reproduction first (FC-21) and the Orchestrator proves it fails on `main` and passes on the branch before the PR opens. No agent is spent on a ticket without a checkable failure and numbered requirements, or whose named reproduction does not fail.
 
 ### 2. Agents (STEP 9.2, 9.3, 9.5)
 
@@ -343,7 +344,7 @@ There is no Analyst role (decision D2): the Planner plans, one Coder codes, the 
 ### 5. Safety and loop control (STEP 9.11, 9.12, 9.13)
 
 - FC-50 At most K open factory-change PRs (like `max_open_learning_prs`, 3), one per fingerprint, and `fix_attempts_max` (2) along the chain, then `needs-human`.
-- FC-51 Circuit breaker (orchestrator-hardening ticket 01, revisited): if a merged change is followed by a failed Build Run at the same stage or a canary or benchmark regression, open a revert PR and pause the process until a person clears the `factory-change-paused` label. The breaker is the reason Tier 1 may self-merge.
+- FC-51 Circuit breaker (orchestrator-hardening ticket 01, revisited): if a merged change is followed by a failed Build Run at the same stage or a canary or benchmark regression, pause the process until a person clears the `factory-change-paused` label. Nothing is reverted (INV-68): the merged change stays in `main` and the returning finding, already on its Intake, is planned as a fix forward. The breaker is the reason Tier 1 may self-merge.
 - FC-52 A merged change the Retrospective later tags `fix-ineffective` counts against the process; two in a row pause it.
 - FC-53 Every step ends in a named outcome (`merged`, `pr_open`, `awaiting_human`, `refused`, `needs_human`, `paused`), and the process never fails the run it was triggered from (same contract as `run_retrospective.py`).
 - FC-54 Emphasis-word and prompt-change vetting from `rejected_proposal` apply unchanged.
@@ -351,11 +352,11 @@ There is no Analyst role (decision D2): the Planner plans, one Coder codes, the 
 ### 6. Observability
 
 - FC-60 Each ticket, PR and outcome is recorded where `monitoring/dashboard.py` reads, with spend per change.
-- FC-61 Measures: share of orchestrator_gap findings that reach a merged PR without a person, share reverted, median time from finding to merge, spend per merged change.
+- FC-61 Measures: share of orchestrator_gap findings that reach a merged PR without a person, share that tripped the breaker, median time from finding to merge, spend per merged change.
 
 ### 7. Docs and tests the build must include
 
-- FC-70 Group 9 in `flow-spec.md` with stable `STEP 9.n` IDs (already drafted there as Target rows).
+- FC-70 Group 9 in `flow-spec.md` with stable `STEP 9.n` IDs.
 - FC-71 New `INV-nn` rows are added by a person, each backed by `invariants_test.py::test_invNN_*`: protected paths, no direct push to main, reproduction fails on main, breaker pause, and the amended INV-15 (see FC-43).
 - FC-72 A `factory_change` domain in `orchestrator-map.md` and `boundary_test.py`; rationale in `module-notes.md` (no comments in code).
 
@@ -368,4 +369,4 @@ Decided in ticket 32: D1 Tier 1 self-merges behind the circuit breaker, D2 no An
 - FC-42 live smoke for Python changes is not built; prompt changes still get `reviewer-smoke` from `factory-checks.yml`.
 - FC-51 watches two signals after a merge: the finding coming back (a "Seen again" comment on the Intake) and a `model-drift` alert opening. A failed Build Run "at the same stage" is not read; the recurring finding stands in for it.
 - FC-60 and FC-61: the dashboard does not read Factory Changes yet.
-- FC-70: `factory-change-gate` is not a required check in branch protection; a person merging a Tier 2 PR should see it pass first.
+- FC-40: `factory-change-gate` is not a required check in branch protection; a person merging a Tier 2 PR should see it pass first.

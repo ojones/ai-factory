@@ -199,11 +199,15 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
 
     def stop_when_live_and_failing(self, tpassed, test_failures, head, flags):
         failed = verify_deployed_app.failed_checks(test_failures)
-        ungated = self.ungated_flags(head, flags) if failed and not tpassed else []
+        if not failed or tpassed:
+            return
+        self.state.d["blocking"] = [tester_view(r) for r in failed]
+        if not flags:
+            raise endings.Regression(missing_flag.unflagged_message())
+        ungated = self.ungated_flags(head, flags)
         if ungated:
             named = self.state.d.get("named_flag")
             self.state.d["flag_notes"] = [missing_flag.note(s, "live_and_failing", named) for s in ungated]
-            self.state.d["blocking"] = [tester_view(r) for r in failed]
             raise endings.Regression(missing_flag.live_message(ungated, named, True))
 
     def retest_or_stop(self, retests, test_failures):

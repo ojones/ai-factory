@@ -120,6 +120,14 @@ class RoundLoop(unittest.TestCase):
         self.assertEqual(run.state.d["flag_notes"][0]["kind"], "live_and_failing")
         self.assertNotIn("release", run.calls)
 
+    def test_a_failure_in_a_change_with_no_flag_at_all_is_a_regression_and_is_rolled_back(self):
+        run = self.make([(True, [], [])], [(False, [{"check": "c", "status": "failed", "scope": "new"}], "dark_only")])
+        run.run_flags = lambda base, head: []
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "regression")
+        self.assertIn("rolled back", run.state.d["message"])
+        self.assertNotIn("release", run.calls)
+
     def test_a_clean_change_whose_flag_is_missing_and_unread_ends_without_a_release_and_with_a_note(self):
         run = self.make([(True, [], [])], [(True, [], "ok")])
         run.release = lambda flags, head: run.state.d.update(release={"released": [], "kept": []}, flag_message="went live on deploy without a gate")

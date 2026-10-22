@@ -887,6 +887,18 @@ class Registry(unittest.TestCase):
         (scratch / "docs" / "invariants.md").write_text("new", encoding="utf-8")
         self.assertEqual(write_change.spec_edits(factory, scratch), ["docs/invariants.md"])
 
+    def test_inv68_nothing_is_reverted_by_any_agent_or_code_path(self):
+        code = [p for p in (ROOT / "orchestrator").rglob("*.py") if not p.name.endswith("_test.py")]
+        for path in code:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("revertPullRequest", text, msg=str(path))
+            self.assertNotRegex(text, r"""["'](git|pr)["'],\s*["']revert["']""", msg=str(path))
+        pipeline = [*ROOT.glob(".github/**/*.yml"), *ROOT.glob("templates/**/*.yml"), *ROOT.glob("templates/**/*.sh"), *ROOT.glob("infra/**/*.sh")]
+        for path in pipeline:
+            self.assertNotRegex(path.read_text(encoding="utf-8"), r"git revert|gh pr revert|revertPullRequest", msg=str(path))
+        for role in ("coder", "factory-coder", "retrospective"):
+            self.assertIn("Never undo committed work with `git revert`", (ROOT / f"agents/prompts/{role}.md").read_text(encoding="utf-8"))
+
     def test_the_table_and_the_tests_list_the_same_invariants(self):
         table = set(re.findall(r"^\| INV-(\d\d) \|", (ROOT / "docs/invariants.md").read_text(), re.M))
         tests = set(re.findall(r"def test_inv(\d\d)_", Path(__file__).read_text(encoding="utf-8")))

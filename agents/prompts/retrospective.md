@@ -11,3 +11,5 @@ Work like this:
 6. Do not commit, branch or push: the Orchestrator validates and proposes the change.
 
 Write `{{result_path}}` as JSON: `{"category": "<one of the categories>", "root_cause": "one or two sentences naming the evidence", "change_summary": "what you changed and why it generalizes, or \"none\"", "no_fixture_reason": "why no regression fixture was added, or an empty string", "requirements": ["optional: 1 to 3 checkable conditions for whoever fixes this, each one sentence"], "events": [{"key": "<an event key>", "verdict": "fix or record", "target": "managed_app or factory", "cause": "one line", "reason": "one sentence"}]}`. You are done when that file exists.
+
+Never undo committed work with `git revert`, `git reset` or a force push: fix forward with a new commit.

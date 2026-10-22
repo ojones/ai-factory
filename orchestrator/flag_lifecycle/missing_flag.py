@@ -29,3 +29,7 @@ def live_message(slugs, named_flag, failed):
                 "rolled back. Likely cause: " + guess(slugs[0], named_flag) + ".")
     return (f"The change went live on deploy without a gate: {what} is declared but no code reads it. The tests found no problem, so it is left as "
             "it is. Likely cause: " + guess(slugs[0], named_flag) + ".")
+
+
+def unflagged_message():
+    return "The change has no flag, so it went live on deploy for everyone, and the tests found a failure: the deploy is rolled back and the fix is a new change."

@@ -11,7 +11,7 @@ from factory_change import markers, open_pr, pause, stop
 
 WATCHING = "factory-change-watching"
 CLEAN = "factory-change-clean"
-REVERTED = "factory-change-reverted"
+TRIPPED = "factory-change-tripped"
 DRIFT_LABEL = "model-drift"
 INEFFECTIVE = "fix-ineffective"
 SAME_FINDING = "same-finding"
@@ -73,10 +73,9 @@ def start_watching(repo, token, pr_number, body):
 
 
 def trip(repo, pat, pr, reason):
-    url = pause.revert(repo, pat, pr["number"])
-    github.ensure_label(repo, REVERTED, pat, "b60205", "A Factory Change that was reverted")
-    mark(repo, pat, pr["number"], REVERTED)
-    pause.pause(repo, pat, reason, url or f"Revert #{pr['number']} by hand: the automatic revert failed.")
+    github.ensure_label(repo, TRIPPED, pat, "b60205", "A merged Factory Change that the watch found failing; it is fixed forward")
+    mark(repo, pat, pr["number"], TRIPPED)
+    pause.pause(repo, pat, reason, f"#{pr['number']} stays in main and is fixed forward: the finding is on its Intake and a person clears the pause to let a new change be planned.")
     return stop.PAUSED
 
 

@@ -248,7 +248,7 @@ STEP 9.3 to 9.10: the order is the cheapest refusal first. The scope check comes
 
 ### watch_merged.py
 
-STEP 9.11, 9.12 (INV-65): a merged change is judged by whether its own finding comes back, because the Retrospective files a returning finding under the same fingerprint, which the Intake records as a "Seen again" comment; that stands in for "a failed Build Run at the same stage", which the Orchestrator does not record anywhere it could be read back. A `model-drift` alert opened after the merge counts as a canary regression. The revert goes through GitHub's `revertPullRequest`, so no Orchestrator code path commits a revert (INV-25 is about a Managed App's repository and stays as it is).
+STEP 9.11, 9.12 (INV-65): a merged change is judged by whether its own finding comes back, because the Retrospective files a returning finding under the same fingerprint, which the Intake records as a "Seen again" comment; that stands in for "a failed Build Run at the same stage", which the Orchestrator does not record anywhere it could be read back. A `model-drift` alert opened after the merge counts as a canary regression. Nothing is reverted (INV-68): `watch_merged.trip` labels the merged PR `factory-change-tripped` and pauses; the change stays in `main` and the returning finding, already on its Intake, is planned as a fix forward.
 
 ### promote.py
 
@@ -262,7 +262,7 @@ A flag the change declares but GrowthBook does not have at release. The release 
 missing flag is a sign something earlier went wrong. What it means depends on whether the code reads the flag.
   - the code reads it: the feature is deployed dark and nothing can switch it on. A failure (`flag_missing`), nothing is rolled back; the story is
     fixed forward with a flag that exists.
-  - the code does not read it: the change went live on deploy with no gate. If the tests found no problem it is left alone and noted; if they found
+  - the code does not read it: the change went live on deploy with no gate (a change with no flag at all is treated the same way when a check fails: a regression, rolled back). If the tests found no problem it is left alone and noted; if they found
     a failure it is rolled back like any regression. Either way the note is recorded for the retrospective to learn from.
 
 ### retirement_selection.py
@@ -997,7 +997,7 @@ The reasons behind individual lines and functions, by file and function, moved o
 ### orchestrator/retrospective/agent_run.py
 
 `module`
-- Where the retrospective Agent may propose changes. Never workflows (they hold the secrets), the Starter Template's protected files, or anything outside the Factory's own prompts, template, orchestrator and docs.
+- Where the retrospective Agent may propose changes. Never workflows (they hold the secrets), the Starter Template's protected files, or anything outside the Factory's own prompts, template, orchestrator, `ARCHITECTURE.md` and the glossary; nothing under `docs/`.
 
 `record_agent_spend`
 - own id: the ledger counts a run id once
@@ -1183,7 +1183,7 @@ The reasons behind individual lines and functions, by file and function, moved o
 ### orchestrator/shared/rollback.py
 
 `rollback_decision`
-- (rollback, reason). Code is fixed forward, never taken out of git: nothing is reverted, and `main` keeps every commit. A change that only breaks itself is dark (its flag is never released) and a later run fixes it. The one exception is a regression, where the tester saw behaviour that was live before the run stop working: the live app is then put back on the previous deployed version by the app's own CI (`rollback-fly.yml` redeploys that version's image), because the broken behaviour is live for everyone. The commits stay.
+- (rollback, reason). Code is fixed forward, never taken out of git: nothing is reverted, and `main` keeps every commit. A change that only breaks itself is dark (its flag is never released) and a later run fixes it. The one exception is a regression, where users are exposed to broken behaviour (the tester saw, through a helper, behaviour that was live before the run stop working, or a change with no gate, no flag or an unread one, failed a check): the live app is then put back on the previous deployed version by the app's own CI (`rollback-fly.yml` redeploys that version's image), because the broken behaviour is live for everyone. The commits stay.
 
 `rollback_deploy`
 - Redeploy the previous version through the app's own CI: dispatch its `rollback-fly.yml` for the run's starting commit (whose image the earlier deploy left in Fly's registry), wait for that run, then for /api/health. Nothing is committed. Returns {"status": rolled_back|failed, "restored": sha, "deploy": healthy|deploy_failed|timeout, ...}; never raises.

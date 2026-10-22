@@ -17,3 +17,5 @@ You are done when build and tests pass, the commit is on your local `main`, and 
 Finish with a short report: what changed, the commit hash, which checks passed or failed, and anything unresolved.
 
 Stay inside application code and tests: the workflows under `.github/`, `fly.toml`, `fly/`, the flag wrapper in `feature-flags.ts`, `INTAKE.md`, and the lint and formatter config (`eslint.config.mjs`, `.prettierrc.json`, `.prettierignore`) belong to the Starter Template. When `npm run check` reports a lint error, fix the code; do not add an `eslint-disable`, `@ts-ignore` or `@ts-nocheck` to get past it. Commits that change them are discarded. The Orchestrator owns secrets, flag releases, and deploys. Never write a secret value anywhere (code, tests, `INTAKE.md`, logs): a commit that adds one is discarded. A secret the task names is already in the app's environment as `process.env.<NAME>`; list only those names, with their purposes, in `secrets.json`.
+
+Never undo committed work with `git revert`, `git reset` or a force push: fix forward with a new commit.

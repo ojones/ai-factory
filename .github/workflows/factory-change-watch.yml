@@ -1,7 +1,7 @@
 name: Factory Change watch
 
 # STEP 9.11 and 9.12. A merged Factory Change pull request (branch `factory-change/<child>`) is watched for `factory_change_watch_hours`. If the finding comes back or a model-drift
-# alert opens after the merge, the Orchestrator opens a revert pull request and pauses the process (an open issue labelled `factory-change-paused`); a person clears it.
+# alert opens after the merge, the Orchestrator pauses the process and reverts nothing (an open issue labelled `factory-change-paused`); a person clears it.
 # If the window passes quietly the child closes, the plan advances and the Build Run child that triggered the finding starts again. Merging with the PAT is what lets the `closed`
 # event below start this workflow.
 on:
@@ -49,7 +49,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pyyaml
-      - name: Settle the changes whose window has passed, revert and pause on a failure
+      - name: Settle the changes whose window has passed, pause on a failure
         env:
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
         run: PYTHONPATH=orchestrator python -m factory_change.watch_merged sweep

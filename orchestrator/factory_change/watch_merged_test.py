@@ -19,19 +19,14 @@ NOW_SOON, NOW_LATER = MERGED_AT + timedelta(hours=2), MERGED_AT + timedelta(hour
 class Gh(FakeIssues):
     def __init__(self):
         super().__init__()
-        self.prs, self.drift, self.seen_again, self.graphql = [], [], False, []
+        self.prs, self.drift, self.seen_again = [], [], False
 
     def __call__(self, args, token, check=False):
         if args[:2] == ["pr", "list"]:
             return self.ok(self.prs)
-        if args[:2] == ["pr", "view"]:
-            return self.ok({"id": "PR_node"})
         if args[:2] == ["pr", "edit"]:
             self.calls.append(args)
             return self.empty()
-        if args[:2] == ["api", "graphql"]:
-            self.graphql.append(args)
-            return self.ok({"data": {"revertPullRequest": {"revertPullRequest": {"url": "https://github.com/o/f/pull/20"}}}})
         if args[:2] == ["issue", "list"] and "model-drift" in args:
             return self.ok(self.drift)
         return super().__call__(args, token, check)
@@ -63,18 +58,18 @@ class Watching(unittest.TestCase):
         self.assertEqual(self.sweep(NOW_SOON), {9: None})
         self.advance.assert_not_called()
 
-    def test_the_finding_coming_back_reverts_and_pauses(self):
+    def test_the_finding_coming_back_pauses_and_reverts_nothing(self):
         self.gh.comments[3] = []
         self.gh.cli_view = lambda args: self.gh.ok({"labels": [], "body": "", "comments": [{"body": "**Seen again:** x", "createdAt": "2026-10-21T13:00:00Z"}]})
         self.assertEqual(self.sweep(NOW_SOON), {9: "paused"})
-        self.assertEqual(len(self.gh.graphql), 1)
+        self.assertFalse([c for c in self.gh.calls if "revert" in " ".join(c).lower()])
         self.assertTrue(pause.is_paused("o/f", "pat"))
         self.advance.assert_not_called()
 
-    def test_a_model_drift_alert_after_the_merge_reverts_and_pauses(self):
+    def test_a_model_drift_alert_after_the_merge_pauses_and_reverts_nothing(self):
         self.gh.drift = [{"number": 40, "createdAt": "2026-10-21T14:00:00Z"}]
         self.assertEqual(self.sweep(NOW_SOON), {9: "paused"})
-        self.assertEqual(len(self.gh.graphql), 1)
+        self.assertFalse([c for c in self.gh.calls if "revert" in " ".join(c).lower()])
 
     def test_an_alert_from_before_the_merge_does_not_count(self):
         self.gh.drift = [{"number": 40, "createdAt": "2026-10-20T14:00:00Z"}]
