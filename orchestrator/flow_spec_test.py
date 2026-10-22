@@ -23,6 +23,34 @@ def expand(cell):
     return out
 
 
+EDGE_LINE = re.compile(r'^\s*(S\d+_\d+) (?:-->|-\.->)(?:\|"[^"]*"\|)? (S\d+_\d+)\s*$')
+
+
+def step_groups():
+    groups, current = {}, None
+    for line in diagram().split("\n"):
+        opened = re.match(r"\s*subgraph g(\d+)\[", line)
+        current = opened.group(1) if opened else (None if line.strip() == "end" else current)
+        node = re.match(r"\s*(S\d+_\d+)[\[\{\(]", line)
+        if node and current:
+            groups[node.group(1)] = current
+    return groups
+
+
+def edges():
+    return [m.groups() for m in map(EDGE_LINE.match, diagram().split("\n")) if m]
+
+
+def crossing_positions():
+    groups = step_groups()
+    return [i for i, (a, b) in enumerate(edges()) if groups[a] != groups[b]]
+
+
+def linkstyle_positions():
+    found = re.findall(r"^\s*linkStyle ([\d,]+) ", diagram(), re.M)
+    return [int(n) for n in found[0].split(",")] if len(found) == 1 else None
+
+
 def diagram_steps():
     declared = re.findall(r'\bS(\d+)_(\d+)(?:\["|\{"|\(\["|\("|\{")<b>(\d+\.\d+) ', diagram())
     return declared
@@ -53,6 +81,17 @@ class FlowSpec(unittest.TestCase):
         self.assertEqual(declared - used, set())
         groups = set(re.findall(r'subgraph (g\d+)\["', diagram()))
         self.assertEqual(groups, {f"g{n}" for n in range(1, 10)})
+
+    def test_every_arrow_line_in_the_diagram_is_an_edge_the_checks_can_read(self):
+        arrows = [line for line in diagram().split("\n") if re.search(r"-->|-\.->", line)]
+        self.assertEqual(len(arrows), len(edges()))
+
+    def test_the_diagram_uses_no_syntax_the_editor_previews_fail_on(self):
+        self.assertNotRegex(diagram(), r"\be\d+@")
+        self.assertNotRegex(diagram(), r"animate|linkStyle default")
+
+    def test_the_linkstyle_line_lists_exactly_the_edges_that_cross_a_group(self):
+        self.assertEqual(linkstyle_positions(), crossing_positions())
 
     def test_the_step_index_lists_exactly_the_diagram_steps(self):
         in_index = set()

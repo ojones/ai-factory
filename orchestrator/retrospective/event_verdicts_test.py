@@ -93,6 +93,11 @@ class JudgeRunEvents(unittest.TestCase):
         self.assertEqual({v["key"]: v["verdict"] for v in got}, {FAIL["key"]: "fix", WARN["key"]: "record", WARN2["key"]: "fix"})
         self.assertEqual(len(saved), 3)
 
+    def test_when_todays_fixes_cannot_be_counted_no_warning_is_fixed_but_failures_still_are(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(fix_budget, "warnings_fixed_today", side_effect=RuntimeError("down")):
+            got = run_retrospective.judge_run_events([FAIL, WARN], {"events": [entry(WARN, "fix")]}, self.CFG, None, "o/f", "tok", "demo", Path(tmp), "stuck")
+        self.assertEqual({v["key"]: v["verdict"] for v in got}, {FAIL["key"]: "fix", WARN["key"]: "record"})
+
     def test_without_a_key_nothing_is_asked_and_the_defaults_apply(self):
         got, asked, _ = self.judge([FAIL, WARN], None, key=None)
         self.assertEqual(asked, [])

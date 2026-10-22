@@ -1,9 +1,10 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from shared import app_state_record  # noqa: E402
+from shared import app_state_record, shell  # noqa: E402
 
 from retrospective import app_state as a  # noqa: E402
 
@@ -13,6 +14,15 @@ def report(app="notes", outcome="released", day="2026-10-10", released=("notes.f
          "review_passes": 2, "release": {"released": list(released), "kept": []}}
     d.update(kw)
     return d
+
+
+class StateIssueRead(unittest.TestCase):
+    def test_an_unreadable_issue_list_raises_instead_of_creating_a_duplicate_state_issue(self):
+        down = mock.Mock(returncode=1, stdout="", stderr="down")
+        with mock.patch.object(shell, "run_bounded", return_value=down), \
+                mock.patch.object(a, "create_state_issue") as create, self.assertRaises(RuntimeError):
+            a.upsert_state_issue("o/app", "t", "state", "title", "ffffff", lambda prev: prev)
+        create.assert_not_called()
 
 
 class AppState(unittest.TestCase):

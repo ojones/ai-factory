@@ -90,8 +90,8 @@ def render_registry(prev_body, d, state_url):
     return "\n".join(lines) + "\n\n" + app_state_record.dump(data) + "\n"
 
 
-def gh_text(args, token):
-    return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=False).stdout
+def gh_text(args, token, check=False):
+    return sh(["gh", *args], env={**os.environ, "GH_TOKEN": token}, check=check).stdout
 
 
 def write_body_file(body):
@@ -110,7 +110,7 @@ def create_state_issue(repo, token, label, title, color, body):
 
 
 def upsert_state_issue(repo, token, label, title, color, render):
-    found = json.loads(gh_text(["issue", "list", "--repo", repo, "--label", label, "--state", "open", "--json", "number,body,url"], token) or "[]")
+    found = json.loads(gh_text(["issue", "list", "--repo", repo, "--label", label, "--state", "open", "--json", "number,body,url"], token, check=True) or "[]")
     body = render(found[0]["body"] if found else "")
     if not found:
         return create_state_issue(repo, token, label, title, color, body)

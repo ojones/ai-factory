@@ -1,12 +1,13 @@
 # The flow: the numbered spec
 
-This is the official specification of how a request becomes a running, recorded change. Every step has a stable ID (`group.step`, for example `STEP 4.9`, Test the deployed app) so that docs, tickets, tests and verification runs can cite it. [ARCHITECTURE.md](../ARCHITECTURE.md) explains the parts; where it disagrees with this page, this page is the intended behaviour and ARCHITECTURE.md is brought into line. This is the only flow diagram kept in the repo; the older ones were deleted, and a new one is drawn only when it is needed.
+This is the official specification of how a request becomes a running, recorded change. Every step has a stable ID (`group.step`, for example `STEP 4.9`, Test the deployed app) so that docs, tickets, tests and verification runs can cite it. [ARCHITECTURE.md](../ARCHITECTURE.md) explains the parts; where it disagrees with this page, this page is the intended behaviour and ARCHITECTURE.md is brought into line. These are the only flow diagrams kept in the repo (the full one and the group-level summary); the older ones were deleted, and a new one is drawn only when it is needed.
 
 **Status.** This is the workflow the code implements. The failure-to-ticket path (6.7, 7.1, 7.6, 8.x) is built (tickets 15b to 15d and 16); the live proof is ticket 17. Group 9 (Factory Change) is built and unit-tested but has not run live. The plan, order of work and the tickets that close each gap are in `.wayfinder/intake-planning-redesign/`. The "Implemented by" and "Verified by" columns are filled as each group is built and then checked in the last ticket.
 
 **Domains.** Each numbered group is a domain with its own folder under `orchestrator/` (see [ARCHITECTURE.md](../ARCHITECTURE.md#code-layout)): 1 Request (`request`), 2 Planning (`planning`), 3 Staging (`staging`), 4 Build Run (`build_run`), 5 Flag Lifecycle (`flag_lifecycle`), 6 Retrospective (`retrospective`, record and advance included), 7 Try Fix (`try_fix`), 8 Bugs (`bugs`), 9 Factory Change (`factory_change`). Maintenance and Monitoring have no steps.
 
 **Rules for changing this page.**
+- The full diagram has no edge IDs (`e1@-->`), no `animate` lines and no `linkStyle default`: the VS Code Mermaid viewers fail to render it with "Cannot read properties of null (reading 'getAttribute')" unless every edge is animated. The edges that cross a group are drawn thick by one `linkStyle` line at the end, listing their positions; `flow_spec_test.py` fails when that list is not exactly the crossing edges, so adding or moving an edge means updating it.
 - IDs are stable. Never renumber a step; add the next free number in its domain, or retire an ID by leaving it in the index marked retired.
 - Cite a step as `STEP n.m` in any doc; `flow_spec_test.py` fails when a cited ID does not exist, when the diagram and the index disagree, or when an invariant's Step names a step that does not exist.
 - An invariant in [invariants.md](invariants.md) names the step it enforces in its Step column.
@@ -62,7 +63,7 @@ flowchart TD
         S4_10["<b>4.10 Retest</b><br/>look again at the same deployed commit<br/>(test_retries 1), then needs-human"]
         S4_11["<b>4.11 Roll back the deploy</b><br/>only for a regression (INV-25); no other ending rolls back<br/>rollback-fly: redeploy previous image<br/>flag stays off"]
         S4_12{"<b>4.12 Release gate</b><br/>CI green, deploy healthy,<br/>tester passed, reviewer clean,<br/>same SHA reviewed and pushed"}
-        S4_13["<b>4.13 Release</b><br/>existing flag issue-N turned ON<br/>story labelled flag:issue-N<br/>watchdog watches the release"]
+        S4_13["<b>4.13 Release</b><br/>existing flag issue-N turned ON<br/>story labelled flag:issue-N<br/>5.8 watches the release"]
         S4_14["<b>4.14 Child fails</b><br/>child stays open, siblings keep waiting"]
 
         S4_1 --> S4_3
@@ -94,21 +95,23 @@ flowchart TD
         S5_2["<b>5.2 Released</b><br/>flag ON for everyone"]
         S5_3["<b>5.3 Eligible for retirement</b>"]
         S5_4["<b>5.4 Retired</b><br/>coder deletes the flag check, the flag-off tests<br/>and the flags.json line in its own commit; unwraps flag-on tests<br/>verifier rejects the commit while issue-N appears anywhere<br/>TESTER checks the behaviour is still on for an ordinary visitor<br/>flag archived in GrowthBook, story comment says so"]
-        S5_5["<b>5.5 Dark-broken candidate</b><br/>watchdog switched it off<br/>flag stays off; its child is failed and waits for a fix, then runs again behind it"]
+        S5_5["<b>5.5 Dark-broken candidate</b><br/>the watchdog (5.8) switched it off<br/>flag stays off; its child is failed and waits for a fix, then runs again behind it"]
         S5_6["<b>5.6 Owner approves retirement</b><br/>adds approve-retire to the story"]
+        S5_8["<b>5.8 Watch the release</b><br/>watchdog, ten minutes after 4.13<br/>health check fails in a row, or new error lines<br/>switches off only the flags its own run released"]
         S5_7["<b>5.7 Retirement intake</b><br/>update-app-intake, planned, one child, no flag<br/>deletes check, code, tests, flags.json line<br/>nothing removes a dark feature on its own"]
         S5_1 --> S5_2
         S5_2 -->|"a LATER Build Run also ends released<br/>and at least 1 day has passed"| S5_3
-        S5_3 --> S4_2
-        S4_2 --> S5_4
-        S5_2 -->|"watchdog switches it off"| S5_5
+        S5_8 -->|"trips: the watchdog switches the flag off"| S5_5
         S5_5 -->|"fixed and released"| S5_2
         S5_5 -->|"cause not fixable:<br/>needs-human + dark-broken"| S5_6
         S5_6 --> S5_7
         S5_7 --> S5_4
     end
 
+    S5_3 --> S4_2
+    S4_2 --> S5_4
     S4_13 --> S5_2
+    S4_13 --> S5_8
     S4_1 -.->|"flag created OFF"| S5_1
 
     S3_2 --> S6_1
@@ -145,9 +148,10 @@ flowchart TD
         S7_3 -->|"merged; resume-failed-child.yml restarts the child"| S7_4
         S7_6 --> S7_1
         S7_6 -->|"factory target"| S7_2
-    S7_2 -->|"orchestrator_gap seen<br/>promote_after_runs times"| S9_1
         S7_1 -->|"bug Intake closes"| S7_4
     end
+
+    S7_2 -->|"orchestrator_gap seen<br/>promote_after_runs times"| S9_1
 
     S6_2 -->|"verdict fix, app cause<br/>(code wrong, spec ambiguous)"| S7_6
     S6_7 -->|"verdict fix"| S7_6
@@ -160,7 +164,7 @@ flowchart TD
     subgraph g8["8. Bugs found later"]
         S8_1["<b>8.1 Bug while still dark</b><br/>flag never released, off,<br/>or switched off by the watchdog:<br/>failure comment on the same story,<br/>the open child waits for its fix"]
         S8_2["<b>8.2 Validated release</b><br/>flag released and still on:<br/>feature is fully released"]
-        S8_3["<b>8.3 Watch production</b><br/>watchdog, production feedback<br/>Fly errors, escaped-defect issue<br/>each finding becomes an event"]
+        S8_3["<b>8.3 Watch production</b><br/>production feedback, a scan every six hours<br/>Fly errors, escaped-defect issue<br/>each finding becomes an event"]
         S8_4["<b>8.4 Regression</b><br/>a bug now is a REGRESSION:<br/>new bug Intake, nothing waits,<br/>comment on the story linking it"]
         S8_3 --> S8_1
         S8_3 --> S8_2
@@ -212,6 +216,76 @@ flowchart TD
     S9_11 -->|"clean"| S7_4
     S9_13 --> S7_5
     S9_13 -.->|"other category"| S7_2
+
+    linkStyle 0,1,2,10,31,39,40,41,42,43,44,45,51,52,53,54,60,61,62,63,64,65,66,67,71,72,73,74,75,93,95,96,97 stroke-width:3px
+```
+
+## Diagram: how the groups connect
+
+The same flow with each group collapsed to one box. Round boxes are what sits outside every group and still acts on one: the Owner, Monitoring, Scheduled upkeep (Maintenance and the Starter Template) and Services (Fly and GrowthBook). Dashed lines come from outside a group or are optional. This is a summary of the diagram above: when an edge there crosses a group, it appears here.
+
+```mermaid
+flowchart TD
+    owner(["Owner (a person)<br/>forms, approve-retire, edits and re-labels,<br/>merges tier 2 Factory PRs and learning PRs"])
+    mon(["Monitoring (no steps)<br/>benchmark, canary, dashboard, Fly audit"])
+
+    subgraph upkeep["Scheduled upkeep"]
+        maint(["Maintenance (no steps)<br/>template sync, dependency updates"])
+        starter(["Starter Template"])
+    end
+
+    subgraph services["Services"]
+        fly(["Fly<br/>app, deploys, rollback, errors"])
+        gb(["GrowthBook<br/>flag service"])
+    end
+
+    G1["<b>1. Request</b>"]
+    G2["<b>2. Planning</b>"]
+    G3["<b>3. Staging</b><br/>new app, child 1"]
+    G4["<b>4. Build</b><br/>every other child"]
+    G5["<b>5. Flag lifecycle</b>"]
+    G6["<b>6. Record and advance</b><br/>incl. Retrospective"]
+    G7["<b>7. Try fix</b>"]
+    G8["<b>8. Bugs found later</b>"]
+    G9["<b>9. Factory Change</b><br/>PR to main"]
+
+    G1 -->|"Intake issue"| G2
+    G2 -->|"staging child"| G3
+    G2 -->|"update child"| G4
+    G2 -->|"factory-change child"| G9
+    G3 -->|"child closed,<br/>or a failed check"| G6
+    G4 -->|"child closed or failed"| G6
+    G4 -->|"flag created OFF, released, watched (5.8), retired"| G5
+    G5 -->|"eligible: retired as a ride-along"| G4
+    G5 -.->|"retirement Intake"| G1
+    G5 -->|"dark-broken flag"| G8
+    G6 -->|"next child"| G2
+    G6 -->|"ongoing signals, app live:<br/>automated and update Intakes"| G1
+    G6 -->|"verdict fix, or no cause"| G7
+    G6 -->|"app live and recorded"| G8
+    G8 -->|"events with no run"| G6
+    G8 -->|"how to file the bug Intake"| G7
+    G7 -->|"bug Intake to plan"| G2
+    G7 -->|"bug Intake closed:<br/>resume the failed child"| G4
+    G7 -->|"orchestrator_gap seen<br/>promote_after_runs times"| G9
+    G9 -->|"clean, refused or stopped,<br/>other category"| G7
+
+    owner -.->|"New and Update App Intake forms"| G1
+    owner -.->|"fix and re-label a stopped plan"| G2
+    owner -.->|"approve-retire"| G5
+    owner -.->|"edit and re-label (7.5),<br/>learning PR"| G7
+    owner -.->|"merges a tier 2 PR"| G9
+    maint -.->|"change requests"| G1
+    starter -.->|"repo for a new app"| G3
+    starter -.->|"template changes"| maint
+    mon -.->|"benchmark Intakes"| G1
+    mon -.->|"model-drift alert"| G9
+    G3 -->|"provisions"| fly
+    G4 -->|"deploys dark, rolls back"| fly
+    fly -.->|"errors, escaped defects"| G8
+    G3 -->|"creates the flag service"| gb
+    G4 -->|"flag issue-N"| gb
+    G5 -->|"turns on, archives"| gb
 ```
 
 ## Step index
@@ -243,9 +317,10 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 | 4.10 | Retest | Orchestrator | `limits.test_retries` | 11 | run_test (retests); no live retest |
 | 4.11 | Roll back the deploy | Orchestrator | `rollback-fly.yml` | 11 | rollback_test; INV-25; no live regression |
 | 4.12 | Release gate | Orchestrator | `build_run/gate_release.py` | 11 | gate_release_test; INV-03; live #142 |
-| 4.13 | Release | Orchestrator | `build_run/gate_release.py`, `flag_lifecycle/` | 08, 11 | gate_release_test; INV-06, INV-07, INV-52; live #142 (clean watch; a trip not seen) |
+| 4.13 | Release | Orchestrator | `build_run/gate_release.py`, `flag_lifecycle/` | 08, 11 | gate_release_test; INV-06, INV-52; live #142 (clean watch; a trip not seen) |
 | 4.14 | Child fails | Orchestrator | `retrospective/close_child.finish_update_intake` | 10, 11, 15d | finalize_test, close_child_test; INV-19, INV-29; live: #147 stopped provider_blocked and was left without the start label |
 | 5.1-5.7 | Flag lifecycle | Orchestrator | `flag_lifecycle/`, `retrospective/app_state.py` | 08, 08b, 08c | flag_lifecycle tests, app_state_test; INV-37, INV-38, INV-43, INV-51, INV-53; live: 5.1, 5.2 (issue-142, issue-146); 5.3 to 5.7 not seen |
+| 5.8 | Watch the release | Orchestrator | `flag_lifecycle/watchdog.py`, `build_run/gate_release.py` | 08 | watchdog_test; INV-07; live #142 (clean watch; a trip not seen) |
 | 6.1 | Child closed | Orchestrator | `retrospective/close_child.finish_update_intake` | 10 | close_child_test; live #141, #142, #146 |
 | 6.2 | Retrospective | Retrospective Agent | `retrospective/finalize.py`, `retrospective/run_retrospective.py`, `retrospective/cause.py`, `retrospective/event_verdicts.py` | 10, 15b | finalize_test, cause_test, event_verdicts_test; INV-14, INV-17, INV-20, INV-45, INV-58; live: released runs and one provider_blocked; no failure with a cause |
 | 6.3 | Advance to the next child | Orchestrator | `retrospective/close_child.advance` | 10 | close_child_test; INV-23; live: #141 to #142, #146 to #147 |
@@ -276,10 +351,11 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 
 ## Flag lifecycle mechanics
 
-Group 5, with STEP 4.1 to 5.7. One story, one flag; short-lived; retired by riding along in a later run; a dark-broken feature removed only after `approve-retire`. The mechanics are deterministic and named after the issue (the why is in [ARCHITECTURE.md](../ARCHITECTURE.md#release-and-retirement)):
+Group 5, with STEP 4.1 to 5.8. One story, one flag; short-lived; retired by riding along in a later run; a dark-broken feature removed only after `approve-retire`. The mechanics are deterministic and named after the issue (the why is in [ARCHITECTURE.md](../ARCHITECTURE.md#release-and-retirement)):
 
 - **Name (built).** The slug is `issue-<n>`, `<n>` the number of the story's issue (an issue that runs again keeps its flag). The planner no longer chooses a slug; it only says whether the change set is flagged (`flag: true`) or internal only. The GrowthBook key stays `<app-slug>.feature.issue-<n>`.
 - **Created at the start of the Build Run (built).** The Orchestrator creates the GrowthBook feature (production off, description linking the story issue, tag `intake-<n>`) and writes the `flags.json` entry in a local commit before the coder starts, so the coder only wraps code and the flag exists while the coder and tester work. Release only switches production on the story's own flag, after the same four gates, and never creates a flag. Existing flags are never touched. **A flag that does not exist at release** means one of two things. If the code reads it, the change is deployed dark with nothing to turn it on: the run ends as a failure (`flag_missing`), nothing is rolled back, and the failure says that a flag which can be turned on has to be added in the next round. If no code reads it, the change went live on deploy with no gate: if the tests found no problem it is left alone with a note, and if they found a failure the deploy is rolled back like any regression. Either way the run records what was missing and a guess why (`flag_notes` in the Report), so the retrospective can recommend a fix to the Orchestrator or the app.
+- **Watched after release (built, INV-07).** Step 5.8 is the watchdog: for `watchdog_minutes` after 4.13 it samples the deployed app every `watchdog_interval_seconds`, and trips when the health check fails `watchdog_max_failures` times in a row or the error-level log lines rise by `watchdog_max_errors` over the count before the release. A trip switches off in GrowthBook only the flags its own run released and the feature becomes 5.5. The production scan (8.3) is a separate, later watch.
 - **Dark mode is unit tested (built, INV-53).** The Starter provides a test helper `withFlag(slug, on, fn)`, and `npm run check` fails a commit when a slug in `flags.json` lacks a flag-off test or a flag-on test, or has more than one entry point.
 - **Retirement removes the tests too (built, INV-53).** The coder deletes the flag check, the `flags.json` line and the flag-off tests, and unwraps the flag-on tests, in its own commit; the Orchestrator rejects the commit while the slug still appears in code, tests or `flags.json` (comments aside). Only the owner-approved `approve-retire` is planned, as one child with no flag.
 - **A failure is fixed through a bug Intake** (STEP 7.1, `fix_for`) instead of an automatic retry of the unchanged issue; the fix child has its own flag, and the failed child runs again behind its own.

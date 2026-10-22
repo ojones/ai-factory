@@ -1,4 +1,3 @@
-import contextlib
 
 from shared.console import log
 
@@ -15,6 +14,13 @@ def target_for(verdict, facts, result):
     return "managed_app"
 
 
+def hold_story(repo, token, story, cause):
+    try:
+        needs_human.hold(repo, token, story, f"the bug ticket for it could not be filed ({type(cause).__name__})")
+    except Exception as e:  # noqa: BLE001 - the retrospective never fails the run
+        log(f"could not hold #{story} for a person either: {type(e).__name__}: {e}")
+
+
 def file_failures(repo, token, pat, fixes, facts, result, rollback, cfg, key=None, record_spend=None):
     lim = cfg.get("limits", {})
     cred, budget = write_bug.mint(cfg, key) if key and "try_fix" in cfg.get("roles", {}) else (None, None)
@@ -29,8 +35,7 @@ def file_failures(repo, token, pat, fixes, facts, result, rollback, cfg, key=Non
             log(f"could not file the bug for {v['key']}: {type(e).__name__}: {e}")
             story = v["event"].get("story")
             if story and v["event"]["severity"] == "failure":
-                with contextlib.suppress(Exception):
-                    needs_human.hold(repo, token, story, f"the bug ticket for it could not be filed ({type(e).__name__})")
+                hold_story(repo, token, story, e)
             got = {"target": verdict["target"], "action": "needs_human", "number": None, "url": ""}
         out.append({"key": v["key"], "source": v["event"]["source"], "severity": v["event"]["severity"], **got})
     if budget and cred and record_spend:

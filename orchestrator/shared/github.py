@@ -1,9 +1,10 @@
 import os
-import subprocess
+
+from shared import shell
 
 
 def run(args, token, check=False):
-    p = subprocess.run(["gh", *args], capture_output=True, text=True, env={**os.environ, "GH_TOKEN": token})
+    p = shell.run_bounded(["gh", *args], None, {**os.environ, "GH_TOKEN": token}, None)
     if check and p.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args[:3])} failed: {p.stderr.strip()[:200]}")
     return p

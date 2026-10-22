@@ -9,9 +9,13 @@ def parse(result):
     return {str(e["key"]): e for e in entries if isinstance(e, dict) and e.get("key")}
 
 
+def fix_cap(limits):
+    return int((limits or {}).get("fix_events_per_app_per_day", 3))
+
+
 def decide(events, agent_entries=None, limits=None, fixed_today=0):
     lim, entries, used = limits or {}, agent_entries or {}, int(fixed_today)
-    cap = int(lim.get("fix_events_per_app_per_day", 3))
+    cap = fix_cap(lim)
     out = []
     for ev in events:
         said = entries.get(ev["key"]) or {}

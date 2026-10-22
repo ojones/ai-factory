@@ -85,7 +85,7 @@ def with_sighting(body, run_url, app):
 
 
 def note_sighting(repo, token, number, facts, promote_after):
-    out = gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], token).stdout
+    out = gh(["issue", "view", str(number), "--repo", repo, "--json", "body"], token, check=True).stdout
     body, runs, _ = with_sighting((json.loads(out or "{}")).get("body") or "", facts["run_url"], facts["app"])
     gh(["issue", "edit", str(number), "--repo", repo, "--body", body] + (["--add-label", RECURRING_LABEL] if runs >= max(promote_after, 2) else []), token)
     return runs

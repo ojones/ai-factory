@@ -13,6 +13,25 @@ from build_run import track_progress  # noqa: E402
 from build_run.run import BuildRun  # noqa: E402
 
 
+class ArchiveRetired(unittest.TestCase):
+    def archive(self, shown):
+        run = object.__new__(BuildRun)
+        run.state, run.app, run.gb = track_progress.State("/tmp/unused-state.json", "x", "1", "u"), "notes", mock.Mock(return_value=(200, {}))
+        run.state.d["outcome"] = "released"
+        run.git = lambda *a, **k: shown.pop(0)
+        run.gh = mock.Mock()
+        run.archive_retired_flags("b", "h")
+        return run
+
+    def test_a_flags_file_that_cannot_be_read_archives_nothing(self):
+        both = [mock.Mock(returncode=0, stdout='[{"slug": "a"}]'), mock.Mock(returncode=1, stdout="")]
+        self.archive(both).gb.assert_not_called()
+
+    def test_a_removed_flag_is_archived_when_both_files_read(self):
+        both = [mock.Mock(returncode=0, stdout='[{"slug": "a"}]'), mock.Mock(returncode=0, stdout="[]")]
+        self.archive(both).gb.assert_called_once()
+
+
 class Watchdog(unittest.TestCase):
     ok, bad = {"healthy": True, "errors": 0}, {"healthy": False, "errors": 0}
 

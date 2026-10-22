@@ -24,6 +24,12 @@ class FixedToday(unittest.TestCase):
         self.assertEqual(args[args.index("--search") + 1], "created:>=2026-10-19")
         self.assertEqual([args[i + 1] for i, a in enumerate(args) if a == "--label"], ["bug", "app:demo"])
 
+    def test_a_failed_listing_raises_so_the_caller_can_fail_closed(self):
+        def gh(args, token, check=False):
+            raise RuntimeError("gh issue list failed")
+        with mock.patch.object(tracker, "gh", gh), self.assertRaises(RuntimeError):
+            fix_budget.warnings_fixed_today("o/f", "t", "demo")
+
     def test_no_output_is_zero(self):
         with mock.patch.object(tracker, "gh", lambda *a, **k: mock.Mock(stdout="")):
             self.assertEqual(fix_budget.warnings_fixed_today("o/f", "t", "demo"), 0)

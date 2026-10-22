@@ -38,6 +38,18 @@ class SightingCount(unittest.TestCase):
         self.assertEqual(tracker.sightings(body), {"https://x/runs/1": "todo", "https://x/runs/2": "notes"})
         self.assertEqual(tracker.sightings("no marker"), {})
 
+    def test_a_failed_read_never_overwrites_the_issue_body(self):
+        calls = []
+
+        def gh(args, token, check=False):
+            calls.append(args[1])
+            if check:
+                raise RuntimeError("gh issue view failed")
+            return mock.Mock(stdout="")
+        with mock.patch.object(tracker, "gh", gh), self.assertRaises(RuntimeError):
+            tracker.note_sighting("o/f", "t", 7, {"run_url": "https://x/runs/1", "app": "todo"}, 2)
+        self.assertEqual(calls, ["view"])
+
     def test_promotion_waits_for_enough_distinct_runs_unless_severe(self):
         self.assertFalse(tracker.ready_for_fix(1, 2))
         self.assertTrue(tracker.ready_for_fix(2, 2))

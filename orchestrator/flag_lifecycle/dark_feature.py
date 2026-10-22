@@ -20,9 +20,9 @@ def label_dark_feature(d, repo, token):
             labels = [DARK_BROKEN] + [l for l in (story_link.flag_label(slug) for slug in d["flags"]) if l]
             for name in labels[1:]:
                 github.ensure_label(repo, name, token, "0e8a16", "The feature flag this story's change is behind")
-            shell.sh(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", ",".join(labels)], env=env, check=False)
+            shell.sh(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", ",".join(labels)], env=env)
         elif d.get("outcome") == "released":
-            shell.sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", f"{DARK_BROKEN},bug"], env=env, check=False)
+            shell.sh(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", f"{DARK_BROKEN},bug"], env=env)
     except Exception as e:  # noqa: BLE001
         print(f"could not label the dark feature: {type(e).__name__}", flush=True)
 

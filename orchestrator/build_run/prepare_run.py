@@ -271,23 +271,13 @@ class PrepareRun:
             code = "timeout"
         log(f"npm ci {'ok' if code == 0 else f'failed ({code}); the coder will install for itself'} in {time.time() - began:.0f}s")
 
-    def ledger_issue(self):
-        out = self.gh(["issue", "list", "--repo", self.factory_repo, "--label", spend_ledger.LEDGER_LABEL, "--state", "open",
-                       "--json", "number"], token=self.factory_token, check=False).stdout
-        found = json.loads(out or "[]")
-        return found[0]["number"] if found else None
-
     def check_daily_cap(self):
         cap = float(self.lim.get("daily_cost_cap_usd", 0) or 0)
         if cap <= 0:
             return
-        number = self.ledger_issue()
-        if not number:
+        total = spend_ledger.todays_spend(lambda args, tok: self.gh(args, token=tok, check=False), self.factory_repo, self.factory_token)
+        if total is None:
             return
-        day = time.strftime("%Y-%m-%d", time.gmtime())
-        out = self.gh(["api", f"repos/{self.factory_repo}/issues/{number}/comments?per_page=100&since={day}T00:00:00Z",
-                       "--paginate", "--jq", ".[].body"], token=self.factory_token, check=False).stdout
-        total = spend_ledger.ledger_total(out.split("\n"), day)
         self.state.d["daily_spent_usd"] = total
         if total >= cap:
             raise run_stops.NeedsHuman("other", f"today's Build Runs have already spent ${total:.2f} of the ${cap:.2f} daily cap; "

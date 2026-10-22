@@ -70,6 +70,11 @@ class FileFailures(unittest.TestCase):
         hold.assert_called_once()
         self.assertEqual(hold.call_args.args[2], 12)
 
+    def test_a_hold_that_also_fails_is_logged_not_swallowed(self):
+        with mock.patch.object(file_failure, "log") as shown, mock.patch.object(file_failure.needs_human, "hold", side_effect=RuntimeError("down")):
+            file_failure.hold_story("o/f", "tok", 12, RuntimeError("boom"))
+        self.assertIn("#12", shown.call_args.args[0])
+
     def test_a_warning_that_cannot_be_filed_holds_nothing(self):
         out, _, _, _, hold = self.go([verdict(source="tester", severity="warning")], file_error=RuntimeError("boom"))
         self.assertEqual(out[0]["action"], "needs_human")

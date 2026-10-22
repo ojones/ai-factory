@@ -4,7 +4,6 @@ import base64
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import time
@@ -12,7 +11,7 @@ from pathlib import Path
 
 import yaml
 from request import intake_labels, render_form
-from shared import api_check, config, github, http_client, outcomes, preview_token
+from shared import api_check, config, github, http_client, outcomes, preview_token, shell
 
 ROOT = config.FACTORY_DIR
 SUITE = ROOT / "agents" / "benchmark" / "suite.json"
@@ -235,7 +234,7 @@ def _env():
 
 
 def gh(args, token=None, check=True):
-    p = subprocess.run(["gh", *args], capture_output=True, text=True, env={**os.environ, "GH_TOKEN": token or os.environ["FACTORY_PAT"]})
+    p = shell.run_bounded(["gh", *args], None, {**os.environ, "GH_TOKEN": token or os.environ["FACTORY_PAT"]}, None)
     if check and p.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args[:3])} failed: {(p.stderr or p.stdout)[-300:]}")
     return p.stdout
@@ -254,15 +253,15 @@ def delete_branch(repo, branch):
 
 
 def reset_bench(owner, app, base_sha):
-    header = "Authorization: Basic " + __import__("base64").b64encode(f"x-access-token:{os.environ['FACTORY_PAT']}".encode()).decode()
+    header = "Authorization: Basic " + base64.b64encode(f"x-access-token:{os.environ['FACTORY_PAT']}".encode()).decode()
     env = {**os.environ, **github.git_auth_env(header)}
     work = tempfile.mkdtemp(prefix="bench-")
     url = f"https://github.com/{owner}/{app}.git"
-    subprocess.run(["git", "clone", "-q", "--no-checkout", url, work], env=env, check=True, capture_output=True)
-    head = subprocess.run(["git", "rev-parse", "origin/main"], cwd=work, capture_output=True, text=True).stdout.strip()
+    shell.sh(["git", "clone", "-q", "--no-checkout", url, work], env=env)
+    head = shell.sh(["git", "rev-parse", "origin/main"], cwd=work).stdout.strip()
     if head == base_sha:
         return False
-    subprocess.run(["git", "push", "-q", "--force", "origin", f"{base_sha}:refs/heads/main"], cwd=work, env=env, check=True, capture_output=True)
+    shell.sh(["git", "push", "-q", "--force", "origin", f"{base_sha}:refs/heads/main"], cwd=work, env=env)
     deadline = time.time() + 20 * 60
     while time.time() < deadline:
         runs = json.loads(gh(["run", "list", "--repo", f"{owner}/{app}", "--workflow", "deploy-fly.yml", "--limit", "10", "--json", "headSha,status,conclusion"], check=False) or "[]")

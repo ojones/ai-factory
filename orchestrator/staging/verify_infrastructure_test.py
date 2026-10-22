@@ -2,6 +2,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from staging import verify_infrastructure as v  # noqa: E402
@@ -100,6 +101,27 @@ class Checks(unittest.TestCase):
         self.assertEqual([r["check"] for r in failed], ["secrets_present"])
         self.assertIn("RuntimeError", failed[0]["detail"])
         self.assertIn("FAILED", v.report(out))
+
+
+class ConnectionPaging(unittest.TestCase):
+    def probes(self, pages):
+        probes = v.LiveProbes({"FACTORY_PAT": "p", "GROWTHBOOK_ADMIN_PAT": "a"}, "o/app", "notes")
+        probes.connections_page = mock.Mock(side_effect=pages)
+        return probes
+
+    def test_a_connection_past_the_first_page_is_found(self):
+        probes = self.probes([{"connections": [{"name": "other"}], "hasMore": True, "nextOffset": 100},
+                              {"connections": [{"name": "notes"}], "hasMore": False}])
+        self.assertTrue(probes.flag_connection())
+        self.assertEqual(probes.connections_page.call_args.args, (100,))
+
+    def test_no_match_on_the_last_page_is_false(self):
+        self.assertFalse(self.probes([{"connections": [{"name": "other"}], "hasMore": False}]).flag_connection())
+
+    def test_a_page_that_promises_more_without_an_offset_stops(self):
+        probes = self.probes([{"connections": [], "hasMore": True}])
+        self.assertFalse(probes.flag_connection())
+        self.assertEqual(probes.connections_page.call_count, 1)
 
 
 if __name__ == "__main__":

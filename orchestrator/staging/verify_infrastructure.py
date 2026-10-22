@@ -136,6 +136,9 @@ def fetch(method, url, headers):
         return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read().decode("utf-8", "replace")
 
 
+MAX_CONNECTION_PAGES = 20
+
+
 class LiveProbes:
     def __init__(self, env, app_repo, app):
         self.pat, self.admin, self.app_repo, self.app = env["FACTORY_PAT"], env["GROWTHBOOK_ADMIN_PAT"], app_repo, app
@@ -149,10 +152,20 @@ class LiveProbes:
         p = github.run(["secret", "list", "--repo", self.app_repo, "--json", "name"], self.pat)
         return {x["name"] for x in json.loads(p.stdout or "[]")}
 
+    def connections_page(self, offset):
+        req = urllib.request.Request(f"{self.api}/sdk-connections?limit=100&offset={offset}", headers={"Authorization": f"Bearer {self.admin}"})
+        return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
     def flag_connection(self):
-        req = urllib.request.Request(f"{self.api}/sdk-connections?limit=100", headers={"Authorization": f"Bearer {self.admin}"})
-        found = json.loads(urllib.request.urlopen(req, timeout=30).read())
-        return any(c.get("name") == self.app for c in found.get("connections") or [])
+        offset = 0
+        for _ in range(MAX_CONNECTION_PAGES):
+            page = self.connections_page(offset)
+            if any(c.get("name") == self.app for c in page.get("connections") or []):
+                return True
+            offset = page.get("nextOffset")
+            if not page.get("hasMore") or offset is None:
+                return False
+        return False
 
 
 def declared_secret_names(repo, number, pat):

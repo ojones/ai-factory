@@ -53,8 +53,8 @@ def judge_run_events(events, result, cfg, key, repo, token, app, work, outcome):
     try:
         fixed = fix_budget.warnings_fixed_today(repo, token, app)
     except Exception as e:  # noqa: BLE001 - counting never fails the run
-        log(f"could not count today's fixed warnings: {type(e).__name__}: {e}")
-        fixed = 0
+        log(f"could not count today's fixed warnings, so no warning is fixed this run: {type(e).__name__}: {e}")
+        fixed = event_verdicts.fix_cap(cfg.get("limits"))
     verdicts = event_verdicts.decide(events, entries, cfg.get("limits", {}), fixed)
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
     (work / "artifacts" / "retrospective-verdicts.json").write_text(json.dumps(verdicts, indent=2))
@@ -72,8 +72,8 @@ class Sightings:
         try:
             return tracker.note_sighting(self.repo, self.token, number, self.facts, self.promote_after)
         except Exception as e:  # noqa: BLE001 - counting never fails the run
-            log(f"could not count the sighting on #{number}: {type(e).__name__}: {e}")
-            return self.promote_after
+            log(f"could not count the sighting on #{number}, so it is not promoted this run: {type(e).__name__}: {e}")
+            return 0
 
     def earned(self, number, severe=False):
         if number not in self.seen_in:
@@ -200,5 +200,5 @@ if __name__ == "__main__":
                 sys.exit(1)
         sys.exit(main())
     except Exception as e:  # noqa: BLE001 - the retrospective must never fail the run
-        print(f"retrospective failed: {type(e).__name__}: {e}", flush=True)
+        print(f"::warning::retrospective failed: {type(e).__name__}: {e}", flush=True)
         sys.exit(0)

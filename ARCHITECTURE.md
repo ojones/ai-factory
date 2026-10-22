@@ -247,7 +247,7 @@ A domain is a plain Python folder under `orchestrator/` that holds one part of t
 | Planning (`planning/`) | 2.1 to 2.6 | the Planner, plan validation, child tickets |
 | Staging (`staging/`) | 3.1, 3.2 | stage a new app and verify its infrastructure |
 | Build Run (`build_run/`) | 4.1 to 4.14 | one `BuildRun` class whose steps are mixins, one file each |
-| Flag Lifecycle (`flag_lifecycle/`) | 5.1 to 5.7 | flag names, creation, release, watchdog, retirement |
+| Flag Lifecycle (`flag_lifecycle/`) | 5.1 to 5.8 | flag names, creation, release, watchdog (5.8), retirement |
 | Retrospective (`retrospective/`) | 6.1 to 6.7 | close a child, name the cause, judge events, learn |
 | Try Fix (`try_fix/`) | 7.1 to 7.6 | failure events, bug tickets, Factory fix requests |
 | Bugs (`bugs/`) | 8.1 to 8.4 | production errors and escaped defects |

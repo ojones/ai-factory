@@ -37,12 +37,19 @@ class ReleaseStep:
         except Exception as e:  # noqa: BLE001
             log(f"could not link the flag to its issue: {type(e).__name__}: {e}")
 
+    def flags_json_at(self, rev):
+        shown = self.git("show", f"{rev}:flags.json", check=False)
+        return shown.stdout if shown.returncode == 0 else None
+
     def archive_retired_flags(self, base, head):
         if self.state.d.get("outcome") not in outcomes.OK:
             return
         try:
-            for slug, status in retirement_archive.archive_removed(self.gb, self.app, self.git("show", f"{base}:flags.json", check=False).stdout,
-                                                                   self.git("show", f"{head}:flags.json", check=False).stdout):
+            before, after = self.flags_json_at(base), self.flags_json_at(head)
+            if before is None or after is None:
+                log("did not archive retired flags: flags.json could not be read at both commits")
+                return
+            for slug, status in retirement_archive.archive_removed(self.gb, self.app, before, after):
                 log(f"archived retired flag {slug} in GrowthBook (HTTP {status})")
                 story = getattr(self, "flag_issues", {}).get(slug)
                 if story:

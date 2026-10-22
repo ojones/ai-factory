@@ -12,7 +12,7 @@ Some tests exercise the code (what the rule says must happen), some read a file 
 | INV-04 | The reviewer's verdict is derived from its findings; the model's own `verdict` field is ignored. | ARCHITECTURE: Reviewer | 4.5 |
 | INV-05 | A tester check passes only in the state `passed`; `failed`, `blocked` and `not_run` all keep a change from releasing. | ARCHITECTURE: Tester | 4.9 |
 | INV-06 | The release step switches on only the story's own flag (named after its own issue; an earlier attempt of that issue may have created it, off); it never creates a flag, and any other flag that already exists in GrowthBook is never touched. | ARCHITECTURE: stage 5 | 4.13 |
-| INV-07 | The watchdog switches off only the flags its own run released. | ARCHITECTURE: stage 5 | 4.13 |
+| INV-07 | The watchdog switches off only the flags its own run released. | ARCHITECTURE: stage 5 | 5.8 |
 | INV-08 | The Preview Token the Build Run computes is the one the shell script computes for App Staging. | ARCHITECTURE: Secrets pushed | 4.9 |
 | INV-09 | Each Agent invocation's credential is a single-model scoped JWT limited to what is left of the run's cap. | ARCHITECTURE: Cost guardrails | 4.3 |
 | INV-10 | An Intake cost-cap override above the configured ceiling, or not above zero, is refused. | ARCHITECTURE: Cost guardrails | 4.1 |

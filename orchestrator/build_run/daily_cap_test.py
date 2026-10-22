@@ -1,3 +1,4 @@
+import json
 import sys
 import time
 import unittest
@@ -23,12 +24,12 @@ class SpendLedger(unittest.TestCase):
         line = spend_ledger.ledger_line("2026-10-10", "notes", 0.5, "42")
         self.assertEqual(spend_ledger.ledger_total([line, line], "2026-10-10"), 0.5)
 
-    def make(self, cap, comments, issue=7):
+    def make(self, cap, comments, issue=7, code=0):
         run = object.__new__(BuildRun)
         run.lim, run.factory_repo, run.factory_token = {"daily_cost_cap_usd": cap}, "o/f", "t"
         run.state = track_progress.State("/tmp/unused-state.json", "x", "1", "u")
-        run.ledger_issue = lambda: issue
-        run.gh = mock.Mock(return_value=mock.Mock(stdout="\n".join(comments)))
+        listing = json.dumps([{"number": issue}] if issue else [])
+        run.gh = mock.Mock(side_effect=[mock.Mock(returncode=code, stdout=listing), mock.Mock(returncode=code, stdout="\n".join(comments))])
         return run
 
     def today_line(self, usd, run_id):
@@ -47,6 +48,29 @@ class SpendLedger(unittest.TestCase):
         run.check_daily_cap()
         run.gh.assert_not_called()
         self.make(5.0, [], issue=None).check_daily_cap()
+
+    def test_a_ledger_that_cannot_be_read_stops_the_run(self):
+        with self.assertRaises(run_stops.NeedsHuman) as cm:
+            self.make(5.0, [], code=1).check_daily_cap()
+        self.assertIn("cannot be checked", str(cm.exception))
+
+
+class RecordSpend(unittest.TestCase):
+    def test_a_failed_write_prints_the_line_to_add_by_hand(self):
+        with mock.patch.object(spend_ledger, "post_ledger_line", side_effect=RuntimeError("boom")), mock.patch("builtins.print") as shown:
+            spend_ledger.record_spend_in_ledger({"app": "a", "spent_usd": 1.5}, "o/f", "42", "t")
+        self.assertIn("run:42", shown.call_args.args[0])
+        self.assertIn("::warning::", shown.call_args.args[0])
+
+    def test_nothing_spent_writes_nothing(self):
+        with mock.patch.object(spend_ledger, "post_ledger_line") as post:
+            spend_ledger.record_spend_in_ledger({"app": "a", "spent_usd": 0}, "o/f", "42", "t")
+        post.assert_not_called()
+
+    def test_todays_spend_fails_closed_and_treats_no_ledger_as_none(self):
+        with self.assertRaises(run_stops.NeedsHuman):
+            spend_ledger.todays_spend(lambda *a: mock.Mock(returncode=1, stdout=""), "o/f", "t")
+        self.assertIsNone(spend_ledger.todays_spend(lambda *a: mock.Mock(returncode=0, stdout="[]"), "o/f", "t"))
 
 
 if __name__ == "__main__":

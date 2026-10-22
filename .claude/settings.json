@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { git diff --quiet HEAD -- ARCHITECTURE.md GLOSSARY.md docs agents/profiles.yml || (cd orchestrator && python3 -m unittest flow_spec_test spec_sync_test >&2 || exit 2); }",
+            "asyncRewake": true,
+            "timeout": 60,
+            "statusMessage": "Checking specs are in sync"
+          }
+        ]
+      }
+    ]
+  }
+}
