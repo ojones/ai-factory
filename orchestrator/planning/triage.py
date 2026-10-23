@@ -20,9 +20,9 @@ DIFF_SECRET_KINDS = ("a private key", "a GitHub token", "an AWS access key", "an
 CATEGORIES = ("payments", "secrets", "personal_data", "external_api", "outside_stack")
 POSSIBLE_IF = {
     "payments": "Taking payments needs a payment provider account and keys, which the Factory does not hold. Build the part that needs no payment, or add the integration by hand.",
-    "secrets": "The request needs a third-party secret or API key. The Factory holds none and the repositories are public. Use a feature that needs no key, or add the integration by hand.",
+    "secrets": "The request would have the Factory create or hold a secret itself. The Factory holds none and the repositories are public. Have the owner set the key as a GitHub Actions secret, or use a feature that needs no key.",
     "personal_data": "The request stores or shows personal data about real people. The repositories are public and the Factory has no data-protection setup. Use made-up sample data instead.",
-    "external_api": "The request depends on an outside paid or keyed service. The Factory builds only with free dependencies and no outside accounts.",
+    "external_api": "The request depends on an outside service that cannot be used with a key the owner sets (it needs payment or the Factory's own account). Name a service the owner can key, or use a free one.",
     "outside_stack": "The request needs something outside Express, React and free npm dependencies (another runtime, a database server, a mobile app).",
 }
 

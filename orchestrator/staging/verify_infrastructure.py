@@ -116,10 +116,20 @@ def failure_events(app, number, results):
             for r in results if not r["ok"]]
 
 
-def report(results):
+def report(results, app_repo=None, declared=()):
     lines = ["**Infrastructure verified.**" if all(r["ok"] for r in results) else "**Infrastructure check failed.**", ""]
     lines += [f"- {'passed' if r['ok'] else 'FAILED'} `{r['check']}`: {r['detail']}" for r in results]
-    return "\n".join(lines)
+    return "\n".join(lines + secret_commands(results, app_repo, declared))
+
+
+def secret_commands(results, app_repo, declared):
+    failed = [r for r in results if r["check"] == "secrets_present" and not r["ok"]]
+    missing = failed[0]["detail"].removeprefix("missing: ").split(", ") if failed else []
+    owed = [n for n in declared if n in missing]
+    if not owed:
+        return []
+    return ["", "Set each missing app secret (the command prompts for the value, so it never appears in an issue or a log), then add `proceed-with-change` again:", ""] + [
+        f"`gh secret set {n} -R {app_repo}`" for n in owed]
 
 
 def fetch(method, url, headers):
@@ -186,7 +196,7 @@ def main():
     probes = LiveProbes(e, f"{repo.split('/')[0]}/{app}", app)
     declared = declared_secret_names(repo, number, e["FACTORY_PAT"])
     results = verify(Deps(fetch, probes.runs, probes.secret_names, probes.flag_connection), app, sha, preview_token.for_app(e["PREVIEW_MASTER_SECRET"], app), declared)
-    publish_report(e, repo, number, report(results))
+    publish_report(e, repo, number, report(results, probes.app_repo, declared))
     if e.get("FAILURE_EVENTS_FILE"):
         event.dump(failure_events(app, number, results), Path(e["FAILURE_EVENTS_FILE"]))
     return 0 if all(r["ok"] for r in results) else 1

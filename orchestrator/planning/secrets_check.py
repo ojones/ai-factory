@@ -23,6 +23,12 @@ def request_comment(needed, missing, app_repo, retry="remove the Intake's label 
     return text + "\n\n" + secrets_marker.secrets_marker(needed)
 
 
+def new_app_comment(needed, app_repo):
+    intro = (f"`{app_repo}` does not exist yet: the first change set (staging) creates it, checks for these names again and asks if any is missing. "
+             "No other change set starts until every name is set.\n\n")
+    return intro + request_comment(needed, needed, app_repo, "add `proceed-with-change` again to the staging ticket")
+
+
 def waiting_message(missing, app_repo, retry):
     return "waiting for " + ", ".join(x["name"] for x in missing) + f" to be set on {app_repo} (the commands are on the Intake issue); then {retry}"
 

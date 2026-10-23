@@ -91,6 +91,12 @@ class Checks(unittest.TestCase):
         self.assertIn("GROWTHBOOK_CLIENT_KEY", got["detail"])
         self.assertIn("WEATHER_API_KEY", got["detail"])
 
+    def test_a_missing_declared_secret_comes_with_the_command_to_set_it(self):
+        results = [v.secrets_present(FakeApp(secrets=v.STAGING_SECRETS).deps(), ["WEATHER_API_KEY"])]
+        text = v.report(results, "o/notes", ["WEATHER_API_KEY"])
+        self.assertIn("`gh secret set WEATHER_API_KEY -R o/notes`", text)
+        self.assertNotIn("gh secret set FLY_API_TOKEN", text)
+
     def test_one_failure_does_not_hide_the_rest_and_a_crashing_check_is_a_failed_check(self):
         app = FakeApp()
         deps = app.deps()

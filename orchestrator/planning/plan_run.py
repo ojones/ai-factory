@@ -133,7 +133,7 @@ class PlanRun:
 
     def waiting_for_declared_secrets(self):
         declared = self.intake["declared"]
-        missing = secrets_check.missing_secrets(declared, self.secret_names()) if declared else []
+        missing = secrets_check.missing_secrets(declared, self.secret_names()) if declared and self.intake["kind"] != "new" else []
         return self.stop(AWAITING_SECRET, self.waiting_message(missing)) if missing else None
 
     def plan_and_file(self):
@@ -161,6 +161,9 @@ class PlanRun:
     def asking_for_secrets(self, doc):
         needed = declared_secret_dicts(doc)
         if not needed:
+            return None
+        if self.intake["kind"] == "new":
+            self.comment(secrets_check.new_app_comment(needed, self.intake["app"]))
             return None
         missing = secrets_check.missing_secrets(needed, self.secret_names())
         self.comment(secrets_check.request_comment(needed, missing, self.intake["app"]))
