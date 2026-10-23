@@ -13,7 +13,7 @@ body:
     id: description
     attributes:
       label: What should be built?
-      description: The Intake Spec: what the app should do, its scope and its constraints.
+      description: "The Intake Spec: what the app should do, its scope and its constraints."
     validations:
       required: true
   - type: input
