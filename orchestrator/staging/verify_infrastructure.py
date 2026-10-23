@@ -111,9 +111,17 @@ def verify(deps, app, sha, token, declared=(), timeouts=None):
     return out
 
 
-def failure_events(app, number, results):
+def missing_names(result):
+    return result["detail"].removeprefix("missing: ").split(", ")
+
+
+def waiting_on_owner(result, declared):
+    return result["check"] == "secrets_present" and not result["ok"] and set(missing_names(result)) <= set(declared)
+
+
+def failure_events(app, number, results, declared=()):
     return [event.make("staging", "failure", app, f"staging check {r['check']} failed: {r['detail']}", r["check"], story=number)
-            for r in results if not r["ok"]]
+            for r in results if not r["ok"] and not waiting_on_owner(r, declared)]
 
 
 def report(results, app_repo=None, declared=()):
@@ -124,7 +132,7 @@ def report(results, app_repo=None, declared=()):
 
 def secret_commands(results, app_repo, declared):
     failed = [r for r in results if r["check"] == "secrets_present" and not r["ok"]]
-    missing = failed[0]["detail"].removeprefix("missing: ").split(", ") if failed else []
+    missing = missing_names(failed[0]) if failed else []
     owed = [n for n in declared if n in missing]
     if not owed:
         return []
@@ -198,7 +206,7 @@ def main():
     results = verify(Deps(fetch, probes.runs, probes.secret_names, probes.flag_connection), app, sha, preview_token.for_app(e["PREVIEW_MASTER_SECRET"], app), declared)
     publish_report(e, repo, number, report(results, probes.app_repo, declared))
     if e.get("FAILURE_EVENTS_FILE"):
-        event.dump(failure_events(app, number, results), Path(e["FAILURE_EVENTS_FILE"]))
+        event.dump(failure_events(app, number, results, declared), Path(e["FAILURE_EVENTS_FILE"]))
     return 0 if all(r["ok"] for r in results) else 1
 
 
