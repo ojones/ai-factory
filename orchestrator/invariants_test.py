@@ -358,7 +358,7 @@ class Invariants(unittest.TestCase):
         self.assertIsNotNone(ac.validate([{"id": "a", "request": {"path": "https://other.example/"}, "expect": {"status": 200}}])[1])
 
     def test_inv31_production_feedback_is_an_event_source_that_is_rate_limited_and_owner_only(self):
-        cfg = {"min_occurrences": 3, "max_per_app_per_day": 2}
+        cfg = {"min_occurrences": 3, "bugs_per_app_per_day": 2}
         groups = {"a" * 8: {"count": 9, "message": "m", "frame": ""}, "b" * 8: {"count": 8, "message": "n", "frame": ""},
                   "c" * 8: {"count": 1, "message": "o", "frame": ""}}
         self.assertEqual(flood_limits.decide(groups, {}, 0, 0, cfg)[0], ["a" * 8], msg="one at a time, below-threshold ignored")

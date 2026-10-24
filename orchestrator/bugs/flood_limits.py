@@ -1,8 +1,13 @@
-DEFAULTS = {"enabled": True, "min_occurrences": 3, "max_per_app_per_day": 2}
+DEFAULTS = {"enabled": True, "min_occurrences": 3, "bugs_per_app_per_day": 2}
+
+
+def settings(limits):
+    daily = {"bugs_per_app_per_day": limits.get("bugs_per_app_per_day", DEFAULTS["bugs_per_app_per_day"])}
+    return {**DEFAULTS, **(limits.get("production_feedback") or {}), **daily}
 
 
 def decide(groups, open_by_fp, open_for_app, created_today, cfg):
-    minimum, room = int(cfg["min_occurrences"]), int(cfg["max_per_app_per_day"]) - created_today
+    minimum, room = int(cfg["min_occurrences"]), int(cfg["bugs_per_app_per_day"]) - created_today
     new, seen_again = [], []
     for fp, g in sorted(groups.items(), key=lambda kv: -kv[1]["count"]):
         if g["count"] < minimum:
@@ -15,4 +20,4 @@ def decide(groups, open_by_fp, open_for_app, created_today, cfg):
 
 
 def defects_room(open_for_app, created_today, reported, cfg):
-    return open_for_app + reported < 1 and created_today + reported < int(cfg["max_per_app_per_day"])
+    return open_for_app + reported < 1 and created_today + reported < int(cfg["bugs_per_app_per_day"])

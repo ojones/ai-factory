@@ -13,7 +13,7 @@ from try_fix import event  # noqa: E402
 
 from bugs import escaped_defects, scan_logs, scan_production  # noqa: E402
 
-CFG = {"enabled": True, "min_occurrences": 3, "max_per_app_per_day": 2}
+CFG = {"enabled": True, "min_occurrences": 3, "bugs_per_app_per_day": 2}
 TODAY = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime())
 
 

@@ -58,7 +58,8 @@ def scan_app(repo, token, pat, app, cfg, logs=scan_logs.app_logs):
 def main(argv):
     repo = os.environ["GITHUB_REPOSITORY"]
     token, pat = os.environ["FACTORY_GH_TOKEN"], os.environ["FACTORY_PAT"]
-    cfg = {**flood_limits.DEFAULTS, **((config.load().get("limits") or {}).get("production_feedback") or {})}
+    limits = config.load().get("limits") or {}
+    cfg = flood_limits.settings(limits)
     events = []
     if not cfg["enabled"]:
         log("production feedback is off")

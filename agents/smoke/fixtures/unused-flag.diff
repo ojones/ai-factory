@@ -17,6 +17,29 @@ new file mode 100644
 +  const q = String(req.query.q ?? "").toLowerCase();
 +  res.json(items.filter((i) => i.title.toLowerCase().includes(q)));
 +});
+diff --git a/backend/src/__tests__/search.test.ts b/backend/src/__tests__/search.test.ts
+new file mode 100644
+--- /dev/null
++++ b/backend/src/__tests__/search.test.ts
+@@ -0,0 +1,18 @@
++import request from "supertest";
++import { createApp } from "../app";
++import { withFlag } from "./with-flag";
++
++describe("GET /api/search", () => {
++  it("answers 404 while the flag is off", async () => {
++    await withFlag("search", false, async () => {
++      const res = await request(createApp()).get("/api/search?q=a");
++      expect(res.status).toBe(404);
++    });
++  });
++  it("filters items by title while the flag is on", async () => {
++    await withFlag("search", true, async () => {
++      const res = await request(createApp()).get("/api/search?q=zzz");
++      expect(res.body).toEqual([]);
++    });
++  });
++});
 diff --git a/flags.json b/flags.json
 --- a/flags.json
 +++ b/flags.json

@@ -41,7 +41,7 @@ class Decide(unittest.TestCase):
         self.assertIn("reason", got[WARN2["key"]]["reason"])
 
     def test_the_daily_limit_stops_warnings_from_becoming_a_stream_of_fixes_but_never_a_failure(self):
-        lim = {"fix_events_per_app_per_day": 1}
+        lim = {"bugs_per_app_per_day": 1}
         got = self.by_key(event_verdicts.decide([WARN, WARN2, FAIL], {WARN["key"]: entry(WARN, "fix"), WARN2["key"]: entry(WARN2, "fix")}, lim))
         self.assertEqual([got[WARN["key"]]["verdict"], got[WARN2["key"]]["verdict"], got[FAIL["key"]]["verdict"]], ["fix", "record", "fix"])
         used = self.by_key(event_verdicts.decide([WARN], {WARN["key"]: entry(WARN, "fix")}, lim, fixed_today=1))
@@ -69,7 +69,7 @@ class Decide(unittest.TestCase):
 
 
 class JudgeRunEvents(unittest.TestCase):
-    CFG = {"roles": {"retrospective": {"model": "m"}}, "provider": {"base_url": "https://p"}, "limits": {"fix_events_per_app_per_day": 3}}
+    CFG = {"roles": {"retrospective": {"model": "m"}}, "provider": {"base_url": "https://p"}, "limits": {"bugs_per_app_per_day": 3}}
 
     def judge(self, events, result, key="parent", batch=None):
 
@@ -81,7 +81,7 @@ class JudgeRunEvents(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(agent_run, "mint_agent", return_value=("scoped", mock.Mock())), \
                 mock.patch.object(agent_run, "record_agent_spend"), mock.patch.object(judge_events, "answer", answer), \
-                mock.patch.object(fix_budget, "warnings_fixed_today", return_value=0):
+                mock.patch.object(fix_budget, "bugs_filed_today", return_value=0):
             got = run_retrospective.judge_run_events(events, result, self.CFG, key, "o/f", "tok", "demo", Path(tmp), "round_limit")
             saved = json.loads((Path(tmp) / "artifacts" / "retrospective-verdicts.json").read_text())
         return got, asked, saved
@@ -94,7 +94,7 @@ class JudgeRunEvents(unittest.TestCase):
         self.assertEqual(len(saved), 3)
 
     def test_when_todays_fixes_cannot_be_counted_no_warning_is_fixed_but_failures_still_are(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(fix_budget, "warnings_fixed_today", side_effect=RuntimeError("down")):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(fix_budget, "bugs_filed_today", side_effect=RuntimeError("down")):
             got = run_retrospective.judge_run_events([FAIL, WARN], {"events": [entry(WARN, "fix")]}, self.CFG, None, "o/f", "tok", "demo", Path(tmp), "round_limit")
         self.assertEqual({v["key"]: v["verdict"] for v in got}, {FAIL["key"]: "fix", WARN["key"]: "record"})
 

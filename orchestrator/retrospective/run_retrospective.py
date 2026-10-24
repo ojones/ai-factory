@@ -31,9 +31,9 @@ def judge_run_events(events, result, cfg, key, repo, token, app, work, outcome):
             entries.update(judge_events.answer(open_warnings, cfg, agent_key))
             agent_run.record_agent_spend(budget, agent_key, repo, token, os.environ.get("GITHUB_RUN_ID", "0"))
     try:
-        fixed = fix_budget.warnings_fixed_today(repo, token, app)
+        fixed = fix_budget.bugs_filed_today(repo, token, app)
     except Exception as e:  # noqa: BLE001 - counting never fails the run
-        log(f"could not count today's fixed warnings, so no warning is fixed this run: {type(e).__name__}: {e}")
+        log(f"could not count today's bug tickets, so no warning is fixed this run: {type(e).__name__}: {e}")
         fixed = event_verdicts.fix_cap(cfg.get("limits"))
     verdicts = event_verdicts.decide(events, entries, cfg.get("limits", {}), fixed)
     (work / "artifacts").mkdir(parents=True, exist_ok=True)

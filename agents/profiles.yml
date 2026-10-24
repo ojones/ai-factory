@@ -1,4 +1,4 @@
-# Per-role Agent configuration. See README.md. Model ids are DeepInfra ids.
+# Per-role Agent configuration and the Orchestrator's limits. See ARCHITECTURE.md. Model ids are DeepInfra ids.
 
 provider:
   base_url: https://api.deepinfra.com/v1/openai
@@ -40,12 +40,13 @@ roles:
     mode: single_call
     fast_prompt: prompts/reviewer-fast.md
     prompt: prompts/reviewer.md
+  # Names the cause of a failed Test Gate, Build or Deploy of a pushed commit (code, workflow, infra or flaky); a flaky or infra cause is re-run (limits.pipeline_retries).
   pipeline:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/pipeline.md
-  # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planning/validate_plan.py checks the
-  # plan). Runs first in a Build Run for an Update App Intake. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
+  # Turns every Intake, new app or update, into ordered change sets with acceptance criteria (orchestrator/planning/validate_plan.py
+  # checks the plan). Runs in plan.yml, before any Build Run. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
   # because the 480B hung for minutes at a time on real runs (one planner attempt took 1277 s) and a planner needs no code-tuned model;
   # gpt-oss-120b is about 8x cheaper and a different lab from the coder and reviewer (DeepSeek) and the tester (Nvidia). Watch the planner
   # time, cost and plan_gap lessons on the next runs; ticket 30 would measure it properly.
@@ -114,8 +115,6 @@ limits:
   # Fly apps that are Factory infrastructure rather than Managed Apps (besides ai-factory-growthbook); the daily Fly audit
   # (orchestrator/monitoring/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
   fly_infra_apps: []
-  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become failure events (orchestrator/bugs/scan_production.py, scheduled by production-feedback.yml);
-  # the Retrospective judges them and Try Fix files a bug Intake for each one worth fixing, which starts itself. min_occurrences: times one error must appear in a scan.
   # Daily: Dependabot's open pull requests for each app (npm packages, Docker base image) become one self-starting Update App Intake
   # (orchestrator/maintenance/dependency_updates.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
   maintenance:
@@ -125,16 +124,17 @@ limits:
   flag_retirement:
     min_age_days: 1
     piggyback_max: 5
+  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become failure events (orchestrator/bugs/scan_production.py, scheduled by production-feedback.yml);
+  # the Retrospective judges them and Try Fix files a bug Intake for each one worth fixing, which starts itself. min_occurrences: times one error must appear in a scan.
   production_feedback:
     enabled: true
     min_occurrences: 3
-    max_per_app_per_day: 2
   # Build Runs allowed in flight across all Managed Apps (v1 stages one at a time).
   max_simultaneous_build_runs: 1
   # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to
   # stay under, so Agents work in the model's reliable range. Over-goal stages are flagged.
   context_goal_tokens: 100000
-  # An Update App Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
+  # Every Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
   # for one Intake. Set planner_enabled false to switch planning off: plan.yml then plans nothing and the Intake stays as it is.
   planner_enabled: true
   # What the planning process may spend on one Intake, apart from the Build Runs of its children.
@@ -154,9 +154,10 @@ limits:
   # How many fix attempts (bug Intakes along the `fix_for` chain) one story gets before it is left for a person (`needs-human`). Two: the first fix often meets a second problem the failure
   # hid; a third attempt at the same story is the model repeating itself.
   fix_attempts_max: 2
-  # Warnings (a dark-only test failure, a check that could not be run, a minor finding) the Retrospective may send to a fix per app per day. A failure is never
-  # limited by it. Counted from the app's `bug` tickets filed today (retrospective/fix_budget.py).
-  fix_events_per_app_per_day: 3
+  # The one daily limit on new bug tickets per app, counted from the app's `bug` tickets filed today. It stops a production error or an escaped defect
+  # (orchestrator/bugs/flood_limits.py) and a warning the Retrospective would send to a fix (a dark-only test failure, a check that could not be run, a minor
+  # finding; retrospective/event_verdicts.py). A failure of a Build Run is never limited by it.
+  bugs_per_app_per_day: 2
   # What writing one bug ticket may spend (a scoped credential, so the Agent never holds the parent key).
   try_fix_cost_cap_usd: 0.25
   # After a release the Orchestrator watches the app this long and switches the flags it released

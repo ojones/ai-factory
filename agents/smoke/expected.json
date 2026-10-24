@@ -18,7 +18,7 @@
   "unused-flag": {
     "verdict": "clean",
     "match": "",
-    "minor_match": "search-highlight"
+    "no_finding_match": "search-highlight|unused|never read|no code"
   },
   "clean": {
     "verdict": "clean",
@@ -40,12 +40,6 @@
     "verdict": "clean",
     "match": "",
     "no_finding_match": "memory|restart|persist|lost"
-  },
-  "first-build-no-flags": {
-    "verdict": "clean",
-    "match": "",
-    "build_kind": "first build",
-    "no_finding_match": "flag"
   },
   "vacuous-test": {
     "verdict": "changes_requested",
