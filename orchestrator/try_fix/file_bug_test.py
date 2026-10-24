@@ -75,6 +75,12 @@ class Filing(unittest.TestCase):
         self.assertEqual(len([n for n, i in self.gh.issues.items() if "[" in i.get("title", "")]), 1)
         self.assertTrue(any("Seen again" in c for c in self.gh.comments[first]))
 
+    def test_a_repeat_of_any_event_in_the_group_finds_the_groups_open_bug(self):
+        a, b = verdict(fp="a"), verdict(fp="b", source="tester")
+        first = self.file({**a, "events": [a["event"], b["event"]]})["number"]
+        again = self.file(b)
+        self.assertEqual((again["action"], again["number"]), ("again", first))
+
     def test_a_fix_of_a_fix_is_the_next_attempt_along_the_fix_for_chain(self):
         first = self.file()["number"]
         fixed = self.gh.add(30, body=child_tickets.render_marker({**MARKER, "fix_for": 12, "fix_attempt": 1}) + "\n\n" + FORM,

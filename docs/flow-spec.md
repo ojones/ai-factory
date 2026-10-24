@@ -33,9 +33,12 @@ flowchart TD
         S2_4["<b>2.4 File child tickets</b><br/>sub-issues under the parent<br/>each body = complete coding instructions<br/>one flag each, sized to roll back alone<br/>new app with declared secrets: also comments<br/>the names and gh secret set commands"]
         S2_5["<b>2.5 Start the first child</b><br/>planner puts proceed-with-change<br/>on the first child with no dependencies"]
         S2_6{"<b>2.6 Route the child</b><br/>by kind"}
+        S2_7["<b>2.7 Plan a fix from its ticket</b><br/>Orchestrator, no model call<br/>a bug Intake with fix_for: one change set,<br/>criteria are the ticket's numbered requirements, flag true<br/>same limits as any plan (size, at most 6 criteria)"]
         S2_1 -->|"feasibility blocked"| S2_2
         S2_1 -->|"blocking question, bad plan,<br/>or (existing app)<br/>missing secret"| S2_3
         S2_1 -->|"valid plan"| S2_4
+        S2_7 -->|"valid"| S2_4
+        S2_7 -->|"no requirements or over the limits"| S2_3
         S2_4 --> S2_5
         S2_5 --> S2_6
     end
@@ -141,21 +144,24 @@ flowchart TD
     S6_5 --> S1_2
 
     subgraph g7["7. Try fix (fix first, never retry the unchanged child)"]
-        S7_6["<b>7.6 Write the bug ticket</b><br/>Try Fix Agent, one job: a good ticket<br/>from the bug template: how it was found,<br/>root cause, what it takes to resolve,<br/>numbered checkable requirements<br/>never decides cause or target, never plans"]
-        S7_1["<b>7.1 File the bug Intake</b><br/>update-app-intake + bug, filed with the PAT<br/>planned by 2.1 like any Intake<br/>failed child: marker fix_for,<br/>exactly one child with a flag of its own, blocks the failed child<br/>released story: no marker, blocks nothing"]
+        S7_7["<b>7.7 Group the fix verdicts</b><br/>Orchestrator, no model call<br/>one group per app, story and target<br/>events with no story are never merged"]
+        S7_6["<b>7.6 Write the bug ticket</b><br/>Try Fix Agent, once per group, one job: a good ticket<br/>covering every event of the group<br/>from the bug template: how it was found,<br/>root cause, what it takes to resolve,<br/>numbered checkable requirements<br/>never decides cause or target, never plans"]
+        S7_1["<b>7.1 File the bug Intake</b><br/>update-app-intake + bug, filed with the PAT<br/>one Intake per group, title carries every event key<br/>failed child: marker fix_for, planned by 2.7,<br/>exactly one child with a flag of its own, blocks the failed child<br/>released story: no marker, blocks nothing"]
         S7_2["<b>7.2 Factory fix request (the pipeline stops here)</b><br/>same bug template, written for a person, in ai-factory<br/>factory-fix-request issue, each repeat a Failed again comment<br/>nothing reads the label: a person fixes the Factory by hand"]
         S7_4["<b>7.4 Resume the failed child</b><br/>the bug Intake closes: the story gets a<br/>solution comment, the origin parent advances"]
         S7_5["<b>7.5 Needs human</b><br/>nothing runs until the owner edits and re-labels"]
         S7_2 -->|"the failed child waits"| S7_5
+        S7_7 --> S7_6
         S7_6 --> S7_1
         S7_6 -->|"factory target"| S7_2
         S7_1 -->|"bug Intake closes"| S7_4
     end
 
-    S6_2 -->|"verdict fix, app cause<br/>(code wrong, spec ambiguous)"| S7_6
-    S6_7 -->|"verdict fix"| S7_6
-    S7_1 -->|"plan the bug Intake"| S2_1
-    S6_2 -->|"verdict fix, factory cause"| S7_6
+    S6_2 -->|"verdict fix, app cause<br/>(code wrong, spec ambiguous)"| S7_7
+    S6_7 -->|"verdict fix"| S7_7
+    S7_1 -->|"bug Intake with no marker"| S2_1
+    S7_1 -->|"bug Intake with fix_for"| S2_7
+    S6_2 -->|"verdict fix, factory cause"| S7_7
     S6_2 -->|"no cause found / infrastructure"| S7_5
     S7_4 --> S4_1
     S3_2 -->|"any other check fails"| S6_7
@@ -294,53 +300,6 @@ flowchart TD
     K12 -.-> owner
 ```
 
-## Diagram: proposal, one fix per story, planned from its ticket
-
-**Proposal, not built.** Nothing in the code or the step index reflects this yet, and the numbered diagram above still shows today's flow (a bug Intake goes through 2.1). Two changes are proposed, and only the part that changes is drawn: from the Retrospective's `fix` verdicts to the start of the fix child.
-
-**Group by story (new step 7.7).** Today every `fix` verdict becomes its own ticket and bug Intake, so two failure events on one dark story file two fix children that both block the same failed child, each computing the same attempt number. The proposal groups the `fix` verdicts in code, by `(app, story, target)`, before the Try Fix Agent runs: one group gives one ticket and one bug Intake. Verdicts stay per event (INV-58), an event with no story id and an app fix against a Factory fix are never merged, and the Agent plays no part in the grouping. Grouping by shared root cause across stories is left out on purpose.
-
-**Plan a fix from its ticket (new step 2.7).** Today a bug Intake with `fix_for` is planned by the Planner Agent (2.1) even though the outcome is fixed: exactly one change set (INV-39, `planning/fix_for.py` tells the Planner so), and the Try Fix Agent (7.6) has already written numbered, checkable requirements. The Planner call turns those requirements into a change set the ticket already describes. The proposal drops that model call for a `fix_for` Intake and builds the one change set from the ticket in code (new step 2.7). Everything around it stays: `plan.yml` still starts on the label and still scans for secret values (INV-56, INV-40), the child is still filed as a sub-issue by 2.4, blocks the failed child, and runs through the same Build Run.
-
-```mermaid
-flowchart TD
-    R6["<b>6.2 Retrospective</b><br/>verdict fix, app cause"]
-    R77["<b>7.7 Group the fix verdicts (NEW)</b><br/>Orchestrator, no model call<br/>one group per app, story and target<br/>verdicts stay per event, one primary event key<br/>the daily warning cap still counts events"]
-    R76["<b>7.6 Write the bug ticket</b><br/>Try Fix Agent, once per group<br/>numbered, checkable requirements<br/>covering every event in the group"]
-    R71["<b>7.1 File the bug Intake</b><br/>update-app-intake + bug, marker fix_for<br/>the Intake is the parent of the fix child"]
-    R20["<b>plan.yml starts</b><br/>on the label; scans for secret values (unchanged)"]
-    RD{"<b>Marker fix_for?</b>"}
-    R21["<b>2.1 Plan</b><br/>Planner Agent<br/>only a bug Intake with no marker (8.4)<br/>and every ordinary Intake"]
-    R27["<b>2.7 Plan a fix from its ticket (NEW)</b><br/>Orchestrator, no model call<br/>one change set: title and criteria are the ticket's<br/>numbered requirements, flag true<br/>same limits as any plan (size, at most 6 criteria)"]
-    R23["<b>2.3 Stop for a person</b><br/>requirements missing or over the limits<br/>fix the ticket, remove and re-add the label"]
-    R24["<b>2.4 File the child ticket</b><br/>one sub-issue under the bug Intake<br/>blocks the failed child, fix_attempt counted (unchanged)"]
-    R25["<b>2.5 Start the child</b><br/>proceed-with-change"]
-    R41["<b>4.1 Prepare the run</b><br/>Build Run as today"]
-
-    R6 --> R77
-    R77 --> R76
-    R76 --> R71
-    R71 --> R20
-    R20 --> RD
-    RD -->|"no"| R21
-    RD -->|"yes"| R27
-    R27 -->|"valid"| R24
-    R27 -->|"invalid"| R23
-    R21 --> R24
-    R24 --> R25
-    R25 --> R41
-
-    classDef changed fill:#cfe5d9,stroke:#4a8f6d,stroke-width:2px,color:#1d3a2c
-    class R77,R27,RD changed
-```
-
-What is saved and what is risked:
-
-- **Saved:** one bug Intake and one fix child per story instead of one per event, no two fix children racing to unblock the same failed child, one model call and its latency per bug Intake, and the Planner's failure modes on a fix (a rejected plan, a question, a "blocked" verdict). Today each of those stops the fix for a person (2.3) even though the ticket was already validated by 7.6.
-- **Not changed:** a bug Intake with no marker (a regression on a released flag, 8.4) can still need several change sets, so it keeps the Planner. The Try Fix Agent (7.6) stays; merging it into the Retrospective is a separate idea.
-- **Open points for grouping:** the group's dedupe key is the primary event's key, so a repeat of any member must still find the open Intake and add a "Seen again" comment; the Try Fix Agent's input and the 6-criteria limit must hold for several events at once (trim, or keep the failure's requirements first); INV-26, INV-39 and INV-58 need their wording moved from "event" to "group of events on one story".
-- **Open points for 2.7:** the feasibility check (`blocked` for payments, an outside service and so on) currently also runs on the Planner's answer; for a fix it would have to run on the ticket's text or be judged unnecessary, because the failed child already passed it. A fix never declares new secrets today; if one needs a key the Coder's found-key path (4.3) is the route.
-
 ## Diagram: proposal, one secret check at the start of every run
 
 **Proposal, not built.** A declared third-party secret is checked in four places today: planning for an existing app (2.3), the staging check for a new app (3.3), the start of every Build Run (4.1) and after each Coder round (4.3). The proposal keeps the last two and drops the first two. 4.1 already runs before any Agent (`run.py` calls `setup()`, which requires the declared names, before the first Coder round), so no model call is saved by checking earlier. The staging check (3.2) keeps checking the Factory's own staging secrets (`FLY_API_TOKEN`, `GROWTHBOOK_CLIENT_KEY`, `PREVIEW_TOKEN`) and stops looking at the app's declared names, which the starter-template smoke test never uses. The owner still gets the names and `gh secret set` commands early: for a new app, 2.4 comments them when it files the children, and for an existing app the Planner's plan comment carries them. Only the gate goes, not the heads-up.
@@ -383,6 +342,7 @@ flowchart TD
 | 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` (an existing app only; a new app has no repository to check, see 3.3) | 09, 13 | plan_run_test, secrets_check_test; INV-48; live: needs_human twice on #140 |
 | 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` | 09 | file_children_test, child_tickets_test; INV-48, INV-54, INV-56; live #140, #145 |
 | 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` | 09, 10 | close_child_test (ready_to_start); INV-24, INV-55; live: #141, #146 started by the planner, #142, #147 by the advance |
+| 2.7 | Plan a fix from its ticket | Orchestrator | `planning/fix_for.py` (`plan_from_ticket`), `planning/plan_run.py` | Build 1 | fix_for_test, plan_run_test; INV-39; no live fix |
 | 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` | 12, 14 | staging/route_child_test, INV-57, INV-61; live #140, #145 |
 | 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh`, `staging/read_staging_child.py` | 14 | stage_script_test, read_staging_child_test; INV-57; live #141 |
 | 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` | 14 | verify_infrastructure_test; INV-48, INV-57; live #141 (six checks passed) |
@@ -414,6 +374,7 @@ flowchart TD
 | 7.2 | Factory fix request | Orchestrator | `try_fix/factory_fix_request.py`, bug template (ticket 15c) | 15, 15d | factory_fix_request_test, file_bug_test; INV-14, INV-26; no live Factory cause |
 | 7.4 | Resume the failed child | Orchestrator | `retrospective/close_child.advance` | 15, 15d | close_child_test (settle_fix); INV-27; no live resume |
 | 7.5 | Needs human | Orchestrator | `try_fix/needs_human.py` | 15 | file_bug_test, file_failure_test; INV-27; live: only the provider alert (#148) |
+| 7.7 | Group the fix verdicts | Orchestrator | `try_fix/group_fixes.py`, `try_fix/file_failure.py` | Build 1 | group_fixes_test, file_failure_test; INV-26, INV-58; no live group |
 | 7.6 | Write the bug ticket | Try Fix Agent | `try_fix/write_bug.py`, `try_fix/validate_bug.py`, `try_fix/render_bug.py` | 15c | write_bug_test, validate_bug_test, render_bug_test; INV-59; the model's tickets unmeasured |
 | 8.1-8.4 | Bugs found later | bugs domain | `bugs/scan_production.py`, `bugs/scan_logs.py`, `bugs/escaped_defects.py`, `bugs/route_bug.py`, `bugs/to_event.py`, `bugs/flood_limits.py`; `try_fix/file_events.py` | 16 | bugs tests (scan_logs, flood_limits, route_bug, to_event, scan_production), file_events_test; INV-31, INV-60; no live production error |
 
@@ -435,8 +396,8 @@ One rule for every failure and warning, whatever found it (a failed child, a fai
 
 1. **An event.** Whatever finds it writes a failure event: source, severity (`failure` or `warning`), app, the story it belongs to if any, a fingerprint, a summary and the evidence. A Build Run's events come from its facts; a scan's events (8.3, a failed staging check 3.2 other than a missing secret, which is 3.3) are handed to the Retrospective.
 2. **A verdict (6.2, 6.7).** The Retrospective Agent alone names the cause and the target (`managed_app` or `factory`) and gives every event a verdict, `fix` or `record`, with a reason. A failure is always `fix`; a warning is `record` unless the Agent says why a fix is worth it. A scan with no Build Run is judged in one batch (6.7). `record` keeps today's learning record and files nothing; the Factory no longer files Suggestion issues in a Managed App's repo.
-3. **A ticket (7.6).** The Try Fix Agent writes one bug ticket from the bug template for each `fix` verdict. It does not decide the cause or target, and it does not plan or split work. If it fails or its output does not validate, the Orchestrator writes the ticket from the facts.
-4. **An Intake or a request (7.1, 7.2).** An app fix is an `update-app-intake` labelled `bug`, planned by 2.1, so it has the same size and criteria limits as any change. A Factory cause (`orchestrator_gap`, `prompt_gap`, `template_gap`, `plan_gap`) is one `factory-fix-request` issue in ai-factory (7.2), written for a person, with each repeat a "Failed again" comment. That is where the pipeline stops: no workflow reads the label, no Agent plans or changes the Factory, and the failed child is held `needs-human` (7.5) until the person who fixed the Factory adds `proceed-with-change` again.
+3. **A group and a ticket (7.7, 7.6).** The Orchestrator groups the `fix` verdicts by app, story and target (an event with no story is never merged); verdicts stay per event. The Try Fix Agent writes one bug ticket from the bug template for each group, covering every event in it. It does not decide the cause or target, and it does not plan or split work. If it fails or its output does not validate, the Orchestrator writes the ticket from the facts.
+4. **An Intake or a request (7.1, 7.2).** An app fix is an `update-app-intake` labelled `bug`, one per group, with the title carrying every event key so a repeat of any of them finds it. A bug Intake with `fix_for` is planned in code from its ticket (2.7) with the same size and criteria limits as any change; one with no marker is planned by 2.1. A Factory cause (`orchestrator_gap`, `prompt_gap`, `template_gap`, `plan_gap`) is one `factory-fix-request` issue in ai-factory (7.2), written for a person, with each repeat a "Failed again" comment. That is where the pipeline stops: no workflow reads the label, no Agent plans or changes the Factory, and the failed child is held `needs-human` (7.5) until the person who fixed the Factory adds `proceed-with-change` again.
 5. **Dark or released.** If the story's flag was never released, is off, or was switched off by the watchdog (8.1), the failure is added as a comment on the story, the bug Intake carries `fix_for` (the failed child), the plan has exactly one child, an ordinary child with a flag of its own (or none), and the failed child waits on it. If the flag was released and is still on (8.2), a bug is a regression (8.4): a new bug Intake with no marker that nothing waits for, and the story gets a comment linking it.
 6. **Closing the loop (7.4).** When the bug Intake closes, the story gets a solution comment and the origin parent advances; the failed child resumes through the normal advance and runs again behind its own flag, which already exists, off.
-7. **Bounded.** A fix that fails is handled like any failed child: a follow-up bug Intake whose `fix_for` is the failed fix. Attempts are counted along that chain back to the original story; after `fix_attempts_max` (2) the child is held `needs-human` and nothing more is filed. One bug per event key.
+7. **Bounded.** A fix that fails is handled like any failed child: a follow-up bug Intake whose `fix_for` is the failed fix. Attempts are counted along that chain back to the original story; after `fix_attempts_max` (2) the child is held `needs-human` and nothing more is filed. One bug per group, found again by any of its event keys.

@@ -53,7 +53,7 @@ The first child ticket of a New App Intake (`kind: staging`): stages the app and
 _Avoid_: setup ticket
 
 **Bug Intake**:
-An `update-app-intake` labelled `bug`, written by the Try Fix Agent from the bug template and planned like any Intake. For a child that failed it carries `fix_for` (the failed child): its plan is exactly one child, and the failed child waits for it. For a story that is already released it is a regression: it carries no marker and nothing waits for it. (Built, ticket 15d. The one child it plans is called a **fix child**; it is filed under the bug Intake, not under the failed child's parent.)
+An `update-app-intake` labelled `bug`, written by the Try Fix Agent from the bug template, one per group of fix verdicts on the same story (a group is the events of one app, story and target). For a child that failed it carries `fix_for` (the failed child) and is planned in code from its ticket's numbered requirements, with no Planner call: its plan is exactly one child, and the failed child waits for it. For a story that is already released it is a regression: it carries no marker and nothing waits for it. (Built, ticket 15d. The one child it plans is called a **fix child**; it is filed under the bug Intake, not under the failed child's parent.)
 _Avoid_: retry, hotfix
 
 **Failure event**:

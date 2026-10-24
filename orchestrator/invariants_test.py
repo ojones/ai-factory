@@ -454,8 +454,8 @@ class Invariants(unittest.TestCase):
 
     def test_inv39_a_fix_is_one_ordinary_child_that_the_failed_child_waits_for(self):
         self.assertFalse(hasattr(fix_for, "apply"))
-        self.assertEqual(fix_for.max_change_sets({"fix_for": 20}, 8), 1, msg="a bug Intake that fixes a child plans exactly one change set")
-        self.assertEqual(fix_for.max_change_sets(None, 8), 8)
+        plan = fix_for.plan_from_ticket("#### What happened\n\nboom\n\n#### Requirements\n\n1. it works\n")
+        self.assertEqual(len(plan["change_sets"]), 1, msg="a bug Intake that fixes a child plans exactly one change set, from its ticket")
         for fn in ("release", "disable_flags"):
             self.assertTrue(hasattr(BuildRun, fn))
 

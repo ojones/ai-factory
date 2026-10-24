@@ -108,18 +108,35 @@ class Run(unittest.TestCase):
 
     FIX = {"fix_for": 12, "origin_parent": 5, "attempt": 1}
 
-    def test_a_bug_intake_that_fixes_a_child_is_told_to_plan_one_change_set_and_files_it_with_the_fix(self):
-        got = self.go(plan(1), fix=self.FIX)
-        self.assertEqual(got["ending"], "planned")
-        self.assertIn("Plan exactly ONE change set", self.asked[0])
-        self.assertTrue(self.asked[0].endswith("Add tags"))
+    TICKET = "#### What happened\n\nboom\n\n#### Requirements\n\n1. it works\n2. a test covers it\n\n#### Target\n\nx\n"
+
+    def go_fix(self, task):
+        def ask(_):
+            raise AssertionError("the Planner is not asked about a fix")
+        intake = {"kind": "update", "app": "notes", "task": task, "cap": 2.0, "cap_override": None, "declared": [], "label": "update-app-intake", "fix_for": self.FIX}
+        filed = lambda parent, sets, order, secrets, fix=None: self.filed.append((parent, order, secrets, fix)) or [(sets[0]["id"], 100)]
+        return plan_run.PlanRun(7, intake, {}, ask, self.comments.append, lambda: set(), self.tickets, filed).run()
+
+    def test_a_bug_intake_that_fixes_a_child_is_planned_from_its_ticket_without_the_planner(self):
+        got = self.go_fix(self.TICKET)
+        self.assertEqual((got["ending"], got["cost"]), ("planned", 0.0))
         self.assertEqual(self.filed[0][3], self.FIX)
 
-    def test_a_fix_of_more_than_one_change_set_is_refused_and_nothing_is_filed(self):
-        got = self.go(plan(2), fix=self.FIX)
-        self.assertEqual(got["ending"], "needs_human")
+    def test_a_fix_is_planned_without_a_checkout_a_model_check_or_a_planner_credential(self):
+        job = object.__new__(plan_run.Planning)
+        job.repo, job.number, job.pat, job.lim, job.owner = "o/f", "7", "pat", {}, "o"
+        job.intake = {"fix_for": self.FIX, "app": "notes", "task": self.TICKET, "cap_override": None, "inherit": [], "kind": "update", "label": "update-app-intake"}
+        with mock.patch.object(plan_run, "available_model") as model, mock.patch.object(plan_run.spend_budget, "Budget") as budget, \
+                mock.patch.object(plan_run.Planning, "checkout") as checkout, mock.patch.object(plan_run.Planning, "check_daily_cap") as cap:
+            run = job.build_run()
+        self.assertIsInstance(run, plan_run.PlanRun)
+        for untouched in (model, budget, checkout, cap):
+            untouched.assert_not_called()
+
+    def test_a_fix_ticket_with_no_requirements_or_too_many_stops_for_a_person_and_files_nothing(self):
+        for task in ("#### What happened\n\nboom\n", "#### Requirements\n\n" + "\n".join(f"{i}. thing {i}" for i in range(1, 8))):
+            self.assertEqual(self.go_fix(task)["ending"], "needs_human")
         self.assertEqual(self.filed, [])
-        self.assertIn("rejected", got["message"])
 
     def test_the_same_plan_for_an_ordinary_intake_may_have_several(self):
         self.assertEqual(self.go(plan(2))["ending"], "planned")

@@ -87,8 +87,8 @@ def read_intake(issue, repo, repo_info, limits):
             "declared": secrets_marker.declared_secrets(issue), "label": label}
 
 
-def planner_max_change_sets(limits, fix):
-    return fix_for.max_change_sets(fix, int(limits.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS)))
+def planner_max_change_sets(limits):
+    return int(limits.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS))
 
 
 def planner_max_criteria(limits):
@@ -129,14 +129,20 @@ class PlanRun:
 
     def plan_and_file(self):
         try:
-            doc, self.cost, _usage = self.ask(fix_for.task_for(self.intake["task"], self.intake.get("fix_for")))
+            doc = self.plan_from_ticket() if self.intake.get("fix_for") else self.plan_with_planner()
         except run_stops.NeedsHuman as e:
             return self.stop(NEEDS_HUMAN, str(e))
         return self.rejected(doc) or self.asking_for_secrets(doc) or self.file_children_and_report(doc)
 
+    def plan_with_planner(self):
+        doc, self.cost, _usage = self.ask(self.intake["task"])
+        return doc
+
+    def plan_from_ticket(self):
+        return fix_for.plan_from_ticket(self.intake["task"])
+
     def validate(self, doc):
-        fix = self.intake.get("fix_for")
-        return validate_plan.validate_plan(doc, BUILD_KINDS[self.intake["kind"]], planner_max_change_sets(self.lim, fix), planner_max_criteria(self.lim))
+        return validate_plan.validate_plan(doc, BUILD_KINDS[self.intake["kind"]], planner_max_change_sets(self.lim), planner_max_criteria(self.lim))
 
     def rejected(self, doc):
         blocked, category, reasons, possible = triage.feasibility(doc)
@@ -202,7 +208,7 @@ class PlannerAsk:
 
     def check(self, doc):
         lim = self.cfg["limits"]
-        found, _ = validate_plan.validate_plan(doc, self.build_kind, planner_max_change_sets(lim, None), planner_max_criteria(lim))
+        found, _ = validate_plan.validate_plan(doc, self.build_kind, planner_max_change_sets(lim), planner_max_criteria(lim))
         if found:
             raise ValueError("; ".join(found))
 
@@ -268,6 +274,8 @@ class Planning:
         share_with_agent(app_dir, agent_user)
 
     def build_run(self):
+        if self.intake.get("fix_for"):
+            return self.plan_run(None, f"{self.owner}/{self.intake['app']}")
         self.check_daily_cap()
         key = self.env["DEEPINFRA_API_KEY"]
         available_model(self.cfg, "planner", key)

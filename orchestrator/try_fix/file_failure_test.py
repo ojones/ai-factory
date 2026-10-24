@@ -10,8 +10,8 @@ CFG = {"roles": {"try_fix": {"model": "m", "prompt": "prompts/try_fix.md"}}, "li
 FACTS = {"app": "demo", "outcome": "round_limit", "message": "m", "run_url": "u", "issue_number": "12", "bugs": []}
 
 
-def verdict(target=None, source="build_run", severity="failure", fp="f", cause=None):
-    ev = event.make(source, severity, "demo", "boom", fp, story=12)
+def verdict(target=None, source="build_run", severity="failure", fp="f", cause=None, story=12):
+    ev = event.make(source, severity, "demo", "boom", fp, story=story)
     return {"key": ev["key"], "verdict": "fix", "target": target, "cause": cause, "reason": "r", "event": ev}
 
 
@@ -49,13 +49,28 @@ class FileFailures(unittest.TestCase):
         return out, wrote, filed, spent, hold
 
     def test_each_fix_gets_the_agents_text_then_is_filed_with_the_attempt_bound_and_the_spend_is_recorded_once(self):
-        out, wrote, filed, spent, _ = self.go([verdict(fp="a"), verdict(fp="b", source="tester", severity="warning")], {"category": "spec_ambiguity"})
+        out, wrote, filed, spent, _ = self.go([verdict(fp="a"), verdict(fp="b", source="tester", severity="warning", story=13)], {"category": "spec_ambiguity"})
         self.assertEqual([w[0] for w in wrote], ["managed_app", "managed_app"])
         self.assertEqual([w[1] for w in wrote], ["spec_ambiguity", "spec_ambiguity"], msg="the cause of the run, when the verdict has none")
         self.assertEqual({w[2] for w in wrote}, {"cred"}, msg="one credential for the batch")
         self.assertEqual([f[1] for f in filed], [3, 3])
         self.assertEqual(spent, [("budget", "cred")])
         self.assertEqual([(o["severity"], o["action"]) for o in out], [("failure", "bug_intake"), ("warning", "bug_intake")])
+
+    def test_events_on_one_story_are_one_ticket_and_one_bug_with_a_result_per_event(self):
+        a, b = verdict(fp="a"), verdict(fp="b", source="tester", severity="warning")
+        out, wrote, filed, _, _ = self.go([a, b], {"category": "spec_ambiguity"})
+        self.assertEqual((len(wrote), [f[0] for f in filed]), (1, [a["key"]]))
+        self.assertEqual([(o["key"], o["number"]) for o in out], [(a["key"], 41), (b["key"], 41)])
+
+    def test_the_primary_verdict_carries_every_event_of_its_group(self):
+        a, b = verdict("managed_app", fp="a"), verdict(fp="b", source="tester", severity="warning")
+        seen = []
+        with mock.patch.object(file_failure.write_bug, "mint", return_value=("cred", "budget")), \
+                mock.patch.object(file_failure.write_bug, "write", lambda v, *rest: seen.append(v["events"]) or {}), \
+                mock.patch.object(file_failure.file_bug, "file_bug", return_value={"target": "managed_app", "action": "bug_intake", "number": 1, "url": "u"}):
+            file_failure.file_failures("o/f", "tok", "pat", [a, b], FACTS, None, None, CFG, "parent")
+        self.assertEqual([[e["key"] for e in seen[0]]], [[a["key"], b["key"]]])
 
     def test_without_a_key_nothing_is_minted_and_the_ticket_is_still_written_and_filed(self):
         with mock.patch.object(file_failure.write_bug, "mint") as mint:
