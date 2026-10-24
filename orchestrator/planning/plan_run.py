@@ -24,8 +24,8 @@ from shared.shell import sh
 
 from planning import file_children, fix_for, plan_comment, secrets_check, secrets_marker, triage, validate_plan
 
-PLANNED, REFUSED, AWAITING_SECRET, NEEDS_HUMAN, SKIPPED = "planned", "refused", "awaiting_secret", "needs_human", "skipped"
-ANSWERED = (PLANNED, SKIPPED, REFUSED, AWAITING_SECRET)
+PLANNED, REFUSED, NEEDS_HUMAN, SKIPPED = "planned", "refused", "needs_human", "skipped"
+ANSWERED = (PLANNED, SKIPPED, REFUSED)
 
 
 class Stop(Exception):
@@ -117,22 +117,14 @@ class PlanRun:
     def run(self):
         if self.tickets.children():
             return self.ended(SKIPPED, "this Intake already has child tickets, so it is already planned")
-        return self.waiting_for_declared_secrets() or self.plan_and_file()
-
-    def waiting_message(self, missing):
-        return secrets_check.waiting_message(missing, self.intake["app"], "re-add the label")
-
-    def waiting_for_declared_secrets(self):
-        declared = self.intake["declared"]
-        missing = secrets_check.missing_secrets(declared, self.secret_names()) if declared and self.intake["kind"] != "new" else []
-        return self.stop(AWAITING_SECRET, self.waiting_message(missing)) if missing else None
+        return self.plan_and_file()
 
     def plan_and_file(self):
         try:
             doc = self.plan_from_ticket() if self.intake.get("fix_for") else self.plan_with_planner()
         except run_stops.NeedsHuman as e:
             return self.stop(NEEDS_HUMAN, str(e))
-        return self.rejected(doc) or self.asking_for_secrets(doc) or self.file_children_and_report(doc)
+        return self.rejected(doc) or self.file_children_and_report(doc)
 
     def plan_with_planner(self):
         doc, self.cost, _usage = self.ask(self.intake["task"])
@@ -155,18 +147,18 @@ class PlanRun:
             self.comment(plan_comment.render_plan_comment(doc, questions))
             return self.stop(NEEDS_HUMAN, "the plan needs a person to answer first: " + " | ".join(questions))
 
-    def asking_for_secrets(self, doc):
+    def announce_secrets(self, doc):
         needed = declared_secret_dicts(doc)
-        if not needed:
-            return None
+        if needed:
+            self.comment(self.secrets_comment(needed))
+
+    def secrets_comment(self, needed):
         if self.intake["kind"] == "new":
-            self.comment(secrets_check.new_app_comment(needed, self.intake["app"]))
-            return None
-        missing = secrets_check.missing_secrets(needed, self.secret_names())
-        self.comment(secrets_check.request_comment(needed, missing, self.intake["app"]))
-        return self.ended(AWAITING_SECRET, self.waiting_message(missing)) if missing else None
+            return secrets_check.new_app_comment(needed, self.intake["app"])
+        return secrets_check.request_comment(needed, secrets_check.missing_secrets(needed, self.secret_names()), self.intake["app"], "add `proceed-with-change` again")
 
     def file_children_and_report(self, doc):
+        self.announce_secrets(doc)
         sets = doc["change_sets"]
         fix = {"fix": self.intake["fix_for"]} if self.intake.get("fix_for") else {}
         made = self.file(self.number, sets, validate_plan.topological_order(sets), declared_secret_dicts(doc), **fix)

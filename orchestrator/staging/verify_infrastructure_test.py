@@ -31,19 +31,19 @@ class FakeApp:
 
 class Checks(unittest.TestCase):
     def test_a_healthy_app_passes_every_check_in_order(self):
-        app = FakeApp(secrets=v.STAGING_SECRETS + ("WEATHER_API_KEY",))
-        out = v.verify(app.deps(), "notes", "abc", "tok", ["WEATHER_API_KEY"])
+        app = FakeApp(secrets=v.STAGING_SECRETS)
+        out = v.verify(app.deps(), "notes", "abc", "tok")
         self.assertEqual([r["check"] for r in out], list(v.CHECKS))
         self.assertTrue(all(r["ok"] for r in out), out)
         self.assertIn("Infrastructure verified", v.report(out))
 
     def test_each_failed_check_is_one_failure_event_for_the_staging_child_and_a_pass_is_none(self):
         app = FakeApp(secrets=v.STAGING_SECRETS, health=500)
-        out = v.verify(app.deps(), "notes", "abc", "tok", [])
+        out = v.verify(app.deps(), "notes", "abc", "tok")
         events = v.failure_events("notes", "12", out)
         self.assertEqual({e["fingerprint"] for e in events}, {r["check"] for r in out if not r["ok"]})
         self.assertTrue(events and all(e["severity"] == "failure" and e["source"] == "staging" and e["story"] == 12 for e in events))
-        healthy = v.verify(FakeApp(secrets=v.STAGING_SECRETS).deps(), "notes", "abc", "tok", [])
+        healthy = v.verify(FakeApp(secrets=v.STAGING_SECRETS).deps(), "notes", "abc", "tok")
         self.assertEqual(v.failure_events("notes", "12", healthy), [])
 
     def test_a_pipeline_stage_that_failed_fails_ci_without_waiting_out_the_timeout(self):
@@ -84,32 +84,22 @@ class Checks(unittest.TestCase):
         self.assertFalse(v.preview_token_path(FakeApp(token="other").deps(), "notes", "tok")["ok"])
         self.assertFalse(v.preview_token_path(FakeApp(cookie_for_anyone=True).deps(), "notes", "tok")["ok"])
 
-    def test_secrets_staging_sets_and_the_ones_the_request_declared_must_all_be_present(self):
-        self.assertTrue(v.secrets_present(FakeApp(secrets=v.STAGING_SECRETS).deps(), [])["ok"])
-        got = v.secrets_present(FakeApp(secrets=("FLY_API_TOKEN",)).deps(), ["WEATHER_API_KEY"])
+    def test_only_the_secrets_staging_sets_must_be_present_and_the_declared_ones_are_not_looked_at(self):
+        self.assertTrue(v.secrets_present(FakeApp(secrets=v.STAGING_SECRETS).deps())["ok"])
+        got = v.secrets_present(FakeApp(secrets=("FLY_API_TOKEN",)).deps())
         self.assertFalse(got["ok"])
         self.assertIn("GROWTHBOOK_CLIENT_KEY", got["detail"])
-        self.assertIn("WEATHER_API_KEY", got["detail"])
+        self.assertNotIn("WEATHER_API_KEY", got["detail"])
 
-    def test_a_missing_declared_secret_comes_with_the_command_to_set_it(self):
-        results = [v.secrets_present(FakeApp(secrets=v.STAGING_SECRETS).deps(), ["WEATHER_API_KEY"])]
-        text = v.report(results, "o/notes", ["WEATHER_API_KEY"])
-        self.assertIn("`gh secret set WEATHER_API_KEY -R o/notes`", text)
-        self.assertNotIn("gh secret set FLY_API_TOKEN", text)
-
-    def test_a_missing_declared_secret_is_a_wait_for_the_owner_and_no_failure_event(self):
-        out = [v.secrets_present(FakeApp(secrets=v.STAGING_SECRETS).deps(), ["WEATHER_API_KEY"])]
-        self.assertEqual(v.failure_events("notes", "12", out, ["WEATHER_API_KEY"]), [])
-
-    def test_a_missing_factory_secret_is_still_a_failure_event_even_beside_a_declared_one(self):
-        out = [v.secrets_present(FakeApp(secrets=("FLY_API_TOKEN",)).deps(), ["WEATHER_API_KEY"])]
-        self.assertEqual([e["fingerprint"] for e in v.failure_events("notes", "12", out, ["WEATHER_API_KEY"])], ["secrets_present"])
+    def test_a_missing_staging_secret_is_a_failure_event(self):
+        out = [v.secrets_present(FakeApp(secrets=("FLY_API_TOKEN",)).deps())]
+        self.assertEqual([e["fingerprint"] for e in v.failure_events("notes", "12", out)], ["secrets_present"])
 
     def test_one_failure_does_not_hide_the_rest_and_a_crashing_check_is_a_failed_check(self):
         app = FakeApp()
         deps = app.deps()
         deps.secret_names = lambda: (_ for _ in ()).throw(RuntimeError("gh is down"))
-        out = v.verify(deps, "notes", "abc", "tok", [])
+        out = v.verify(deps, "notes", "abc", "tok")
         self.assertEqual(len(out), 6)
         failed = [r for r in out if not r["ok"]]
         self.assertEqual([r["check"] for r in failed], ["secrets_present"])

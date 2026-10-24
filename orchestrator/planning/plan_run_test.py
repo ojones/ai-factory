@@ -179,15 +179,12 @@ class Run(unittest.TestCase):
         self.assertEqual(got["ending"], "needs_human")
         self.assertIn("no valid output file", self.comments[-1])
 
-    def test_missing_secrets_wait_for_the_owner_before_anything_is_filed(self):
+    def test_missing_secrets_are_a_heads_up_in_the_plan_comment_and_never_a_stop(self):
         doc = plan(1, secrets=[{"name": "WEATHER_API_KEY", "purpose": "forecasts", "read_by": "backend"}])
         got = self.go(doc)
-        self.assertEqual(got["ending"], "awaiting_secret")
-        self.assertIn("WEATHER_API_KEY", self.comments[-1])
-        self.assertIn("factory-secrets", self.comments[-1], msg="the hidden marker every later start checks")
-        self.assertEqual(self.filed, [])
-        done = self.go(doc, have=["WEATHER_API_KEY"])
-        self.assertEqual(done["ending"], "planned")
+        self.assertEqual(got["ending"], "planned")
+        self.assertIn("gh secret set WEATHER_API_KEY -R notes", self.comments[-2])
+        self.assertIn("factory-secrets", self.comments[-2])
         self.assertEqual(self.filed[-1][2][0]["name"], "WEATHER_API_KEY")
 
     def test_a_new_app_files_its_children_without_the_repository_and_asks_for_the_secrets_later(self):
@@ -199,10 +196,10 @@ class Run(unittest.TestCase):
         self.assertIn("does not exist yet", self.comments[-2])
         self.assertIn("gh secret set SEARCH_API_KEY -R notes", self.comments[-2])
 
-    def test_secrets_the_intake_already_declared_are_checked_before_the_planner_is_paid(self):
+    def test_secrets_the_intake_already_declared_do_not_stop_planning(self):
         got = self.go(plan(1), declared=[{"name": "A_KEY", "purpose": "x"}])
-        self.assertEqual(got["ending"], "awaiting_secret")
-        self.assertEqual(self.asked, [])
+        self.assertEqual(got["ending"], "planned")
+        self.assertEqual(len(self.asked), 1)
 
     def test_every_stop_tells_the_owner_how_to_plan_again(self):
         self.go(ask_error=run_stops.NeedsHuman("other", "x"))
