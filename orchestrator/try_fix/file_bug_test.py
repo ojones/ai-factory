@@ -75,6 +75,12 @@ class Filing(unittest.TestCase):
         self.assertEqual(len([n for n, i in self.gh.issues.items() if "[" in i.get("title", "")]), 1)
         self.assertTrue(any("Seen again" in c for c in self.gh.comments[first]))
 
+    def test_a_repeat_of_any_event_in_the_group_finds_the_groups_open_bug(self):
+        a, b = verdict(fp="a"), verdict(fp="b", source="tester")
+        first = self.file({**a, "events": [a["event"], b["event"]]})["number"]
+        again = self.file(b)
+        self.assertEqual((again["action"], again["number"]), ("again", first))
+
     def test_a_fix_of_a_fix_is_the_next_attempt_along_the_fix_for_chain(self):
         first = self.file()["number"]
         fixed = self.gh.add(30, body=child_tickets.render_marker({**MARKER, "fix_for": 12, "fix_attempt": 1}) + "\n\n" + FORM,
@@ -120,14 +126,14 @@ class Filing(unittest.TestCase):
         self.assertIn("needs-human", self.labels(12))
         self.assertNotIn("update-app-intake", self.labels(next(n for n in self.gh.issues if n > 12 and self.gh.issues[n].get("title", "").startswith("demo:"))), msg="planning never started")
 
-    def test_a_factory_cause_files_a_fix_request_for_the_child_and_holds_it_until_the_fix_merges(self):
+    def test_a_factory_cause_files_a_fix_request_for_a_person_and_holds_the_child(self):
         got = self.file(verdict(target="factory"))
         self.assertEqual(got["action"], "fix_request")
         body = self.gh.issues[got["number"]]["body"]
-        self.assertIn("<!-- failed-child:12 -->", body)
+        self.assertNotIn("failed-child", body)
         self.assertEqual({"fix-request", "factory-fix-request"}, self.labels(got["number"]))
         self.assertIn("needs-human", self.labels(12))
-        self.assertTrue(any("starts again by itself when the fix is merged" in c for c in self.gh.comments[12]))
+        self.assertTrue(any("for a person to fix" in c for c in self.gh.comments[12]))
 
     def test_no_cause_is_an_information_request_and_a_warning_does_not_hold_a_child(self):
         info = self.file(verdict(target="info"))

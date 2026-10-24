@@ -75,7 +75,7 @@ def metrics(history, lessons=None):
                 "total_cost_usd": round(sum(r["cost_usd"] for r in rows), 2),
                 "p90_cost_usd": _p90([r["cost_usd"] for r in rows]),
                 "over_target": sum(1 for r in rows if r["cost_usd"] > COST_TARGET_USD),
-                "stuck": sum(1 for r in rows if r["outcome"] in ("stuck", "round_limit")),
+                "stuck": sum(1 for r in rows if r["outcome"] == "round_limit"),
                 "watchdog_disabled": sum(1 for r in rows if r["outcome"] == "watchdog_disabled"),
                 "needs_human": sum(1 for r in rows if r["outcome"] not in outcomes.OK),
                 "audit_violations": sum(len(r["audit"]) for r in rows),

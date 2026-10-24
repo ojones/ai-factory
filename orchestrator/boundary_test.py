@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 ORCHESTRATOR = Path(__file__).resolve().parent
-DOMAINS = ("request", "planning", "staging", "build_run", "flag_lifecycle", "retrospective", "try_fix", "bugs", "maintenance", "monitoring", "factory_change")
+DOMAINS = ("request", "planning", "staging", "build_run", "flag_lifecycle", "retrospective", "try_fix", "bugs", "maintenance", "monitoring")
 ALLOWED = {
     "request": set(),
     "planning": {"request"},
@@ -15,7 +15,6 @@ ALLOWED = {
     "bugs": {"request", "try_fix"},
     "maintenance": {"request"},
     "monitoring": {"request"},
-    "factory_change": {"build_run", "planning", "request", "retrospective", "try_fix"},
 }
 
 

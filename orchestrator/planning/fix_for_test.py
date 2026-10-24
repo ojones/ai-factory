@@ -3,25 +3,32 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from planning import fix_for  # noqa: E402
+from planning import fix_for, validate_plan  # noqa: E402
 
-FIX = {"fix_for": 12, "origin_parent": 5, "attempt": 1}
+TICKET = ("#### What happened\n\nround limit reached\n\nRun: https://x/run/1\n\n#### Requirements\n\n1. POST /api/todos with blank text answers 400\n"
+          "2. A test covers blank text\n\n#### Target\n\nThe Managed App (its code or its request).\n")
 
 
-class PlanningAFix(unittest.TestCase):
-    def test_a_fix_is_told_to_plan_one_small_change_set_and_an_ordinary_task_is_untouched(self):
-        told = fix_for.task_for("Add tags", FIX)
-        self.assertIn("Plan exactly ONE change set", told)
-        self.assertTrue(told.endswith("Add tags"))
-        self.assertEqual(fix_for.task_for("Add tags", None), "Add tags")
+class PlanFromTicket(unittest.TestCase):
+    def test_the_numbered_requirements_become_the_criteria_of_one_change_set_with_a_flag(self):
+        got = fix_for.plan_from_ticket(TICKET)
+        (cs,) = got["change_sets"]
+        self.assertEqual(cs["criteria"], ["POST /api/todos with blank text answers 400", "A test covers blank text"])
+        self.assertEqual((cs["title"], cs["flag"], cs["depends_on"]), ("Fix: round limit reached", True, []))
+        self.assertEqual(got["feasibility"], {"status": "ok"})
 
-    def test_the_note_leaves_the_flag_to_the_planner_like_any_other_child(self):
-        self.assertNotIn("flag", fix_for.NOTE.lower())
+    def test_the_plan_passes_the_same_validation_as_any_plan(self):
+        problems, questions = validate_plan.validate_plan(fix_for.plan_from_ticket(TICKET), "update", 1, 6)
+        self.assertEqual((problems, questions), ([], []))
 
-    def test_a_fix_is_capped_at_one_change_set_and_anything_else_keeps_its_cap(self):
-        self.assertEqual(fix_for.max_change_sets(FIX, 6), 1)
-        self.assertEqual(fix_for.max_change_sets(None, 6), 6)
-        self.assertFalse(hasattr(fix_for, "apply"))
+    def test_a_ticket_with_no_numbered_requirements_makes_a_plan_that_fails_validation(self):
+        problems, _ = validate_plan.validate_plan(fix_for.plan_from_ticket("#### What happened\n\nboom\n"), "update", 1, 6)
+        self.assertTrue(problems)
+
+    def test_more_requirements_than_the_limit_fail_validation(self):
+        many = "#### Requirements\n\n" + "\n".join(f"{i}. does thing {i}" for i in range(1, 8)) + "\n"
+        problems, _ = validate_plan.validate_plan(fix_for.plan_from_ticket(many), "update", 1, 6)
+        self.assertTrue(any("acceptance criteria" in p for p in problems))
 
 
 if __name__ == "__main__":

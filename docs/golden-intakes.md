@@ -44,9 +44,9 @@ Refused: it needs a Twilio account, and the value pasted into the request is pub
 
 > Show today's forecast for a city the user types, from the OpenWeather API. Do not put the key in this issue.
 
-Planning lists the secret it needs (`OPENWEATHER_API_KEY`, with its purpose) and the run stops before building anything, ending `awaiting_secret`.
-The Intake comment gives the exact command, `gh secret set OPENWEATHER_API_KEY -R <owner>/<app>`, which prompts for the value so it never appears in
-an issue or a log. Set it (a restricted key with a spending limit is best), then remove the `update-app-intake` label and add it again: the build starts once the name
+Planning lists the secret it needs (`OPENWEATHER_API_KEY`, with its purpose), files the plan and comments the need; the Build Run then stops at its start, before any Agent, ending `awaiting_secret`.
+The comment gives the exact command, `gh secret set OPENWEATHER_API_KEY -R <owner>/<app>`, which prompts for the value so it never appears in
+an issue or a log. Set it (a restricted key with a spending limit is best), then add `proceed-with-change` again: the build starts once the name
 exists, the coder reads it from `process.env`, and the deploy copies it to the running app. The feature ships dark behind its flag as usual.
 
 ## A new app waits for a key at staging

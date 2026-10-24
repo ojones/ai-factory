@@ -59,7 +59,7 @@ class FlowSpec(unittest.TestCase):
         self.assertEqual(used - declared, set(), "used but never declared")
         self.assertEqual(declared - used, set())
         groups = set(re.findall(r'subgraph (g\d+)\["', diagram()))
-        self.assertEqual(groups, {f"g{n}" for n in range(1, 10)})
+        self.assertEqual(groups, {f"g{n}" for n in range(1, 9)})
 
     def test_every_arrow_line_in_the_diagram_is_an_edge_the_checks_can_read(self):
         arrows = [line for line in diagram().split("\n") if re.search(r"-->|-\.->", line)]

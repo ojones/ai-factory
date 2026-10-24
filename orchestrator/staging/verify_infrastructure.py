@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from shared import child_tickets, github, preview_token
+from shared import github, preview_token
 from try_fix import event
 
 CHECKS = ("ci_green", "deploy_healthy", "flag_service", "preview_token", "secrets_present", "smoke")
@@ -83,10 +83,10 @@ def preview_token_path(deps, app, token):
     return result("preview_token", True, "the right token is given the preview cookie and a wrong one is not")
 
 
-def secrets_present(deps, declared):
+def secrets_present(deps):
     have = deps.secret_names()
-    missing = [n for n in list(STAGING_SECRETS) + list(declared) if n not in have]
-    return result("secrets_present", not missing, "missing: " + ", ".join(missing) if missing else "all " + str(len(STAGING_SECRETS) + len(declared)) + " secrets are set")
+    missing = [n for n in STAGING_SECRETS if n not in have]
+    return result("secrets_present", not missing, "missing: " + ", ".join(missing) if missing else f"all {len(STAGING_SECRETS)} secrets are set")
 
 
 def smoke(deps, app):
@@ -97,11 +97,11 @@ def smoke(deps, app):
     return result("smoke", status == 200, f"the front page answered {status}")
 
 
-def verify(deps, app, sha, token, declared=(), timeouts=None):
+def verify(deps, app, sha, token, timeouts=None):
     t = timeouts or {}
     steps = [lambda: ci_green(deps, sha, t.get("ci", 900)), lambda: deploy_healthy(deps, app, t.get("health", 120)),
              lambda: flag_service(deps, app), lambda: preview_token_path(deps, app, token),
-             lambda: secrets_present(deps, declared), lambda: smoke(deps, app)]
+             lambda: secrets_present(deps), lambda: smoke(deps, app)]
     out = []
     for check, step in zip(CHECKS, steps):
         try:
@@ -111,33 +111,13 @@ def verify(deps, app, sha, token, declared=(), timeouts=None):
     return out
 
 
-def missing_names(result):
-    return result["detail"].removeprefix("missing: ").split(", ")
+def failure_events(app, number, results):
+    return [event.make("staging", "failure", app, f"staging check {r['check']} failed: {r['detail']}", r["check"], story=number) for r in results if not r["ok"]]
 
 
-def waiting_on_owner(result, declared):
-    return result["check"] == "secrets_present" and not result["ok"] and set(missing_names(result)) <= set(declared)
-
-
-def failure_events(app, number, results, declared=()):
-    return [event.make("staging", "failure", app, f"staging check {r['check']} failed: {r['detail']}", r["check"], story=number)
-            for r in results if not r["ok"] and not waiting_on_owner(r, declared)]
-
-
-def report(results, app_repo=None, declared=()):
+def report(results):
     lines = ["**Infrastructure verified.**" if all(r["ok"] for r in results) else "**Infrastructure check failed.**", ""]
-    lines += [f"- {'passed' if r['ok'] else 'FAILED'} `{r['check']}`: {r['detail']}" for r in results]
-    return "\n".join(lines + secret_commands(results, app_repo, declared))
-
-
-def secret_commands(results, app_repo, declared):
-    failed = [r for r in results if r["check"] == "secrets_present" and not r["ok"]]
-    missing = missing_names(failed[0]) if failed else []
-    owed = [n for n in declared if n in missing]
-    if not owed:
-        return []
-    return ["", "Set each missing app secret (the command prompts for the value, so it never appears in an issue or a log), then add `proceed-with-change` again:", ""] + [
-        f"`gh secret set {n} -R {app_repo}`" for n in owed]
+    return "\n".join(lines + [f"- {'passed' if r['ok'] else 'FAILED'} `{r['check']}`: {r['detail']}" for r in results])
 
 
 def fetch(method, url, headers):
@@ -186,11 +166,6 @@ class LiveProbes:
         return False
 
 
-def declared_secret_names(repo, number, pat):
-    body = json.loads(github.run(["issue", "view", number, "--repo", repo, "--json", "body"], pat).stdout)["body"]
-    return [x["name"] for x in child_tickets.read_marker(body).get("secrets") or []]
-
-
 def publish_report(env, repo, number, text):
     print(text)
     with open(env.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
@@ -202,11 +177,10 @@ def main():
     e = os.environ
     repo, number, app, sha = e["FACTORY_REPO"], e["ISSUE_NUMBER"], e["APP_NAME"], e["SEED_SHA"]
     probes = LiveProbes(e, f"{repo.split('/')[0]}/{app}", app)
-    declared = declared_secret_names(repo, number, e["FACTORY_PAT"])
-    results = verify(Deps(fetch, probes.runs, probes.secret_names, probes.flag_connection), app, sha, preview_token.for_app(e["PREVIEW_MASTER_SECRET"], app), declared)
-    publish_report(e, repo, number, report(results, probes.app_repo, declared))
+    results = verify(Deps(fetch, probes.runs, probes.secret_names, probes.flag_connection), app, sha, preview_token.for_app(e["PREVIEW_MASTER_SECRET"], app))
+    publish_report(e, repo, number, report(results))
     if e.get("FAILURE_EVENTS_FILE"):
-        event.dump(failure_events(app, number, results, declared), Path(e["FAILURE_EVENTS_FILE"]))
+        event.dump(failure_events(app, number, results), Path(e["FAILURE_EVENTS_FILE"]))
     return 0 if all(r["ok"] for r in results) else 1
 
 

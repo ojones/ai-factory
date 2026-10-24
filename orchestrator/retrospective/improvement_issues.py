@@ -10,7 +10,7 @@ def improvement_title(i):
 
 def record_improvements(repo, token, facts):
     tracker.gh(["label", "create", tracker.LABEL, "--repo", repo, "--color", "5319e7", "--description", "A stuck run to learn from"], token)
-    for_agent, filed = [], []
+    filed = []
     for i in facts.get("improvements", [])[:minor_findings.MAX_MINORS]:
         detail = f"{i['summary']}\n\nEvidence: {i.get('evidence') or 'none given'}\n\nSuggested by the {i['source']} during the Build Run: {facts['run_url']}"
         if i["target"] == "managed_app":
@@ -25,7 +25,5 @@ def record_improvements(repo, token, facts):
             out = tracker.gh(["issue", "create", "--repo", repo, "--label", tracker.LABEL, "--title", title, "--body", detail], token).stdout
             found = re.search(r"/issues/(\d+)", out)
             number = int(found.group(1)) if found else None
-        if number:
-            for_agent.append((number, tracker.already_proposed(repo, token, number)))
         filed.append({"target": "factory", "summary": i["summary"], "url": f"https://github.com/{repo}/issues/{number}" if number else ""})
-    return for_agent, filed
+    return filed

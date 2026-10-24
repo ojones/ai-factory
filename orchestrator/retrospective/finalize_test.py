@@ -121,7 +121,7 @@ class Finalize(unittest.TestCase):
 
 class Policy(unittest.TestCase):
     def test_every_bad_ending_gets_a_fix_request_and_good_ones_do_not(self):
-        for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled", "regression"):
+        for outcome in ("round_limit", "needs_human", "budget_exhausted", "time_limit", "crash", "watchdog_disabled", "regression"):
             self.assertTrue(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)

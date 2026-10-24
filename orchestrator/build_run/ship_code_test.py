@@ -49,9 +49,9 @@ class PipelineNotStarted(unittest.TestCase):
 
 
 class Diagnosis(unittest.TestCase):
-    def make(self, runs, diagnoses, retries=2, fixes=2, healthy=True):
+    def make(self, runs, diagnoses, retries=2, rounds=3, healthy=True):
         run = object.__new__(BuildRun)
-        run.lim = {"pipeline_retries": retries, "pipeline_fix_attempts": fixes}
+        run.lim, run.coder_rounds = {"pipeline_retries": retries, "review_rounds": rounds}, 1
         run.app_repo, run.work = "o/app", Path(tempfile.mkdtemp())
         self.runs, self.diagnoses, self.calls, self.coded, self.reruns = list(runs), list(diagnoses), [], [], []
         run.wait_run = lambda wf, sha: self.runs.pop(0) if self.runs else {"conclusion": "success", "url": "u", "databaseId": 1}
@@ -99,8 +99,8 @@ class Diagnosis(unittest.TestCase):
             run.pipeline("a" * 40)
         self.assertEqual(self.coded[0][1], "the lint step fails on app.ts")
 
-    def test_coder_fixes_are_bounded(self):
-        run = self.make([self.red(), self.red()], [{"category": "code", "fix_request": "x", "summary": "s"}] * 2, fixes=1)
+    def test_coder_fixes_count_against_the_review_rounds(self):
+        run = self.make([self.red(), self.red()], [{"category": "code", "fix_request": "x", "summary": "s"}] * 2, rounds=2)
         with self.assertRaises(endings.PipelineFix):
             run.pipeline("a" * 40)
         with self.assertRaises(run_stops.NeedsHuman) as cm:

@@ -44,7 +44,7 @@ class FromRun(unittest.TestCase):
 
     def test_warnings_are_capped_and_the_failure_comes_first(self):
         many = [{"summary": f"m{n}", "evidence": ""} for n in range(20)]
-        got = collect_events.from_run(facts(outcome="stuck", message="no progress", final_minor=many), "fp")
+        got = collect_events.from_run(facts(outcome="round_limit", message="no progress", final_minor=many), "fp")
         self.assertEqual(got[0]["severity"], "failure")
         self.assertEqual(len(got), 1 + collect_events.MAX_WARNINGS)
 

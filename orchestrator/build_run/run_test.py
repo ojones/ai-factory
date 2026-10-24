@@ -21,7 +21,7 @@ class RoundLoop(unittest.TestCase):
         run = object.__new__(BuildRun)
         run.app, run.build_kind, run.plan_meta = "demo", "update", None
         run.task, run.retiring, run.fix_for = "do it", (), None
-        run.lim = {"review_rounds": 3, "stuck_rounds": 0}
+        run.lim = {"review_rounds": 3}
         run.work = Path(__import__("tempfile").mkdtemp(prefix="loop-test-"))
         run.art = run.work
         run.state = track_progress.State(run.work / "state.json", "demo", "1", "url")

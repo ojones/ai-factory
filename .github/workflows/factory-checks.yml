@@ -1,9 +1,6 @@
 name: Factory checks
 
-# Checks on every pull request to ai-factory, including the learning PRs the retrospective Agent opens
-# (orchestrator/retrospective/). A learning PR labelled `auto-merge-candidate` merges itself at the end,
-# but only if the diff is again an additive lint or formatter change (recomputed here, the label is not
-# trusted) and every check above passed. Everything else waits for a human to merge.
+# Checks on every pull request to ai-factory. Every pull request is written and merged by a person.
 #
 # To make these checks block human merges too, require "unit", "starter" and "reviewer-smoke" in branch
 # protection for main (a repository setting, not something this file can turn on).
@@ -76,82 +73,3 @@ jobs:
           pip install pyyaml
           export MODEL="$(python -c "import yaml; print(yaml.safe_load(open('agents/profiles.yml'))['roles']['reviewer']['model'])")"
           python agents/smoke/run.py
-
-  auto-merge:
-    needs: [unit, starter, reviewer-smoke]
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.head_ref, 'learning/') &&
-      contains(github.event.pull_request.labels.*.name, 'auto-merge-candidate')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install pyyaml
-      - name: Is the diff still an additive lint or formatter change?
-        run: PYTHONPATH=orchestrator python -m retrospective.run_retrospective auto-merge-check "origin/${{ github.base_ref }}" HEAD
-      - name: Merge
-        env:
-          # The PAT, not the Actions token: a merge made with the Actions token starts no workflow, and `resume-failed-child.yml` runs when this PR closes.
-          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
-        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --squash --delete-branch
-
-  factory-change-gate:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.head_ref, 'factory-change/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          path: head
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.base_ref }}
-          path: main
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install pyyaml
-      - name: The reproduction fails on main and passes here, and the change is within scope and limits
-        working-directory: head
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          BASE_REF: origin/${{ github.base_ref }}...HEAD
-        run: PYTHONPATH=orchestrator python -m factory_change.gate prove ../main .
-
-  factory-change-merge:
-    needs: [unit, starter, reviewer-smoke, factory-change-gate]
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.head_ref, 'factory-change/') &&
-      contains(github.event.pull_request.labels.*.name, 'factory-change-auto')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install pyyaml
-      - name: Do all the files still merge on green, recomputed from the diff?
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          BASE_REF: origin/${{ github.base_ref }}...HEAD
-        run: PYTHONPATH=orchestrator python -m factory_change.gate merge-check .
-      - name: Merge
-        env:
-          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
-        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --squash --delete-branch

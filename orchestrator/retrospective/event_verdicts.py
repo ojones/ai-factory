@@ -10,7 +10,7 @@ def parse(result):
 
 
 def fix_cap(limits):
-    return int((limits or {}).get("fix_events_per_app_per_day", 3))
+    return int((limits or {}).get("bugs_per_app_per_day", 2))
 
 
 def decide(events, agent_entries=None, limits=None, fixed_today=0):
@@ -26,7 +26,7 @@ def decide(events, agent_entries=None, limits=None, fixed_today=0):
         elif asked == "fix" and reason and used < cap:
             verdict, why, used = "fix", reason, used + 1
         elif asked == "fix" and reason:
-            verdict, why = "record", f"the daily limit of {cap} fixed warnings for this app is used"
+            verdict, why = "record", f"the daily limit of {cap} bug tickets for this app is used"
         else:
             verdict, why = "record", reason or ("a fix needs a reason" if asked == "fix" else "no fix was asked for")
         target = said.get("target") if said.get("target") in TARGETS else None

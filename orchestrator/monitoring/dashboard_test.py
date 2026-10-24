@@ -35,7 +35,7 @@ class Dashboard(unittest.TestCase):
     def test_metrics_overall_and_per_app(self):
         rows = [db.summarize_run(report(app="a", url="1", rounds=1, cost=0.4)),
                 db.summarize_run(report(app="a", url="2", rounds=3, cost=0.8)),
-                db.summarize_run(report(app="b", url="3", outcome="stuck", rounds=3, cost=1.0)),
+                db.summarize_run(report(app="b", url="3", outcome="round_limit", rounds=3, cost=1.0)),
                 db.summarize_run(report(app="b", url="4", outcome="watchdog_disabled", audit=[{"rule": "INV-09"}]))]
         m = db.metrics(rows)
         self.assertEqual((m["all"]["runs"], m["all"]["ok"], m["all"]["first_pass_rate"]), (4, 2, 0.5))
@@ -59,7 +59,7 @@ class Dashboard(unittest.TestCase):
             return db.summarize_run(report(url=url, outcome=outcome, rounds=rounds, cost=cost) | {"scoreboard": board})
         rows = [run("1", "released", 1, 0.2, [{"categories": {}}]),
                 run("2", "released", 2, 0.6, [{"categories": {"test_quality": 2, "correctness": 1}}, {"categories": {"test_quality": 1}}]),
-                run("3", "stuck", 3, 1.0, [{"categories": {"correctness": 2}}])]
+                run("3", "round_limit", 3, 1.0, [{"categories": {"correctness": 2}}])]
         m = db.metrics(rows)["all"]
         self.assertEqual((m["accepted"], m["cost_per_accepted_usd"], m["rounds_per_accepted"], m["interventions"]), (2, 0.9, 3.0, 1))
         self.assertEqual(m["findings_by_category"], {"correctness": 3, "test_quality": 3})
@@ -77,11 +77,11 @@ class Dashboard(unittest.TestCase):
 
     def test_digest_lists_only_recent_problems_and_broken_invariants(self):
         rows = [db.summarize_run(report(url="old", outcome="crash", started="2026-10-01T00:00:00Z")),
-                db.summarize_run(report(url="https://x/r2", app="b", outcome="stuck", started="2026-10-10T02:00:00Z")),
+                db.summarize_run(report(url="https://x/r2", app="b", outcome="round_limit", started="2026-10-10T02:00:00Z")),
                 db.summarize_run(report(url="https://x/r3", app="c", started="2026-10-10T03:00:00Z", audit=[{"rule": "INV-03 x"}]))]
         digest = db.render_digest(rows, db.metrics(rows, {"open": 2, "fix_ineffective": 1}), "2026-10-09T00:00:00Z")
         self.assertIn("2 Build Run(s), 1 ended OK", digest)
-        self.assertIn("`b`: stuck", digest)
+        self.assertIn("`b`: round_limit", digest)
         self.assertNotIn("`b`: crash", digest)
         self.assertIn("INV-03 x", digest)
         self.assertIn("2 open, 1 marked fix-ineffective", digest)

@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import re
-import time
 
 from shared import app_state_record, console, shell
 
@@ -30,27 +29,19 @@ def issue_of(state_flags):
     return out
 
 
-def age_days(date, today):
-    try:
-        a, b_ = time.strptime(date, "%Y-%m-%d"), time.strptime(today, "%Y-%m-%d")
-        return int((time.mktime(b_) - time.mktime(a)) // 86400)
-    except (ValueError, TypeError):
-        return None
-
-
-def candidates(state_flags, manifest, today, min_age_days):
+def candidates(state_flags, manifest):
     released = [f for f in state_flags if f.get("state") == "released"]
     newest = max((run_id(f) for f in released), default=0)
     out = []
     for f in released:
-        slug, rid, age = slug_of(f["key"]), run_id(f), age_days(f.get("date", ""), today)
-        if slug in manifest and rid and rid < newest and age is not None and age >= min_age_days:
+        slug, rid = slug_of(f["key"]), run_id(f)
+        if slug in manifest and rid and rid < newest:
             out.append((slug, rid))
     return sorted(set(out), key=lambda c: c[1])
 
 
-def piggyback_slugs(state_flags, manifest, today, min_age_days, limit):
-    return [slug for slug, _ in candidates(state_flags, manifest, today, min_age_days)][:max(0, int(limit))]
+def piggyback_slugs(state_flags, manifest, limit):
+    return [slug for slug, _ in candidates(state_flags, manifest)][:max(0, int(limit))]
 
 
 def retirement_block(slugs):
@@ -88,7 +79,7 @@ def app_flags(owner, app, pat):
     return app_state_record.load(found[0]["body"]).get("flags", []), slugs
 
 
-def choose(eligible, task, owner, app, pat, limits, head_flags_json, today):
+def choose(eligible, task, owner, app, pat, limits, head_flags_json):
     named = retirement_check.retire_slugs(task)
     picked, issues = [], {}
     if eligible:
@@ -96,7 +87,7 @@ def choose(eligible, task, owner, app, pat, limits, head_flags_json, today):
             state_flags, manifest_now = app_flags(owner, app, pat)
             if state_flags is not None:
                 issues = issue_of(state_flags)
-                picked = piggyback_slugs(state_flags, manifest_now, today, int(limits.get("min_age_days", 1)), limits.get("piggyback_max", 5))
+                picked = piggyback_slugs(state_flags, manifest_now, limits.get("piggyback_max", 5))
         except Exception as e:  # noqa: BLE001 - retiring is never a reason to stop the run
             console.log(f"could not choose flags to retire: {type(e).__name__}: {e}")
     in_repo = flag_manifest.manifest_slugs(head_flags_json)

@@ -40,7 +40,7 @@ The whole-run suite takes **1.8 to 3.5 hours** and **about $0.80 to $3.70** (fiv
 3. **Run it:** the same workflow with `execute` on. The runner creates a branch with the candidate's `profiles.yml` (and the limits that keep passes comparable: no
    flag-retirement ride-along, a 2-minute watchdog, no daily cap), then for each task resets the bench app to its frozen commit, files the task as an Update App Intake labelled `benchmark`, dispatches the real
    `plan.yml` from that branch (so the planner measured is the candidate's), then dispatches the real `build-run.yml` from that branch for each child the plan filed, in order,
-   stopping at the first child that does not release. A task that ends at planning (a refusal, a question, a missing secret on an existing app) is scored on that ending. The `benchmark` label is
+   stopping at the first child that does not release. A task that ends at planning (a refusal or a question) is scored on that ending. The `benchmark` label is
    inherited by the children, which keeps the production workflows from starting them with the production models. The runner reads the Report (cost, rounds and time of the
    planner and every Build Run added up, the planner's cost from the spend ledger) and runs the oracle. It deletes the branch and archives the bench flags at the end.
 4. **Read the result** (the step summary and the `benchmark-result` artifact): passes, cost, rounds and minutes per task, and a verdict against the baseline.

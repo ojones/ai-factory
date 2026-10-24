@@ -11,7 +11,6 @@ MAX_CHANGE_SETS = 8
 MAX_CRITERIA = 6
 SIZES = ("S", "M")
 KINDS = ("staging", "update")
-FACTORY = "factory"
 CS_MENTION_RE = re.compile(r"\bCS-\d+\b")
 
 
@@ -163,16 +162,8 @@ def claims_internal_but_reachable(cs):
     return bool(cs.get("internal_only") and cs.get("flag") is None and not retires and USER_REACHABLE_RE.search(criteria))
 
 
-def factory_flag_problems(name, cs):
-    if cs.get("flag") is not None or not cs.get("internal_only"):
-        return [f"{name} is a Factory change set: it has no flag (`flag: null`) and is `internal_only: true`, because the tests and gates guard it, not a flag"]
-    return []
-
-
 def flag_problems(name, cs, build_kind):
     flag = cs.get("flag")
-    if build_kind == FACTORY:
-        return factory_flag_problems(name, cs)
     if claims_internal_but_reachable(cs):
         return [f"{name} is marked internal_only but its criteria name an endpoint, route or screen a user can reach: "
                 "a change to those is user-visible, so give it its own flag (describing it as tooling does not make it internal)"]
@@ -226,7 +217,7 @@ def order_problems(sets, build_kind):
     order = topological_order(sets)
     if order is None:
         return ["the change sets' dependencies contain a cycle"]
-    return staging_order_problems(order, sets) if build_kind not in ("update", FACTORY) and sets else []
+    return staging_order_problems(order, sets) if build_kind != "update" and sets else []
 
 
 def blocking_questions(plan):

@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from bugs import flood_limits  # noqa: E402
 
-CFG = {"enabled": True, "min_occurrences": 3, "max_per_app_per_day": 2}
+CFG = {"enabled": True, "min_occurrences": 3, "bugs_per_app_per_day": 2}
 GROUPS = {"aaaaaaaa": {"count": 5, "message": "m", "frame": ""}, "bbbbbbbb": {"count": 2, "message": "n", "frame": ""},
           "cccccccc": {"count": 9, "message": "o", "frame": ""}}
 

@@ -13,7 +13,7 @@ from try_fix import event  # noqa: E402
 
 from retrospective import judge_events  # noqa: E402
 
-CFG = {"roles": {"retrospective": {"model": "m"}}, "provider": {"base_url": "https://p"}, "limits": {"fix_events_per_app_per_day": 3}}
+CFG = {"roles": {"retrospective": {"model": "m"}}, "provider": {"base_url": "https://p"}, "limits": {"bugs_per_app_per_day": 3}}
 FAIL = event.make("staging", "failure", "demo", "smoke failed", "smoke")
 WARN = event.make("production_feedback", "warning", "demo", "slow endpoint", "slow")
 

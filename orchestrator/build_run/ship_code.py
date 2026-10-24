@@ -104,9 +104,8 @@ class ShipCode:
 
     def fix_or_stop(self, failed, diag):
         cat = diag["category"]
-        if cat == "code" and diag.get("fix_request") and getattr(self, "pipeline_fixes", 0) < self.lim["pipeline_fix_attempts"]:
-            self.pipeline_fixes = getattr(self, "pipeline_fixes", 0) + 1
-            raise endings.PipelineFix(self.coder(f"fix{self.pipeline_fixes}", diag["fix_request"], str(self.work / "findings-none.json")))
+        if cat == "code" and diag.get("fix_request") and self.coder_rounds < self.lim["review_rounds"]:
+            raise endings.PipelineFix(self.coder_round(f"fix{self.coder_rounds}", diag["fix_request"], str(self.work / "findings-none.json")))
         raise run_stops.NeedsHuman("pipeline", f"{failed[0]} failed ({cat}): {diag.get('summary', '')[:500]}")
 
     def pipeline(self, sha):
