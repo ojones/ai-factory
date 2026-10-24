@@ -56,7 +56,7 @@ flowchart TD
     subgraph g4["4. Build (every other child)"]
         S4_1["<b>4.1 Prepare the run</b><br/>read the child body only<br/>Orchestrator ensures flag issue-N exists, OFF"]
         S4_2["<b>4.2 Retire ride-along flags</b><br/>up to 5, oldest first,<br/>never a run of their own"]
-        S4_3["<b>4.3 Code</b><br/>CODER Agent commits locally behind the flag<br/>format, build, unit tests incl. flag off and on"]
+        S4_3["<b>4.3 Code</b><br/>CODER Agent commits locally behind the flag<br/>format, build, unit tests incl. flag off and on<br/>a key the plan missed is added to secrets.json;<br/>if its secret is not set the run ends awaiting_secret<br/>(an owner wait) before the Reviewer is paid for"]
         S4_4["<b>4.4 Pre-review check</b><br/>Orchestrator: npm run check<br/>type-check, lint, flag off/on test check"]
         S4_5["<b>4.5 Review</b><br/>REVIEWER Agent reads the local commit<br/>BEFORE anything is pushed"]
         S4_6["<b>4.6 Push</b><br/>Orchestrator pushes with the PAT"]
@@ -290,6 +290,58 @@ flowchart TD
     G5 -->|"turns on, archives"| gb
 ```
 
+## Diagram: finding and adding keys
+
+How a third-party key is found and supplied. Built (not yet seen live): the Coder lists any key the plan missed in secrets.json and carries on, the Orchestrator adds those names to the child ticket's list (another `factory-secrets` comment on the ticket being run, so a re-run asks for them from the start), and the same missing-name check runs once more right after the Coder, before the Reviewer is paid for. There is no Coder stop and no second file: a key is one more name in a list that already exists, and a missing one is the owner wait that already exists (an answer, not a failure: no retry, no failure event, no bug Intake, no lesson, the Intake stays open). These are part of steps 4.3 (INV-48, INV-49) and have no step of their own.
+
+```mermaid
+flowchart TD
+    subgraph plan["Planning (2.1 to 2.4)"]
+        K1["<b>Planner lists every key</b><br/>across all change sets, not only the first<br/>existing app: reads the app's secrets.json first<br/>a service the request leaves unnamed:<br/>one free-tier provider, recorded as an assumption"]
+        K2{"app?"}
+        K3["<b>Existing app: stop (2.3)</b><br/>awaiting_secret if a name is missing<br/>one comment, every gh secret set command"]
+        K4["<b>New app: file the children (2.4)</b><br/>comment lists every name"]
+        K1 --> K2
+        K2 -->|"existing"| K3
+        K2 -->|"new"| K4
+    end
+
+    subgraph stage["Staging (new app only, 3.2, 3.3)"]
+        K6["<b>Check the declared names</b><br/>gh secret list, names only"]
+        K7["<b>Owner wait (3.3)</b><br/>the commands for the names still missing"]
+        K6 -->|"a name is missing"| K7
+    end
+
+    K4 --> K6
+
+    owner(["<b>Owner</b><br/>runs gh secret set NAME -R owner/app for each name<br/>the command prompts, so no value reaches an issue or a log<br/>re-adds the label"])
+
+    K3 -.-> owner
+    K7 -.-> owner
+    owner -.->|"re-add the Intake label"| K1
+    owner -.->|"re-add proceed-with-change"| K5
+
+    subgraph build["Build Run"]
+        K5["<b>Setup check (4.1), every start</b><br/>every name in the Intake's list<br/>must exist as a GitHub Actions secret"]
+        K8["<b>Code (4.3)</b><br/>reads each key from process.env, in one place<br/>lists every key, including any the plan missed,<br/>in secrets.json with its purpose, never a value"]
+        K9["<b>Accept new names (4.3)</b><br/>a name the plan did not declare is allowed<br/>if it passes the name rules and is not a Factory name<br/>it is added to the ticket's list"]
+        K10["<b>Invalid name</b><br/>rejected as today: the Coder is told and fixes it"]
+        K11["<b>Check before the review (4.3)</b><br/>after every Coder round, before the Reviewer<br/>every name must exist as a secret"]
+        K12["<b>Owner wait: awaiting_secret</b><br/>one comment, every missing command<br/>no Reviewer, push or deploy has happened"]
+        K14["<b>Review, push and dark deploy (4.5 to 4.7)</b><br/>the deploy copies the declared names"]
+        K5 -->|"a name is missing"| K12
+        K5 -->|"all set"| K8
+        K8 --> K9
+        K9 -->|"invalid"| K10
+        K10 --> K8
+        K9 -->|"valid"| K11
+        K11 -->|"a name is missing"| K12
+        K11 -->|"all set"| K14
+    end
+
+    K12 -.-> owner
+```
+
 ## Step index
 
 Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the agents are untested against a real model, and the requirements it was built to are in "Factory Change requirements" below. "Implemented by" names the tickets that built the step (the domain tickets in `.wayfinder/intake-planning-redesign/`); "Verified by" names its unit tests, its invariants (INV-n) and what was seen live (ai-factory#140 and #145 on `factory-bench`, 2026-10-20). Walked in ticket 18; the gaps it found are ticket 19 (open) and ticket 20 (closed), and the steps with no live sighting are listed in ticket 17.
@@ -310,7 +362,7 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 | 3.3 | Wait for the owner's secrets | owner | `staging/verify_infrastructure.secret_commands`, `waiting_on_owner`, `planning/secrets_check.new_app_comment` | 14 | verify_infrastructure_test (the report, and no failure event), plan_run_test; INV-48, INV-57; not seen live |
 | 4.1 | Prepare the run | Orchestrator | `build_run/prepare_run.py`, `flag_lifecycle/flag_slug.ensure_feature` | 08b, 11, 12 | prepare_run_test; INV-10, INV-18, INV-50, INV-51, INV-55; live #142 (flag issue-142) |
 | 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_lifecycle.retirement_selection.piggyback_slugs` | 08c | retirement_selection_test; INV-37; no live run with a ride-along flag |
-| 4.3 | Code | Coder Agent | `agents/prompts/coder.md` | 11 | agent prompts; INV-01, INV-02, INV-09, INV-12, INV-13, INV-21, INV-32, INV-34, INV-41, INV-49; smoke-coder; live #142, #146 |
+| 4.3 | Code | Coder Agent | `agents/prompts/coder.md`, `build_run/write_code.require_found_secrets` | 11 | agent prompts, write_code_test (found secrets); INV-01, INV-02, INV-09, INV-12, INV-13, INV-21, INV-32, INV-34, INV-41, INV-48, INV-49; smoke-coder; live #142, #146 |
 | 4.4 | Pre-review check | Orchestrator | `limits.precheck`, Starter `scripts/check-flags.mjs` | 08c | check-flags.mjs; INV-47, INV-53; live #142 |
 | 4.5 | Review | Reviewer Agent | `reviewer.md`, `build_run/review_code.py` | 11 | review_code_test; INV-04, INV-11, INV-46; live #142 |
 | 4.6 | Push | Orchestrator | `build_run/ship_code.py` | 11 | ship_code_test; INV-42; live #142 |

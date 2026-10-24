@@ -130,14 +130,17 @@ class PrepareRun:
         self.state.d["parent"] = self.parent
 
     def require_secrets(self, needed):
+        missing = self.missing_of(needed)
+        if missing:
+            raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, "add `proceed-with-change` again"))
+
+    def missing_of(self, needed):
         try:
             have = secrets_check.present_names(lambda args: self.gh(args, check=False), self.app_repo)
         except secrets_check.SecretsUnreadable as e:
             raise run_stops.NeedsHuman("other", str(e))
         self.state.d["secrets"] = [x["name"] for x in needed]
-        missing = secrets_check.missing_secrets(needed, have)
-        if missing:
-            raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, "add `proceed-with-change` again"))
+        return secrets_check.missing_secrets(needed, have)
 
     def copy_template_files(self, group):
         changed = []
