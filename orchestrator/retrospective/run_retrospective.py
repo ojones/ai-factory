@@ -22,19 +22,29 @@ from retrospective import (
 from retrospective.cause import name_cause
 
 
-def judge_run_events(events, result, cfg, key, repo, token, app, work, outcome):
-    entries = event_verdicts.parse(result)
-    open_warnings = [e for e in events if e["severity"] == "warning" and e["key"] not in entries]
-    if open_warnings and key and "retrospective" in cfg.get("roles", {}):
-        agent_key, budget = agent_run.mint_agent(cfg, key)
-        if agent_key:
-            entries.update(judge_events.answer(open_warnings, cfg, agent_key))
-            agent_run.record_agent_spend(budget, agent_key, repo, token, os.environ.get("GITHUB_RUN_ID", "0"))
+def bugs_today(cfg, repo, token, app):
     try:
-        fixed = fix_budget.bugs_filed_today(repo, token, app)
+        return fix_budget.bugs_filed_today(repo, token, app)
     except Exception as e:  # noqa: BLE001 - counting never fails the run
         log(f"could not count today's bug tickets, so no warning is fixed this run: {type(e).__name__}: {e}")
-        fixed = event_verdicts.fix_cap(cfg.get("limits"))
+        return event_verdicts.fix_cap(cfg.get("limits"))
+
+
+def ask_about_warnings(open_warnings, cfg, key, repo, token):
+    agent_key, budget = agent_run.mint_agent(cfg, key)
+    if not agent_key:
+        return {}
+    got = judge_events.answer(open_warnings, cfg, agent_key)
+    agent_run.record_agent_spend(budget, agent_key, repo, token, os.environ.get("GITHUB_RUN_ID", "0"))
+    return got
+
+
+def judge_run_events(events, result, cfg, key, repo, token, app, work, outcome):
+    entries = event_verdicts.parse(result)
+    fixed = bugs_today(cfg, repo, token, app)
+    open_warnings = [e for e in events if e["severity"] == "warning" and e["key"] not in entries]
+    if open_warnings and key and "retrospective" in cfg.get("roles", {}) and fixed < event_verdicts.fix_cap(cfg.get("limits")):
+        entries.update(ask_about_warnings(open_warnings, cfg, key, repo, token))
     verdicts = event_verdicts.decide(events, entries, cfg.get("limits", {}), fixed)
     (work / "artifacts").mkdir(parents=True, exist_ok=True)
     (work / "artifacts" / "retrospective-verdicts.json").write_text(json.dumps(verdicts, indent=2))

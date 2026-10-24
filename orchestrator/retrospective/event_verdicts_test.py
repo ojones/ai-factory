@@ -71,8 +71,7 @@ class Decide(unittest.TestCase):
 class JudgeRunEvents(unittest.TestCase):
     CFG = {"roles": {"retrospective": {"model": "m"}}, "provider": {"base_url": "https://p"}, "limits": {"bugs_per_app_per_day": 3}}
 
-    def judge(self, events, result, key="parent", batch=None):
-
+    def judge(self, events, result, key="parent", batch=None, filed_today=0):
         asked = []
 
         def answer(evs, cfg, k):
@@ -81,7 +80,7 @@ class JudgeRunEvents(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(agent_run, "mint_agent", return_value=("scoped", mock.Mock())), \
                 mock.patch.object(agent_run, "record_agent_spend"), mock.patch.object(judge_events, "answer", answer), \
-                mock.patch.object(fix_budget, "bugs_filed_today", return_value=0):
+                mock.patch.object(fix_budget, "bugs_filed_today", return_value=filed_today):
             got = run_retrospective.judge_run_events(events, result, self.CFG, key, "o/f", "tok", "demo", Path(tmp), "round_limit")
             saved = json.loads((Path(tmp) / "artifacts" / "retrospective-verdicts.json").read_text())
         return got, asked, saved
@@ -92,6 +91,11 @@ class JudgeRunEvents(unittest.TestCase):
         self.assertEqual(asked, [[WARN2["key"]]])
         self.assertEqual({v["key"]: v["verdict"] for v in got}, {FAIL["key"]: "fix", WARN["key"]: "record", WARN2["key"]: "fix"})
         self.assertEqual(len(saved), 3)
+
+    def test_when_the_days_bug_limit_is_used_no_model_is_asked_about_warnings(self):
+        got, asked, _ = self.judge([FAIL, WARN], None, filed_today=3)
+        self.assertEqual(asked, [])
+        self.assertEqual([v["verdict"] for v in got], ["fix", "record"])
 
     def test_when_todays_fixes_cannot_be_counted_no_warning_is_fixed_but_failures_still_are(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(fix_budget, "bugs_filed_today", side_effect=RuntimeError("down")):
