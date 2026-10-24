@@ -204,8 +204,7 @@ class PrepareRun:
     def choose_flags_to_retire(self):
         picked, issues = retirement_selection.choose(
             not self.fix_for, self.task, self.app_repo.split("/")[0], self.app,
-            self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout,
-            time.strftime("%Y-%m-%d", time.gmtime()))
+            self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout)
         if issues:
             self.flag_issues = issues
         return picked

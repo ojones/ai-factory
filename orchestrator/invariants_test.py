@@ -425,10 +425,9 @@ class Invariants(unittest.TestCase):
     def test_inv37_flags_are_retired_inside_an_update_run_only_when_proven(self):
         released = lambda slug, run, state="released": {"key": f"a.feature.{slug}", "date": "2026-10-01", "run_url": f"https://x/runs/{run}", "state": state}
         flags = [released("old", 1), released("older", 2), released("new", 9), released("dead", 3, "switched off by the watchdog")]
-        got = retirement_selection.piggyback_slugs(flags, {"old", "older", "new", "dead"}, "2026-10-12", 1, 5)
+        got = retirement_selection.piggyback_slugs(flags, {"old", "older", "new", "dead"}, 5)
         self.assertEqual(got, ["old", "older"], msg="oldest first; the newest release keeps its flag; a watchdog-off flag is dead, not retired")
-        self.assertEqual(retirement_selection.piggyback_slugs(flags, {"old", "older", "new"}, "2026-10-12", 1, 1), ["old"])
-        self.assertEqual(retirement_selection.piggyback_slugs(flags, {"old", "older", "new"}, "2026-10-01", 1, 5), [], msg="released today: not a day yet")
+        self.assertEqual(retirement_selection.piggyback_slugs(flags, {"old", "older", "new"}, 1), ["old"])
         self.assertEqual(retirement_check.retire_slugs(retirement_selection.retirement_block(["old", "older"])), ["old", "older"])
         self.assertIsNotNone(retirement_check.retirement_problem("old", retirement_check.code_references(['h:src/a.ts:3:  isFeatureEnabled(res, "old")'])))
         self.assertEqual(flag_manifest.removed_flag_slugs('[{"slug":"old"}]', "[]"), ["old"])

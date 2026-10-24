@@ -120,9 +120,8 @@ limits:
   maintenance:
     enabled: true
   # A proven flag is retired inside the next Update App Intake's Build Run for the same app, never in a run of its own: once a later Build Run
-  # has also released something and the flag is at least min_age_days old, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_lifecycle/retirement_selection.py).
+  # has also released something, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_lifecycle/retirement_selection.py).
   flag_retirement:
-    min_age_days: 1
     piggyback_max: 5
   # Errors a deployed app logs, and `escaped-defect` issues its owner files, become failure events (orchestrator/bugs/scan_production.py, scheduled by production-feedback.yml);
   # the Retrospective judges them and Try Fix files a bug Intake for each one worth fixing, which starts itself. min_occurrences: times one error must appear in a scan.

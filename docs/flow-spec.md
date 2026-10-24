@@ -103,7 +103,7 @@ flowchart TD
         S5_8["<b>5.8 Watch the release</b><br/>watchdog, ten minutes after 4.13<br/>health check fails in a row, or new error lines<br/>switches off only the flags its own run released"]
         S5_7["<b>5.7 Retirement intake</b><br/>update-app-intake, planned, one child, no flag<br/>deletes check, code, tests, flags.json line<br/>nothing removes a dark feature on its own"]
         S5_1 --> S5_2
-        S5_2 -->|"a LATER Build Run also ends released<br/>and at least 1 day has passed"| S5_3
+        S5_2 -->|"a LATER Build Run also ends released"| S5_3
         S5_8 -->|"trips: the watchdog switches the flag off"| S5_5
         S5_5 -->|"fixed and released"| S5_2
         S5_5 -->|"cause not fixable:<br/>needs-human + dark-broken"| S5_6
