@@ -128,7 +128,7 @@ A `factory-learning` issue in ai-factory recording something a Build Run taught 
 _Avoid_: retrospective (that is the step and Agent that read every run and may file or act on these)
 
 **Retrospective**:
-The step that runs after every Build Run, whether it released or not. It records what the run found (blocking findings, minor findings and the `improvements` the reviewer and tester suggest), files them as issues in the Managed App's repo or ai-factory, names the cause of a run that ended badly, judges every event it produced, and posts a short summary on the issue that started the run.
+The step that runs after a Build Run, whether it released or not (an answer such as `refused` or `awaiting_secret` has nothing to learn from, and `provider_blocked` only raises its alert). It records what the run found (blocking findings, minor findings and the `improvements` the reviewer and tester suggest), judges each improvement as a failure event and files the Factory's as issues in ai-factory, names the cause of a run that ended badly, judges every event it produced, and posts a short summary on the issue that started the run.
 _Avoid_: post-mortem (it is not only for failures)
 
 **Dark feature**:
@@ -136,7 +136,7 @@ A change whose flag has not been released. One that fails its checks stays dark 
 _Avoid_: dead flag
 
 **Fix request**:
-The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (a deploy rollback, for a regression), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (an issue for a person to fix by hand), to the app as a fix child (today: the same issue started again), or kept as information (`needs-human`).
+The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (a deploy rollback, for a regression), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (an issue for a person to fix by hand), to the app as a bug Intake whose fix child the failed child waits for, or kept as information (`needs-human`).
 _Avoid_: bug report, incident
 
 **Scoreboard**:

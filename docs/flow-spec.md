@@ -122,7 +122,7 @@ flowchart TD
 
     subgraph g6["6. Record and advance"]
         S6_1["<b>6.1 Child closed</b>"]
-        S6_2["<b>6.2 Retrospective</b><br/>finalize + retrospective Agent<br/>(every run, always)<br/>summary, lessons, names the cause<br/>and judges every event of the run:<br/>failures and warnings, verdict fix or record"]
+        S6_2["<b>6.2 Retrospective</b><br/>finalize + retrospective Agent<br/>(every run except an answer or provider_blocked)<br/>summary, lessons, names the cause<br/>and judges every event of the run:<br/>failures and warnings, verdict fix or record"]
         S6_3["<b>6.3 Advance to the next child</b><br/>next waiting child whose dependencies<br/>are closed gets proceed-with-change"]
         S6_4["<b>6.4 Parent closes</b><br/>last child closed"]
         S6_5(["<b>6.5 App live and recorded</b>"])
@@ -349,7 +349,7 @@ Group 5, with STEP 4.1 to 5.8. One story, one flag; short-lived; retired by ridi
 
 One rule for every failure and warning, whatever found it (a failed child, a failed staging check, the watchdog, a production error, an escaped defect, a dark-only test failure, a check that could not be run). Each Agent has one job.
 
-1. **An event.** Whatever finds it writes a failure event: source, severity (`failure` or `warning`), app, the story it belongs to if any, a fingerprint, a summary and the evidence. A Build Run's events come from its facts; a scan's events (8.3, a failed staging check 3.2 other than a missing secret, which is 3.3) are handed to the Retrospective.
+1. **An event.** Whatever finds it writes a failure event: source, severity (`failure` or `warning`), app, the story it belongs to if any, a fingerprint, a summary and the evidence. A Build Run's events come from its facts; a scan's events (8.3, a failed staging check 3.2) are handed to the Retrospective.
 2. **A verdict (6.2, 6.7).** The Retrospective Agent alone names the cause and the target (`managed_app` or `factory`) and gives every event a verdict, `fix` or `record`, with a reason. A failure is always `fix`; a warning is `record` unless the Agent says why a fix is worth it. A scan with no Build Run is judged in one batch (6.7). `record` keeps today's learning record and files nothing; the Factory no longer files Suggestion issues in a Managed App's repo.
 3. **A group and a ticket (7.7, 7.6).** The Orchestrator groups the `fix` verdicts by app, story and target (an event with no story is never merged); verdicts stay per event. The Try Fix Agent writes one bug ticket from the bug template for each group, covering every event in it. It does not decide the cause or target, and it does not plan or split work. If it fails or its output does not validate, the Orchestrator writes the ticket from the facts.
 4. **An Intake or a request (7.1, 7.2).** An app fix is an `update-app-intake` labelled `bug`, one per group, with the title carrying every event key so a repeat of any of them finds it. A bug Intake with `fix_for` is planned in code from its ticket (2.7) with the same size and criteria limits as any change; one with no marker is planned by 2.1. A Factory cause (`orchestrator_gap`, `prompt_gap`, `template_gap`, `plan_gap`) is one `factory-fix-request` issue in ai-factory (7.2), written for a person, with each repeat a "Failed again" comment. That is where the pipeline stops: no workflow reads the label, no Agent plans or changes the Factory, and the failed child is held `needs-human` (7.5) until the person who fixed the Factory adds `proceed-with-change` again.
