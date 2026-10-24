@@ -47,7 +47,7 @@ def flag_missing_requirement(facts, message):
 def outcome_requirement(facts):
     outcome, message = facts.get("outcome"), clip(facts.get("message"), 200)
     blocking = [clip(s, 160) for s in facts.get("final_blocking") or []][:MAX_ITEMS]
-    if outcome in ("round_limit", "stuck"):
+    if outcome in ("round_limit",):
         return "The same request ends in a clean pass within the configured review rounds" + (f", without these blocking findings recurring: {'; '.join(blocking)}." if blocking else ".")
     if outcome in ("budget_exhausted", "time_limit"):
         return f"The same request finishes inside its cost cap and time limit (it stopped because: {message}), or is split into smaller requests that each do."
@@ -64,7 +64,7 @@ def outcome_requirement(facts):
 
 def recurring_requirements(facts):
     recurring = facts.get("recurring_findings") or []
-    if not recurring or facts.get("outcome") in ("round_limit", "stuck"):
+    if not recurring or facts.get("outcome") in ("round_limit",):
         return []
     return ["These findings, which the coder did not resolve across rounds, stop recurring: " + "; ".join(clip(s, 100) for s in recurring[:MAX_ITEMS]) + "."]
 

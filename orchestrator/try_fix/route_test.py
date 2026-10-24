@@ -28,7 +28,7 @@ class Routing(unittest.TestCase):
     def test_a_run_that_ran_out_of_money_or_time_was_too_big_for_its_limits(self):
         for outcome in ("budget_exhausted", "time_limit"):
             self.assertEqual(route.route(route.inferred_category(None, outcome)), "app", outcome)
-        for outcome in ("round_limit", "needs_human", "crash", "stuck"):
+        for outcome in ("round_limit", "needs_human", "crash"):
             self.assertEqual(route.route(route.inferred_category(None, outcome)), "info", outcome)
         self.assertEqual(route.inferred_category("plan_gap", "budget_exhausted"), "plan_gap", msg="a named structural cause wins")
         self.assertEqual(route.route(route.inferred_category("prompt_gap", "budget_exhausted")), "app", msg="a tester that ran dry looks like a prompt gap")

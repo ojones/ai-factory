@@ -23,17 +23,6 @@ def scoreboard_entry(rnd, sha, record, blocking):
             "categories": dict(collections.Counter(b.get("category") or f"{b.get('source', 'other')}_check" for b in blocking))}
 
 
-def open_items(entry):
-    return {f"check:{k}={v}" for k, v in entry["checks"].items() if v != "passed"} | {f"finding:{b}" for b in entry["blocking"]}
-
-
-def stalled(entries, n):
-    if n < 2 or len(entries) < n:
-        return False
-    last = [open_items(e) for e in entries[-n:]]
-    return bool(last[0]) and all(x == last[0] for x in last)
-
-
 class State:
     def __init__(self, path, app, issue, run_url):
         self.path = Path(path)

@@ -70,7 +70,7 @@ class Lessons(unittest.TestCase):
 class OneEventOneRecord(unittest.TestCase):
     def test_a_watchdog_disable_is_one_lesson_not_two(self):
         self.assertFalse(lesson_records.records_stuck_issue("watchdog_disabled"))
-        for stuck in ("round_limit", "stuck", "needs_human", "crash", "budget_exhausted", "time_limit"):
+        for stuck in ("round_limit", "needs_human", "crash", "budget_exhausted", "time_limit"):
             self.assertTrue(lesson_records.records_stuck_issue(stuck), stuck)
         for ok in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.records_stuck_issue(ok), ok)

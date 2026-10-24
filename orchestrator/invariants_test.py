@@ -201,12 +201,16 @@ class Invariants(unittest.TestCase):
         self.assertIs(group["cancel-in-progress"], False)
         self.assertEqual(group.get("queue"), "max", msg="otherwise GitHub cancels all but one pending run")
 
-    def test_inv19_a_run_that_changes_nothing_stops(self):
-        entry = {"round": 1, "sha": "a", "counts": {}, "checks": {"a: x": "failed"}, "blocking": ["no flag"]}
-        n = PROFILES["limits"]["stuck_rounds"]
-        self.assertGreaterEqual(n, 2)
-        self.assertTrue(track_progress.stalled([dict(entry, round=i) for i in range(n)], n))
-        self.assertFalse(track_progress.stalled([dict(entry, round=i) for i in range(n - 1)], n))
+    def test_inv19_review_fixes_and_pipeline_fixes_share_one_round_limit(self):
+        run = object.__new__(BuildRun)
+        run.lim, run.coder_rounds = {"review_rounds": PROFILES["limits"]["review_rounds"]}, 0
+        run.coder = lambda label, task, findings: "head"
+        for _ in range(run.lim["review_rounds"] - 1):
+            run.coder_round("x", "t", "f")
+        run.stop_when_rounds_are_spent()
+        run.coder_round("x", "t", "f")
+        with self.assertRaises(run_stops.NeedsHuman):
+            run.stop_when_rounds_are_spent()
 
     def test_inv20_the_retrospective_agent_never_gets_the_parent_key(self):
         cfg = {"limits": {"retrospective_cost_cap_usd": 0.5, "jwt_ttl_seconds": 60}, "roles": {"retrospective": {"model": "m/x"}}}
@@ -269,7 +273,7 @@ class Invariants(unittest.TestCase):
     def test_inv25_nothing_is_reverted_in_git_and_only_a_regression_rolls_the_deploy_back_through_ci(self):
         d = {"commits": ["h"], "base_sha": "b", "head_sha": "h", "release": None}
         self.assertTrue(rollback.rollback_decision(dict(d, outcome="regression"))[0])
-        for outcome in ("released", "nothing_to_release", "watchdog_disabled", "round_limit", "needs_human", "stuck",
+        for outcome in ("released", "nothing_to_release", "watchdog_disabled", "round_limit", "needs_human",
                         "budget_exhausted", "time_limit", "crash", "provider_blocked"):
             self.assertFalse(rollback.rollback_decision(dict(d, outcome=outcome))[0], outcome)
         self.assertFalse(hasattr(run_module, "revert_main_to_base"))
@@ -283,7 +287,7 @@ class Invariants(unittest.TestCase):
         self.assertTrue(run_audit.audit_report(dict(d, outcome="round_limit", stages=[], blocking=[], revert={"status": "reverted"})))
 
     def test_inv26_a_child_that_ends_badly_and_every_other_failure_event_is_judged_and_handled_once(self):
-        for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
+        for outcome in ("round_limit", "needs_human", "budget_exhausted", "time_limit", "crash", "watchdog_disabled"):
             self.assertTrue(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
         for outcome in ("released", "nothing_to_release"):
             self.assertFalse(lesson_records.wants_fix_request({"outcome": outcome}, {}), outcome)
@@ -770,9 +774,9 @@ class Invariants(unittest.TestCase):
         self.assertEqual(got[failure["key"]]["verdict"], "fix", msg="the Agent cannot downgrade a failure")
         self.assertEqual(got[warning["key"]]["verdict"], "record")
         self.assertEqual(event_verdicts.decide([warning], {warning["key"]: {"key": warning["key"], "verdict": "fix", "reason": "users wait"}})[0]["verdict"], "fix")
-        facts = {"app": "demo", "outcome": "stuck", "message": "m", "issue_number": "1", "flags": [], "final_minor": [{"summary": "s"}]}
+        facts = {"app": "demo", "outcome": "round_limit", "message": "m", "issue_number": "1", "flags": [], "final_minor": [{"summary": "s"}]}
         self.assertEqual([e["severity"] for e in collect_events.from_run(facts, "fp")], ["failure", "warning"])
-        self.assertTrue(lesson_records.wants_fix_request({"outcome": "stuck"}, {}))
+        self.assertTrue(lesson_records.wants_fix_request({"outcome": "round_limit"}, {}))
 
     def test_inv59_the_try_fix_agent_only_writes_the_ticket_text_and_its_answer_is_validated_or_replaced(self):
         ev = event.make("tester", "failure", "demo", "blank text accepted", "fp")
@@ -822,9 +826,8 @@ class Invariants(unittest.TestCase):
     def test_inv62_a_pipeline_failure_is_diagnosed_and_its_retries_and_coder_fixes_are_bounded(self):
 
         self.assertGreaterEqual(PROFILES["limits"]["pipeline_retries"], 0)
-        self.assertGreater(PROFILES["limits"]["pipeline_fix_attempts"], 0)
         source = inspect.getsource(ship_code)
-        for bound in ("pipeline_retries", "pipeline_fix_attempts", "NOT_STARTED_CONCLUSIONS"):
+        for bound in ("pipeline_retries", "review_rounds", "NOT_STARTED_CONCLUSIONS"):
             self.assertIn(bound, source)
 
 

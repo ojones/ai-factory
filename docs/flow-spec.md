@@ -86,7 +86,7 @@ flowchart TD
         S4_9 -->|"existing behaviour broke = regression"| S4_11
         S4_11 --> S4_14
         S4_9 -->|"all checks passed"| S4_12
-        S4_9 -->|"rounds, cost cap or time limit used up,<br/>or same failures repeat (stuck)"| S4_14
+        S4_9 -->|"coder rounds (review and pipeline fixes), cost cap<br/>or time limit used up"| S4_14
         S4_12 -->|"pass"| S4_13
         S4_12 -->|"a gate does not hold"| S4_14
     end
@@ -340,6 +340,103 @@ flowchart TD
     end
 
     K12 -.-> owner
+```
+
+## Diagram: proposal, one fix per story, planned from its ticket
+
+**Proposal, not built.** Nothing in the code or the step index reflects this yet, and the numbered diagram above still shows today's flow (a bug Intake goes through 2.1). Two changes are proposed, and only the part that changes is drawn: from the Retrospective's `fix` verdicts to the start of the fix child.
+
+**Group by story (new step 7.7).** Today every `fix` verdict becomes its own ticket and bug Intake, so two failure events on one dark story file two fix children that both block the same failed child, each computing the same attempt number. The proposal groups the `fix` verdicts in code, by `(app, story, target)`, before the Try Fix Agent runs: one group gives one ticket and one bug Intake. Verdicts stay per event (INV-58), an event with no story id and an app fix against a Factory fix are never merged, and the Agent plays no part in the grouping. Grouping by shared root cause across stories is left out on purpose.
+
+**Plan a fix from its ticket (new step 2.7).** Today a bug Intake with `fix_for` is planned by the Planner Agent (2.1) even though the outcome is fixed: exactly one change set (INV-39, `planning/fix_for.py` tells the Planner so), and the Try Fix Agent (7.6) has already written numbered, checkable requirements. The Planner call turns those requirements into a change set the ticket already describes. The proposal drops that model call for a `fix_for` Intake and builds the one change set from the ticket in code (new step 2.7). Everything around it stays: `plan.yml` still starts on the label and still scans for secret values (INV-56, INV-40), the child is still filed as a sub-issue by 2.4, blocks the failed child, and runs through the same Build Run.
+
+```mermaid
+flowchart TD
+    R6["<b>6.2 Retrospective</b><br/>verdict fix, app cause"]
+    R77["<b>7.7 Group the fix verdicts (NEW)</b><br/>Orchestrator, no model call<br/>one group per app, story and target<br/>verdicts stay per event, one primary event key<br/>the daily warning cap still counts events"]
+    R76["<b>7.6 Write the bug ticket</b><br/>Try Fix Agent, once per group<br/>numbered, checkable requirements<br/>covering every event in the group"]
+    R71["<b>7.1 File the bug Intake</b><br/>update-app-intake + bug, marker fix_for<br/>the Intake is the parent of the fix child"]
+    R20["<b>plan.yml starts</b><br/>on the label; scans for secret values (unchanged)"]
+    RD{"<b>Marker fix_for?</b>"}
+    R21["<b>2.1 Plan</b><br/>Planner Agent<br/>only a bug Intake with no marker (8.4)<br/>and every ordinary Intake"]
+    R27["<b>2.7 Plan a fix from its ticket (NEW)</b><br/>Orchestrator, no model call<br/>one change set: title and criteria are the ticket's<br/>numbered requirements, flag true<br/>same limits as any plan (size, at most 6 criteria)"]
+    R23["<b>2.3 Stop for a person</b><br/>requirements missing or over the limits<br/>fix the ticket, remove and re-add the label"]
+    R24["<b>2.4 File the child ticket</b><br/>one sub-issue under the bug Intake<br/>blocks the failed child, fix_attempt counted (unchanged)"]
+    R25["<b>2.5 Start the child</b><br/>proceed-with-change"]
+    R41["<b>4.1 Prepare the run</b><br/>Build Run as today"]
+
+    R6 --> R77
+    R77 --> R76
+    R76 --> R71
+    R71 --> R20
+    R20 --> RD
+    RD -->|"no"| R21
+    RD -->|"yes"| R27
+    R27 -->|"valid"| R24
+    R27 -->|"invalid"| R23
+    R21 --> R24
+    R24 --> R25
+    R25 --> R41
+
+    classDef changed fill:#cfe5d9,stroke:#4a8f6d,stroke-width:2px,color:#1d3a2c
+    class R77,R27,RD changed
+```
+
+What is saved and what is risked:
+
+- **Saved:** one bug Intake and one fix child per story instead of one per event, no two fix children racing to unblock the same failed child, one model call and its latency per bug Intake, and the Planner's failure modes on a fix (a rejected plan, a question, a "blocked" verdict). Today each of those stops the fix for a person (2.3) even though the ticket was already validated by 7.6.
+- **Not changed:** a bug Intake with no marker (a regression on a released flag, 8.4) can still need several change sets, so it keeps the Planner. The Try Fix Agent (7.6) stays; merging it into the Retrospective is a separate idea.
+- **Open points for grouping:** the group's dedupe key is the primary event's key, so a repeat of any member must still find the open Intake and add a "Seen again" comment; the Try Fix Agent's input and the 6-criteria limit must hold for several events at once (trim, or keep the failure's requirements first); INV-26, INV-39 and INV-58 need their wording moved from "event" to "group of events on one story".
+- **Open points for 2.7:** the feasibility check (`blocked` for payments, an outside service and so on) currently also runs on the Planner's answer; for a fix it would have to run on the ticket's text or be judged unnecessary, because the failed child already passed it. A fix never declares new secrets today; if one needs a key the Coder's found-key path (4.3) is the route.
+
+## Diagram: proposal, Factory fixes are a human's job
+
+**Proposal, not built.** The Factory no longer changes itself. When the Retrospective names a Factory cause (`orchestrator_gap`, `prompt_gap`, `template_gap`, `plan_gap`), the Try Fix Agent (7.6) writes the bug ticket and step 7.2 files one `factory-fix-request` issue in ai-factory, counting each repeat as a "Failed again" comment. That is where the pipeline stops. No workflow reads the label, so the issue never reaches the Planner, and a person takes it from there. Group 9 (Factory Change) and step 7.3 (learning PR) are deleted, with their invariants, workflows, config keys and tests; no shim is kept.
+
+```mermaid
+flowchart TD
+    L62["<b>6.2 Retrospective</b><br/>verdict fix, Factory cause<br/>(orchestrator_gap, prompt_gap,<br/>template_gap, plan_gap)"]
+    L76["<b>7.6 Write the bug ticket</b><br/>Try Fix Agent, written for a person to act on:<br/>cause, target, reason, how it was found,<br/>numbered checkable requirements"]
+    L72["<b>7.2 Factory fix request (END of the pipeline)</b><br/>one factory-fix-request issue in ai-factory<br/>each repeat is a Failed again comment<br/>the sighting count is shown in the issue"]
+    LH["<b>A person</b><br/>reads the issue, fixes the Factory by hand<br/>in an ordinary pull request"]
+    LX["<b>DELETED</b><br/>group 9 (9.1 to 9.13), step 7.3 learning PR,<br/>ready-for-factory-run, promote_after_runs,<br/>INV-14, 15, 45, 63 to 67<br/>retrospective write sandbox (INV-45)"]
+
+    L62 --> L76
+    L76 --> L72
+    L72 -.->|"nothing in the pipeline reads it"| LH
+
+    classDef changed fill:#cfe5d9,stroke:#4a8f6d,stroke-width:2px,color:#1d3a2c
+    classDef retired fill:#e8e8e8,stroke:#999,stroke-dasharray:5 5,color:#666
+    class L72,L76 changed
+    class LX retired
+```
+
+## Diagram: proposal, one secret check at the start of every run
+
+**Proposal, not built.** A declared third-party secret is checked in four places today: planning for an existing app (2.3), the staging check for a new app (3.3), the start of every Build Run (4.1) and after each Coder round (4.3). The proposal keeps the last two and drops the first two. 4.1 already runs before any Agent (`run.py` calls `setup()`, which requires the declared names, before the first Coder round), so no model call is saved by checking earlier. The staging check (3.2) keeps checking the Factory's own staging secrets (`FLY_API_TOKEN`, `GROWTHBOOK_CLIENT_KEY`, `PREVIEW_TOKEN`) and stops looking at the app's declared names, which the starter-template smoke test never uses. The owner still gets the names and `gh secret set` commands early: for a new app, 2.4 comments them when it files the children, and for an existing app the Planner's plan comment carries them. Only the gate goes, not the heads-up.
+
+```mermaid
+flowchart TD
+    M21["<b>2.1 Plan</b><br/>Planner lists every key it can see,<br/>recorded on the Intake as names"]
+    M24["<b>2.4 File child tickets</b><br/>comments the names and gh secret set commands<br/>(unchanged; no check, no stop)"]
+    M32["<b>3.2 Verify infrastructure (new app)</b><br/>checks the Factory's staging secrets only<br/>no longer the app's declared names"]
+    M41["<b>4.1 Prepare the run</b><br/>every name on the Intake must exist<br/>as a GitHub Actions secret, before any Agent"]
+    M43["<b>4.3 Code</b><br/>a key the plan missed is added to secrets.json<br/>checked right after the Coder round, before the Reviewer"]
+    MW["<b>Owner wait: awaiting_secret</b><br/>one comment, every missing gh secret set command<br/>not a failure: no retry, fix request or lesson<br/>owner re-adds proceed-with-change"]
+    MX["<b>DROPPED</b><br/>2.3 planning stop for an existing app<br/>3.3 wait at staging for a new app<br/>the 6.7 and group diagram exceptions for 3.3"]
+
+    M21 --> M24
+    M24 --> M32
+    M32 --> M41
+    M41 -->|"a name is missing"| MW
+    M41 -->|"all set"| M43
+    M43 -->|"a found key is missing"| MW
+    MW -.->|"owner sets the secrets"| M41
+
+    classDef changed fill:#cfe5d9,stroke:#4a8f6d,stroke-width:2px,color:#1d3a2c
+    classDef retired fill:#e8e8e8,stroke:#999,stroke-dasharray:5 5,color:#666
+    class M32,M24 changed
+    class MX retired
 ```
 
 ## Step index

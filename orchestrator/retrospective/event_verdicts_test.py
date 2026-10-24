@@ -82,7 +82,7 @@ class JudgeRunEvents(unittest.TestCase):
                 mock.patch.object(agent_run, "mint_agent", return_value=("scoped", mock.Mock())), \
                 mock.patch.object(agent_run, "record_agent_spend"), mock.patch.object(judge_events, "answer", answer), \
                 mock.patch.object(fix_budget, "warnings_fixed_today", return_value=0):
-            got = run_retrospective.judge_run_events(events, result, self.CFG, key, "o/f", "tok", "demo", Path(tmp), "stuck")
+            got = run_retrospective.judge_run_events(events, result, self.CFG, key, "o/f", "tok", "demo", Path(tmp), "round_limit")
             saved = json.loads((Path(tmp) / "artifacts" / "retrospective-verdicts.json").read_text())
         return got, asked, saved
 
@@ -95,7 +95,7 @@ class JudgeRunEvents(unittest.TestCase):
 
     def test_when_todays_fixes_cannot_be_counted_no_warning_is_fixed_but_failures_still_are(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(fix_budget, "warnings_fixed_today", side_effect=RuntimeError("down")):
-            got = run_retrospective.judge_run_events([FAIL, WARN], {"events": [entry(WARN, "fix")]}, self.CFG, None, "o/f", "tok", "demo", Path(tmp), "stuck")
+            got = run_retrospective.judge_run_events([FAIL, WARN], {"events": [entry(WARN, "fix")]}, self.CFG, None, "o/f", "tok", "demo", Path(tmp), "round_limit")
         self.assertEqual({v["key"]: v["verdict"] for v in got}, {FAIL["key"]: "fix", WARN["key"]: "record"})
 
     def test_without_a_key_nothing_is_asked_and_the_defaults_apply(self):

@@ -20,7 +20,6 @@ TITLES = {
     "time_limit": "Build Run: needs human (time limit reached)",
     "provider_blocked": "Build Run: model provider blocked (account has no balance)",
     "refused": "Build Run: request refused (the Factory cannot build it)",
-    "stuck": "Build Run: needs human (no progress across rounds)",
     "watchdog_disabled": "Build Run: release switched off by the watchdog",
     "regression": "Build Run: regression found by the tester (deploy rolled back)",
     "needs_human": "Build Run: needs human",

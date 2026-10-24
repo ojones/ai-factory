@@ -140,7 +140,7 @@ The issue a Build Run that ended badly leaves behind: what happened, what the Or
 _Avoid_: bug report, incident
 
 **Scoreboard**:
-The Orchestrator's per-round record of every check's state (`passed`, `failed`, `blocked`, `not_run`) and the blocking findings still open, written to the Build Run Report and `artifacts/progress.json`. It, not an Agent's say-so, is how the run knows whether it is making progress; a run that leaves the same items open for `stuck_rounds` rounds stops.
+The Orchestrator's per-round record of every check's state (`passed`, `failed`, `blocked`, `not_run`) and the blocking findings still open, written to the Build Run Report and `artifacts/progress.json`. It, not an Agent's say-so, is how the run knows whether it is making progress.
 
 **Watchdog**:
 The Orchestrator step after a release (STEP 5.8) that watches the app's health and error logs for a few minutes and switches off the flags the run released if they regress.
