@@ -634,7 +634,7 @@ class Invariants(unittest.TestCase):
         self.assertNotIn("sk-a", problem)
         self.assertIn(("reset", "-q", "--hard", "base"), calls)
 
-    def test_inv49_a_commit_with_a_secret_value_or_an_undeclared_name_is_never_pushed(self):
+    def test_inv49_a_commit_with_a_secret_value_or_a_bad_name_is_never_pushed(self):
         run = object.__new__(BuildRun)
         run.state = mock.Mock(d={"secrets": ["WEATHER_API_KEY"]})
         self.assert_secret_value_is_discarded(run)
@@ -644,9 +644,9 @@ class Invariants(unittest.TestCase):
         run.git = lambda *a, check=True, cwd=None: mock.Mock(
             returncode=0 if not (a[0] == "show" and a[1].startswith("base:")) else 1,
             stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
-        self.assertIn("SNEAKY_KEY", run.secret_problem("base", "head"))
-        run.git = lambda *a, check=True, cwd=None: mock.Mock(returncode=0, stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "SNEAKY_KEY"}]}))
-        self.assertIsNone(run.secret_problem("base", "head"))
+        self.assertIsNone(run.secret_problem("base", "head"), msg="a valid name the plan missed is asked for, not rejected")
+        run.git = lambda *a, check=True, cwd=None: mock.Mock(returncode=0, stdout="+++ b/x\n+ok\n" if a[0] == "diff" else json.dumps({"secrets": [{"name": "FLY_API_TOKEN"}]}))
+        self.assertIn("FLY_API_TOKEN", run.secret_problem("base", "head"))
         deploy = (STARTER / ".github/workflows/deploy-fly.yml").read_text()
         self.assertIn("flyctl secrets import --stage", deploy)
         self.assertIn("reserved", deploy)

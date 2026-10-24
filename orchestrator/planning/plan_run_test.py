@@ -211,6 +211,15 @@ class Run(unittest.TestCase):
         self.assertEqual(done["ending"], "planned")
         self.assertEqual(self.filed[-1][2][0]["name"], "WEATHER_API_KEY")
 
+    def test_a_new_app_files_its_children_without_the_repository_and_asks_for_the_secrets_later(self):
+        secrets = [{"name": "SEARCH_API_KEY", "purpose": "web search", "read_by": "backend"}]
+        doc = plan(2, secrets=secrets, change_sets=[cs(1, kind="staging", flag=None, internal_only=True, requirements=[]), cs(2, ["CS-1"])])
+        got = self.go(doc, kind="new")
+        self.assertEqual(got["ending"], "planned")
+        self.assertEqual(self.filed[-1][2][0]["name"], "SEARCH_API_KEY")
+        self.assertIn("does not exist yet", self.comments[-2])
+        self.assertIn("gh secret set SEARCH_API_KEY -R notes", self.comments[-2])
+
     def test_secrets_the_intake_already_declared_are_checked_before_the_planner_is_paid(self):
         got = self.go(plan(1), declared=[{"name": "A_KEY", "purpose": "x"}])
         self.assertEqual(got["ending"], "awaiting_secret")

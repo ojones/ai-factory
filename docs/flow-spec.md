@@ -7,7 +7,7 @@ This is the official specification of how a request becomes a running, recorded 
 **Domains.** Each numbered group is a domain with its own folder under `orchestrator/` (see [ARCHITECTURE.md](../ARCHITECTURE.md#code-layout)): 1 Request (`request`), 2 Planning (`planning`), 3 Staging (`staging`), 4 Build Run (`build_run`), 5 Flag Lifecycle (`flag_lifecycle`), 6 Retrospective (`retrospective`, record and advance included), 7 Try Fix (`try_fix`), 8 Bugs (`bugs`), 9 Factory Change (`factory_change`). Maintenance and Monitoring have no steps.
 
 **Rules for changing this page.**
-- The full diagram has no edge IDs (`e1@-->`), no `animate` lines and no `linkStyle default`: the VS Code Mermaid viewers fail to render it with "Cannot read properties of null (reading 'getAttribute')" unless every edge is animated. The edges that cross a group are drawn thick by one `linkStyle` line at the end, listing their positions; `flow_spec_test.py` fails when that list is not exactly the crossing edges, so adding or moving an edge means updating it.
+- The full diagram has no edge IDs (`e1@-->`), no `animate` lines and no `linkStyle` lines: the VS Code Mermaid viewers fail to render it with "Cannot read properties of null (reading 'getAttribute')". `flow_spec_test.py` fails when any of them is added.
 - IDs are stable. Never renumber a step; add the next free number in its domain, or retire an ID by leaving it in the index marked retired.
 - Cite a step as `STEP n.m` in any doc; `flow_spec_test.py` fails when a cited ID does not exist, when the diagram and the index disagree, or when an invariant's Step names a step that does not exist.
 - An invariant in [invariants.md](invariants.md) names the step it enforces in its Step column.
@@ -30,11 +30,11 @@ flowchart TD
         S2_1["<b>2.1 Plan</b><br/>Planner Agent<br/>new app: reads the spec only<br/>update: reads the app's code"]
         S2_2["<b>2.2 Refuse</b><br/>comment: refused"]
         S2_3["<b>2.3 Stop for a person</b><br/>comment on the issue<br/>fix it, remove and re-add the label"]
-        S2_4["<b>2.4 File child tickets</b><br/>sub-issues under the parent<br/>each body = complete coding instructions<br/>one flag each, sized to roll back alone"]
+        S2_4["<b>2.4 File child tickets</b><br/>sub-issues under the parent<br/>each body = complete coding instructions<br/>one flag each, sized to roll back alone<br/>new app with declared secrets: also comments<br/>the names and gh secret set commands"]
         S2_5["<b>2.5 Start the first child</b><br/>planner puts proceed-with-change<br/>on the first child with no dependencies"]
         S2_6{"<b>2.6 Route the child</b><br/>by kind"}
         S2_1 -->|"feasibility blocked"| S2_2
-        S2_1 -->|"blocking question, bad plan,<br/>or missing secret"| S2_3
+        S2_1 -->|"blocking question, bad plan,<br/>or (existing app)<br/>missing secret"| S2_3
         S2_1 -->|"valid plan"| S2_4
         S2_4 --> S2_5
         S2_5 --> S2_6
@@ -45,7 +45,10 @@ flowchart TD
     subgraph g3["3. Staging (new app only, child 1)"]
         S3_1["<b>3.1 Stage the app</b><br/>stage.sh: repo from Starter, Fly app,<br/>flag service, Intake marker"]
         S3_2["<b>3.2 Verify infrastructure</b><br/>CI green, deploy healthy, flag round trip,<br/>preview token, secrets, smoke test<br/>deterministic checks, no Agent<br/>no business logic, no flag<br/>then the staging child closes and the first business child starts"]
+        S3_3["<b>3.3 Wait for the owner's secrets</b><br/>a declared secret name is missing from the new repo<br/>an owner wait, like awaiting_secret: an answer, not a failure<br/>comment: gh secret set NAME -R owner/app<br/>no business child starts, no Agent, no failure event"]
         S3_1 --> S3_2
+        S3_2 -->|"a declared secret is missing"| S3_3
+        S3_3 -.->|"owner sets each secret,<br/>re-adds proceed-with-change"| S3_1
     end
 
     S2_6 -->|"staging"| S3_1
@@ -53,7 +56,7 @@ flowchart TD
     subgraph g4["4. Build (every other child)"]
         S4_1["<b>4.1 Prepare the run</b><br/>read the child body only<br/>Orchestrator ensures flag issue-N exists, OFF"]
         S4_2["<b>4.2 Retire ride-along flags</b><br/>up to 5, oldest first,<br/>never a run of their own"]
-        S4_3["<b>4.3 Code</b><br/>CODER Agent commits locally behind the flag<br/>format, build, unit tests incl. flag off and on"]
+        S4_3["<b>4.3 Code</b><br/>CODER Agent commits locally behind the flag<br/>format, build, unit tests incl. flag off and on<br/>a key the plan missed is added to secrets.json;<br/>if its secret is not set the run ends awaiting_secret<br/>(an owner wait) before the Reviewer is paid for"]
         S4_4["<b>4.4 Pre-review check</b><br/>Orchestrator: npm run check<br/>type-check, lint, flag off/on test check"]
         S4_5["<b>4.5 Review</b><br/>REVIEWER Agent reads the local commit<br/>BEFORE anything is pushed"]
         S4_6["<b>4.6 Push</b><br/>Orchestrator pushes with the PAT"]
@@ -124,7 +127,7 @@ flowchart TD
         S6_4["<b>6.4 Parent closes</b><br/>last child closed"]
         S6_5(["<b>6.5 App live and recorded</b>"])
         S6_6["<b>6.6 Ongoing signals</b><br/>template sync, maintenance, owner requests"]
-        S6_7["<b>6.7 Judge events with no run</b><br/>production errors, escaped defects,<br/>a failed staging check<br/>one batch per scan, same Agent and verdicts<br/>(a scan has no Build Run to finalize)"]
+        S6_7["<b>6.7 Judge events with no run</b><br/>production errors, escaped defects,<br/>a failed staging check<br/>(not a missing secret, 3.3)<br/>one batch per scan, same Agent and verdicts<br/>(a scan has no Build Run to finalize)"]
         S6_1 --> S6_2
         S6_2 -->|"child succeeded"| S6_3
         S6_3 -->|"last child closed"| S6_4
@@ -159,7 +162,7 @@ flowchart TD
     S6_2 -->|"verdict fix, factory cause"| S7_6
     S6_2 -->|"no cause found / infrastructure"| S7_5
     S7_4 --> S4_1
-    S3_2 -->|"a check fails"| S6_7
+    S3_2 -->|"any other check fails"| S6_7
 
     subgraph g8["8. Bugs found later"]
         S8_1["<b>8.1 Bug while still dark</b><br/>flag never released, off,<br/>or switched off by the watchdog:<br/>failure comment on the same story,<br/>the open child waits for its fix"]
@@ -216,8 +219,6 @@ flowchart TD
     S9_11 -->|"clean"| S7_4
     S9_13 --> S7_5
     S9_13 -.->|"other category"| S7_2
-
-    linkStyle 0,1,2,10,31,39,40,41,42,43,44,45,51,52,53,54,60,61,62,63,64,65,66,67,71,72,73,74,75,93,95,96,97 stroke-width:3px
 ```
 
 ## Diagram: how the groups connect
@@ -226,7 +227,7 @@ The same flow with each group collapsed to one box. Round boxes are what sits ou
 
 ```mermaid
 flowchart TD
-    owner(["Owner (a person)<br/>forms, approve-retire, edits and re-labels,<br/>merges tier 2 Factory PRs and learning PRs"])
+    owner(["Owner (a person)<br/>forms, secrets, approve-retire, edits and re-labels,<br/>merges tier 2 Factory PRs and learning PRs"])
     mon(["Monitoring (no steps)<br/>benchmark, canary, dashboard, Fly audit"])
 
     subgraph upkeep["Scheduled upkeep"]
@@ -253,7 +254,7 @@ flowchart TD
     G2 -->|"staging child"| G3
     G2 -->|"update child"| G4
     G2 -->|"factory-change child"| G9
-    G3 -->|"child closed,<br/>or a failed check"| G6
+    G3 -->|"child closed,<br/>or a failed check other than a missing secret"| G6
     G4 -->|"child closed or failed"| G6
     G4 -->|"flag created OFF, released, watched (5.8), retired"| G5
     G5 -->|"eligible: retired as a ride-along"| G4
@@ -272,6 +273,7 @@ flowchart TD
 
     owner -.->|"New and Update App Intake forms"| G1
     owner -.->|"fix and re-label a stopped plan"| G2
+    owner -.->|"sets the declared secrets (3.3),<br/>re-adds proceed-with-change"| G3
     owner -.->|"approve-retire"| G5
     owner -.->|"edit and re-label (7.5),<br/>learning PR"| G7
     owner -.->|"merges a tier 2 PR"| G9
@@ -288,6 +290,58 @@ flowchart TD
     G5 -->|"turns on, archives"| gb
 ```
 
+## Diagram: finding and adding keys
+
+How a third-party key is found and supplied. Built (not yet seen live): the Coder lists any key the plan missed in secrets.json and carries on, the Orchestrator adds those names to the child ticket's list (another `factory-secrets` comment on the ticket being run, so a re-run asks for them from the start), and the same missing-name check runs once more right after the Coder, before the Reviewer is paid for. There is no Coder stop and no second file: a key is one more name in a list that already exists, and a missing one is the owner wait that already exists (an answer, not a failure: no retry, no failure event, no bug Intake, no lesson, the Intake stays open). These are part of steps 4.3 (INV-48, INV-49) and have no step of their own.
+
+```mermaid
+flowchart TD
+    subgraph plan["Planning (2.1 to 2.4)"]
+        K1["<b>Planner lists every key</b><br/>across all change sets, not only the first<br/>existing app: reads the app's secrets.json first<br/>a service the request leaves unnamed:<br/>one free-tier provider, recorded as an assumption"]
+        K2{"app?"}
+        K3["<b>Existing app: stop (2.3)</b><br/>awaiting_secret if a name is missing<br/>one comment, every gh secret set command"]
+        K4["<b>New app: file the children (2.4)</b><br/>comment lists every name"]
+        K1 --> K2
+        K2 -->|"existing"| K3
+        K2 -->|"new"| K4
+    end
+
+    subgraph stage["Staging (new app only, 3.2, 3.3)"]
+        K6["<b>Check the declared names</b><br/>gh secret list, names only"]
+        K7["<b>Owner wait (3.3)</b><br/>the commands for the names still missing"]
+        K6 -->|"a name is missing"| K7
+    end
+
+    K4 --> K6
+
+    owner(["<b>Owner</b><br/>runs gh secret set NAME -R owner/app for each name<br/>the command prompts, so no value reaches an issue or a log<br/>re-adds the label"])
+
+    K3 -.-> owner
+    K7 -.-> owner
+    owner -.->|"re-add the Intake label"| K1
+    owner -.->|"re-add proceed-with-change"| K5
+
+    subgraph build["Build Run"]
+        K5["<b>Setup check (4.1), every start</b><br/>every name in the Intake's list<br/>must exist as a GitHub Actions secret"]
+        K8["<b>Code (4.3)</b><br/>reads each key from process.env, in one place<br/>lists every key, including any the plan missed,<br/>in secrets.json with its purpose, never a value"]
+        K9["<b>Accept new names (4.3)</b><br/>a name the plan did not declare is allowed<br/>if it passes the name rules and is not a Factory name<br/>it is added to the ticket's list"]
+        K10["<b>Invalid name</b><br/>rejected as today: the Coder is told and fixes it"]
+        K11["<b>Check before the review (4.3)</b><br/>after every Coder round, before the Reviewer<br/>every name must exist as a secret"]
+        K12["<b>Owner wait: awaiting_secret</b><br/>one comment, every missing command<br/>no Reviewer, push or deploy has happened"]
+        K14["<b>Review, push and dark deploy (4.5 to 4.7)</b><br/>the deploy copies the declared names"]
+        K5 -->|"a name is missing"| K12
+        K5 -->|"all set"| K8
+        K8 --> K9
+        K9 -->|"invalid"| K10
+        K10 --> K8
+        K9 -->|"valid"| K11
+        K11 -->|"a name is missing"| K12
+        K11 -->|"all set"| K14
+    end
+
+    K12 -.-> owner
+```
+
 ## Step index
 
 Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the agents are untested against a real model, and the requirements it was built to are in "Factory Change requirements" below. "Implemented by" names the tickets that built the step (the domain tickets in `.wayfinder/intake-planning-redesign/`); "Verified by" names its unit tests, its invariants (INV-n) and what was seen live (ai-factory#140 and #145 on `factory-bench`, 2026-10-20). Walked in ticket 18; the gaps it found are ticket 19 (open) and ticket 20 (closed), and the steps with no live sighting are listed in ticket 17.
@@ -299,15 +353,16 @@ Group 9 is built (ticket 32) but has not run live: its code is unit-tested, the 
 | 1.3 | Automated change request | maintenance, template_sync, flag_lifecycle, try_fix | each module's `file_*`, `try_fix/file_bug.py` | 06, 15d | INV-33, INV-35; maintenance tests; file_bug_test; live: scheduled sources only, no bug Intake yet |
 | 2.1 | Plan | Planner Agent | `planning/plan_run.py` (`plan.yml`), `planning/validate_plan.py` | 09, 13 | plan_run_test, validate_plan_test; INV-54, INV-56; live #140 (four attempts), #145 |
 | 2.2 | Refuse | Orchestrator | `planning/triage.feasibility`, `Refused` | 09, 13 | triage tests, refusal_test; INV-40; no live refusal |
-| 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` | 09, 13 | plan_run_test, secrets_check_test; INV-48; live: needs_human twice on #140 |
-| 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` | 09 | file_children_test, child_tickets_test; INV-54, INV-56; live #140, #145 |
+| 2.3 | Stop for a person | Orchestrator | `NeedsHuman`, `AwaitingSecret` (an existing app only; a new app has no repository to check, see 3.3) | 09, 13 | plan_run_test, secrets_check_test; INV-48; live: needs_human twice on #140 |
+| 2.4 | File child tickets | Orchestrator | `planning/file_children.py`, `shared/child_tickets.py` | 09 | file_children_test, child_tickets_test; INV-48, INV-54, INV-56; live #140, #145 |
 | 2.5 | Start the first child | Orchestrator | `retrospective/close_child.ready_to_start` | 09, 10 | close_child_test (ready_to_start); INV-24, INV-55; live: #141, #146 started by the planner, #142, #147 by the advance |
 | 2.6 | Route the child | Orchestrator | `factory-plan` marker `kind` | 12, 14 | staging/route_child_test, INV-57, INV-61; live #140, #145 |
 | 3.1 | Stage the app | stage.sh | `infra/app-staging/stage.sh`, `staging/read_staging_child.py` | 14 | stage_script_test, read_staging_child_test; INV-57; live #141 |
-| 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` | 14 | verify_infrastructure_test; INV-57; live #141 (six checks passed) |
+| 3.2 | Verify infrastructure | Orchestrator | `staging/verify_infrastructure.py` | 14 | verify_infrastructure_test; INV-48, INV-57; live #141 (six checks passed) |
+| 3.3 | Wait for the owner's secrets | owner | `staging/verify_infrastructure.secret_commands`, `waiting_on_owner`, `planning/secrets_check.new_app_comment` | 14 | verify_infrastructure_test (the report, and no failure event), plan_run_test; INV-48, INV-57; not seen live |
 | 4.1 | Prepare the run | Orchestrator | `build_run/prepare_run.py`, `flag_lifecycle/flag_slug.ensure_feature` | 08b, 11, 12 | prepare_run_test; INV-10, INV-18, INV-50, INV-51, INV-55; live #142 (flag issue-142) |
 | 4.2 | Retire ride-along flags | Orchestrator, Coder | `flag_lifecycle.retirement_selection.piggyback_slugs` | 08c | retirement_selection_test; INV-37; no live run with a ride-along flag |
-| 4.3 | Code | Coder Agent | `agents/prompts/coder.md` | 11 | agent prompts; INV-01, INV-02, INV-09, INV-12, INV-13, INV-21, INV-32, INV-34, INV-41, INV-49; smoke-coder; live #142, #146 |
+| 4.3 | Code | Coder Agent | `agents/prompts/coder.md`, `build_run/write_code.require_found_secrets` | 11 | agent prompts, write_code_test (found secrets); INV-01, INV-02, INV-09, INV-12, INV-13, INV-21, INV-32, INV-34, INV-41, INV-48, INV-49; smoke-coder; live #142, #146 |
 | 4.4 | Pre-review check | Orchestrator | `limits.precheck`, Starter `scripts/check-flags.mjs` | 08c | check-flags.mjs; INV-47, INV-53; live #142 |
 | 4.5 | Review | Reviewer Agent | `reviewer.md`, `build_run/review_code.py` | 11 | review_code_test; INV-04, INV-11, INV-46; live #142 |
 | 4.6 | Push | Orchestrator | `build_run/ship_code.py` | 11 | ship_code_test; INV-42; live #142 |
@@ -363,9 +418,9 @@ Group 5, with STEP 4.1 to 5.8. One story, one flag; short-lived; retired by ridi
 
 ## From a failure to a fix
 
-One rule for every failure and warning, whatever found it (a failed child, a failed staging check, the watchdog, a production error, an escaped defect, a dark-only test failure, a check that could not be run). Each Agent has one job.
+One rule for every failure and warning, whatever found it (a failed child, a failed staging check other than a missing secret, the watchdog, a production error, an escaped defect, a dark-only test failure, a check that could not be run). Each Agent has one job.
 
-1. **An event.** Whatever finds it writes a failure event: source, severity (`failure` or `warning`), app, the story it belongs to if any, a fingerprint, a summary and the evidence. A Build Run's events come from its facts; a scan's events (8.3, a failed staging check 3.2) are handed to the Retrospective.
+1. **An event.** Whatever finds it writes a failure event: source, severity (`failure` or `warning`), app, the story it belongs to if any, a fingerprint, a summary and the evidence. A Build Run's events come from its facts; a scan's events (8.3, a failed staging check 3.2 other than a missing secret, which is 3.3) are handed to the Retrospective.
 2. **A verdict (6.2, 6.7).** The Retrospective Agent alone names the cause and the target (`managed_app` or `factory`) and gives every event a verdict, `fix` or `record`, with a reason. A failure is always `fix`; a warning is `record` unless the Agent says why a fix is worth it. A scan with no Build Run is judged in one batch (6.7). `record` keeps today's learning record and files nothing; the Factory no longer files Suggestion issues in a Managed App's repo.
 3. **A ticket (7.6).** The Try Fix Agent writes one bug ticket from the bug template for each `fix` verdict. It does not decide the cause or target, and it does not plan or split work. If it fails or its output does not validate, the Orchestrator writes the ticket from the facts.
 4. **An Intake (7.1, 7.2, 9.1).** An app fix is an `update-app-intake` labelled `bug`, planned by 2.1, so it has the same size and criteria limits as any change. Every Factory cause starts as a `factory-fix-request` issue (7.2) that counts its sightings (the issue plus each "Failed again" comment). An `orchestrator_gap` one that reaches `promote_after_runs` sightings is filed as a Factory Change Intake (9.1) and planned by 9.2, the same planner and child filing (2.4). Any other Factory cause (`prompt_gap`, `template_gap`, `plan_gap`) stays a fix request, which is not planned: a person adds `ready-for-factory-run` and the Retrospective Agent writes a learning PR (7.3).
