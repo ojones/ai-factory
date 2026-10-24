@@ -24,7 +24,7 @@ class SummaryRendering(unittest.TestCase):
 
 class VerificationSummary(unittest.TestCase):
     def test_summary_shows_verification_limitations_and_scoreboard(self):
-        d = {"app": "x", "outcome": "stuck", "message": "m", "cap_usd": 2.0, "spent_usd": 0.5, "review_passes": 2,
+        d = {"app": "x", "outcome": "round_limit", "message": "m", "cap_usd": 2.0, "spent_usd": 0.5, "review_passes": 2,
              "head_sha": "abc", "release": None, "blocking": [], "stages": [],
              "verification": {"round": 2, "sha": "abcdef123", "limitations": ["note 4 left behind"],
                               "counts": {"passed": 3, "failed": 1, "blocked": 1, "not_run": 0}, "checks": []},

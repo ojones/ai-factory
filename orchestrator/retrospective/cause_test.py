@@ -14,7 +14,7 @@ def facts(outcome, **kw):
 class NamingTheCause(unittest.TestCase):
     def test_the_agents_category_decides_where_the_cause_goes(self):
         self.assertEqual(cause.name_cause(facts("round_limit"), {"category": "prompt_gap"}), {"category": "prompt_gap", "route": "factory"})
-        self.assertEqual(cause.name_cause(facts("stuck"), {"category": "spec_ambiguity"}), {"category": "spec_ambiguity", "route": "app"})
+        self.assertEqual(cause.name_cause(facts("round_limit"), {"category": "spec_ambiguity"}), {"category": "spec_ambiguity", "route": "app"})
         self.assertEqual(cause.name_cause(facts("crash"), {"category": "infra"}), {"category": "infra", "route": "info"})
 
     def test_it_is_inferred_from_the_ending_when_the_agent_did_not_run(self):

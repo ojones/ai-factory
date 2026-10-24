@@ -44,7 +44,7 @@ class Improvements(unittest.TestCase):
         facts = self.facts()
         self.assertEqual([i["target"] for i in facts["improvements"]], ["factory", "managed_app"])
 
-    def test_each_improvement_goes_to_its_own_tracker_and_only_the_factory_one_is_for_the_agent(self):
+    def test_each_improvement_goes_to_its_own_tracker(self):
         created = []
 
         def fake_gh(args, token, check=False):
@@ -52,11 +52,10 @@ class Improvements(unittest.TestCase):
                 created.append((args[args.index("--repo") + 1], args[args.index("--title") + 1]))
                 return mock.Mock(stdout=f"https://github.com/x/y/issues/{40 + len(created)}")
             return mock.Mock(stdout="[]")
-        with mock.patch.object(tracker, "gh", fake_gh), mock.patch.object(tracker, "already_proposed", return_value=False):
-            for_agent, filed = improvement_issues.record_improvements("o/ai-factory", "tok", self.facts())
+        with mock.patch.object(tracker, "gh", fake_gh):
+            filed = improvement_issues.record_improvements("o/ai-factory", "tok", self.facts())
         self.assertEqual([r for r, _ in created], ["o/ai-factory"])
         self.assertTrue(created[0][1].startswith("Improvement ["))
-        self.assertEqual(len(for_agent), 1)
         self.assertEqual([f["target"] for f in filed], ["factory", "managed_app"])
 
     def test_the_same_improvement_twice_is_one_issue_and_the_number_per_run_is_capped(self):
@@ -65,7 +64,7 @@ class Improvements(unittest.TestCase):
         with mock.patch.object(tracker, "gh", lambda args, token, check=False: (created.append(args) if args[:2] == ["issue", "create"] else None) or mock.Mock(stdout="[]")):
             with tempfile.TemporaryDirectory() as tmp:
                 facts = run_facts.collect_facts(tmp, dict(STATE, outcome="released", improvements=many))
-            _, filed = improvement_issues.record_improvements("o/ai-factory", "tok", facts)
+            filed = improvement_issues.record_improvements("o/ai-factory", "tok", facts)
         self.assertEqual(len(filed), minor_findings.MAX_MINORS)
         self.assertEqual(len(created), 0, msg="app improvements file nothing here")
 
@@ -123,8 +122,8 @@ class Duplicates(unittest.TestCase):
             facts = run_facts.collect_facts(tmp, {**STATE, "outcome": "released", "improvements": Improvements.IMPS})
         facts["improvements"] = [dict(facts["improvements"][0], summary="Coder prompt does not say to trim the input"),
                                  dict(facts["improvements"][1], summary="Add a test for empty text values")]
-        with mock.patch.object(tracker, "gh", gh), mock.patch.object(tracker, "already_proposed", return_value=True):
-            for_agent, filed = improvement_issues.record_improvements("o/f", "tok", facts)
+        with mock.patch.object(tracker, "gh", gh):
+            filed = improvement_issues.record_improvements("o/f", "tok", facts)
         self.assertFalse([c for c in calls if c[:2] == ["issue", "create"]], "it was already open")
         self.assertEqual({c[2] for c in calls if c[:2] == ["issue", "comment"]}, {"31"})
         self.assertTrue(filed[0]["url"].endswith("/issues/31"))

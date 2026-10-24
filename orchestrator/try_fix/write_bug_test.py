@@ -35,6 +35,19 @@ class Write(unittest.TestCase):
         for secret_env in ("FACTORY_PAT", "DEEPINFRA_API_KEY"):
             self.assertNotIn(secret_env, user)
 
+    def test_the_prompt_lists_every_event_of_a_group(self):
+        other = event.make("tester", "warning", "demo", "checkout is slow", "fp2", story=7)
+        seen = []
+        write_bug.write({**VERDICT, "events": [EV, other]}, FACTS, None, CFG, "k", lambda base, key, model, system, user, **kw: seen.append(user) or GOOD)
+        self.assertIn("round limit reached", seen[0])
+        self.assertIn("checkout is slow", seen[0])
+
+    def test_the_fallback_asks_for_a_fix_of_each_further_event_within_the_cap(self):
+        others = [event.make("tester", "warning", "demo", f"problem {i}", f"fp{i}", story=7) for i in range(8)]
+        got = write_bug.fallback({**VERDICT, "events": [EV, *others]}, FACTS, None, 6)
+        self.assertEqual(len(got["requirements"]), 6)
+        self.assertEqual(got["requirements"][-1], write_bug.fallback(VERDICT, FACTS, None, 6)["requirements"][-1])
+
     def test_an_unusable_answer_or_a_failed_call_falls_back_to_the_orchestrators_text(self):
         for ask in (lambda *a, **k: {"how_found": "x"}, mock.Mock(side_effect=RuntimeError("down")), lambda *a, **k: ["no"]):
             got = write_bug.write(VERDICT, FACTS, None, CFG, "k", ask)

@@ -19,8 +19,6 @@ NOT_REPO_FILES = {
     "index.html",
     "artifacts/progress.json",
     "retrospective-facts.json",
-    "factory-change/",
-    "learning/",
     "name_test.py",
     ".scratch/orchestrator-spec/issues/",
 }
@@ -47,10 +45,6 @@ def invariant_table():
 
 def defined_invariants():
     return set(re.findall(r"^\| (INV-\d\d) \|", invariant_table(), re.M))
-
-
-def defined_requirements():
-    return set(re.findall(r"^- (FC-\d\d)\b", spec_text("docs/flow-spec.md"), re.M))
 
 
 def cited(pattern):
@@ -119,10 +113,6 @@ def path_exists(token, files):
 class SpecSync(unittest.TestCase):
     def test_every_cited_invariant_is_defined(self):
         missing = sorted(f"{name}: {inv}" for name, inv in cited(r"\bINV-\d\d\b") if inv not in defined_invariants())
-        self.assertEqual(missing, [])
-
-    def test_every_cited_flow_requirement_is_defined(self):
-        missing = sorted(f"{name}: {fc}" for name, fc in cited(r"\bFC-\d\d\b") if fc not in defined_requirements())
         self.assertEqual(missing, [])
 
     def test_each_invariant_is_listed_in_the_index_row_of_every_step_it_names(self):

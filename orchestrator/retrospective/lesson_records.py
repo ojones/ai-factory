@@ -101,7 +101,7 @@ def record_issue(repo, token, facts):
             tracker.gh(["issue", "comment", str(issue["number"]), "--repo", repo, "--body", "Happened again.\n\n" + run_facts.render_facts(facts)], token)
             return issue["number"]
     out = tracker.gh(["issue", "create", "--repo", repo, "--label", tracker.LABEL, "--title", title, "--body",
-              run_facts.render_facts(facts) + "\n_A retrospective analysis and, if one is possible, a proposed fix PR follow._"], token).stdout
+              run_facts.render_facts(facts) + "\n_A retrospective analysis follows._"], token).stdout
     m = re.search(r"/issues/(\d+)", out)
     return int(m.group(1)) if m else None
 

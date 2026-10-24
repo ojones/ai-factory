@@ -79,7 +79,7 @@ class AppState(unittest.TestCase):
 
     def test_the_registry_has_one_row_per_app_with_a_running_count(self):
         body = a.render_registry("", report(app="notes"), "https://github.com/o/notes/issues/3")
-        body = a.render_registry(body, report(app="todo", outcome="stuck", url="https://x/9"), "https://github.com/o/todo/issues/1")
+        body = a.render_registry(body, report(app="todo", outcome="round_limit", url="https://x/9"), "https://github.com/o/todo/issues/1")
         body = a.render_registry(body, report(app="notes", day="2026-10-12", url="https://x/10"), "")
         rows = [l for l in body.splitlines() if l.startswith("| ") and "App" not in l and "---" not in l]
         self.assertEqual(len(rows), 2)

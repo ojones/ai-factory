@@ -24,8 +24,8 @@ from shared.shell import sh
 
 from planning import file_children, fix_for, plan_comment, secrets_check, secrets_marker, triage, validate_plan
 
-PLANNED, REFUSED, AWAITING_SECRET, NEEDS_HUMAN, SKIPPED = "planned", "refused", "awaiting_secret", "needs_human", "skipped"
-ANSWERED = (PLANNED, SKIPPED, REFUSED, AWAITING_SECRET)
+PLANNED, REFUSED, NEEDS_HUMAN, SKIPPED = "planned", "refused", "needs_human", "skipped"
+ANSWERED = (PLANNED, SKIPPED, REFUSED)
 
 
 class Stop(Exception):
@@ -37,8 +37,6 @@ class Stop(Exception):
 def intake_kind(labels, body):
     if child_tickets.read_marker(body):
         raise Stop(SKIPPED, "this is a child ticket of a plan, not an Intake")
-    if intake_labels.FACTORY_CHANGE in labels:
-        return "factory"
     if intake_labels.UPDATE_APP_INTAKE in labels:
         return "update"
     if intake_labels.NEW_APP_INTAKE in labels:
@@ -46,17 +44,10 @@ def intake_kind(labels, body):
     raise Stop(SKIPPED, "this issue is not an Intake")
 
 
-BUILD_KINDS = {"update": "update", "factory": validate_plan.FACTORY, "new": "first build"}
-ROLES = {"factory": "factory_planner"}
+BUILD_KINDS = {"update": "update", "new": "first build"}
 
 
-def read_factory_request(issue, repo):
-    return repo.split("/")[1], (issue.get("body") or "").strip(), None
-
-
-def read_request_or_stop(kind, issue, body, limits, repo=""):
-    if kind == "factory":
-        return read_factory_request(issue, repo)
+def read_request_or_stop(kind, issue, body, limits):
     try:
         app = read_form.app_name(body) if kind == "update" else issue["title"].strip()
         if kind == "new" and not read_form.APP_RE.fullmatch(app):
@@ -87,17 +78,17 @@ def read_intake(issue, repo, repo_info, limits):
     found = triage.find_secrets(body)
     if found:
         raise Stop(REFUSED, triage.secret_refusal(found))
-    app, task, cap = read_request_or_stop(kind, issue, body, limits, repo)
+    app, task, cap = read_request_or_stop(kind, issue, body, limits)
     if kind == "update":
         require_factory_app(app, repo, repo_info)
-    label = {"update": intake_labels.UPDATE_APP_INTAKE, "factory": intake_labels.FACTORY_CHANGE}.get(kind, intake_labels.NEW_APP_INTAKE)
+    label = intake_labels.UPDATE_APP_INTAKE if kind == "update" else intake_labels.NEW_APP_INTAKE
     return {"kind": kind, "app": app, "task": task, "cap": cap, "fix_for": child_tickets.read_fix_for(body) or None,
             "inherit": [x for x in sorted(labels) if x in file_children.INHERITED], "cap_override": requested_cap_override(body),
             "declared": secrets_marker.declared_secrets(issue), "label": label}
 
 
-def planner_max_change_sets(limits, fix):
-    return fix_for.max_change_sets(fix, int(limits.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS)))
+def planner_max_change_sets(limits):
+    return int(limits.get("planner_max_change_sets", validate_plan.MAX_CHANGE_SETS))
 
 
 def planner_max_criteria(limits):
@@ -126,26 +117,24 @@ class PlanRun:
     def run(self):
         if self.tickets.children():
             return self.ended(SKIPPED, "this Intake already has child tickets, so it is already planned")
-        return self.waiting_for_declared_secrets() or self.plan_and_file()
-
-    def waiting_message(self, missing):
-        return secrets_check.waiting_message(missing, self.intake["app"], "re-add the label")
-
-    def waiting_for_declared_secrets(self):
-        declared = self.intake["declared"]
-        missing = secrets_check.missing_secrets(declared, self.secret_names()) if declared and self.intake["kind"] != "new" else []
-        return self.stop(AWAITING_SECRET, self.waiting_message(missing)) if missing else None
+        return self.plan_and_file()
 
     def plan_and_file(self):
         try:
-            doc, self.cost, _usage = self.ask(fix_for.task_for(self.intake["task"], self.intake.get("fix_for")))
+            doc = self.plan_from_ticket() if self.intake.get("fix_for") else self.plan_with_planner()
         except run_stops.NeedsHuman as e:
             return self.stop(NEEDS_HUMAN, str(e))
-        return self.rejected(doc) or self.asking_for_secrets(doc) or self.file_children_and_report(doc)
+        return self.rejected(doc) or self.file_children_and_report(doc)
+
+    def plan_with_planner(self):
+        doc, self.cost, _usage = self.ask(self.intake["task"])
+        return doc
+
+    def plan_from_ticket(self):
+        return fix_for.plan_from_ticket(self.intake["task"])
 
     def validate(self, doc):
-        fix = self.intake.get("fix_for")
-        return validate_plan.validate_plan(doc, BUILD_KINDS[self.intake["kind"]], planner_max_change_sets(self.lim, fix), planner_max_criteria(self.lim))
+        return validate_plan.validate_plan(doc, BUILD_KINDS[self.intake["kind"]], planner_max_change_sets(self.lim), planner_max_criteria(self.lim))
 
     def rejected(self, doc):
         blocked, category, reasons, possible = triage.feasibility(doc)
@@ -158,18 +147,18 @@ class PlanRun:
             self.comment(plan_comment.render_plan_comment(doc, questions))
             return self.stop(NEEDS_HUMAN, "the plan needs a person to answer first: " + " | ".join(questions))
 
-    def asking_for_secrets(self, doc):
+    def announce_secrets(self, doc):
         needed = declared_secret_dicts(doc)
-        if not needed:
-            return None
+        if needed:
+            self.comment(self.secrets_comment(needed))
+
+    def secrets_comment(self, needed):
         if self.intake["kind"] == "new":
-            self.comment(secrets_check.new_app_comment(needed, self.intake["app"]))
-            return None
-        missing = secrets_check.missing_secrets(needed, self.secret_names())
-        self.comment(secrets_check.request_comment(needed, missing, self.intake["app"]))
-        return self.ended(AWAITING_SECRET, self.waiting_message(missing)) if missing else None
+            return secrets_check.new_app_comment(needed, self.intake["app"])
+        return secrets_check.request_comment(needed, secrets_check.missing_secrets(needed, self.secret_names()), self.intake["app"], "add `proceed-with-change` again")
 
     def file_children_and_report(self, doc):
+        self.announce_secrets(doc)
         sets = doc["change_sets"]
         fix = {"fix": self.intake["fix_for"]} if self.intake.get("fix_for") else {}
         made = self.file(self.number, sets, validate_plan.topological_order(sets), declared_secret_dicts(doc), **fix)
@@ -197,12 +186,11 @@ def available_model(cfg, role, key):
 
 
 class PlannerAsk:
-    def __init__(self, cfg, intake, runner, work, art, app_dir, prompt_values=None):
+    def __init__(self, cfg, intake, runner, work, art, app_dir):
         self.cfg, self.intake, self.runner, self.art, self.app_dir = cfg, intake, runner, art, app_dir
         self.path = work / "plan.json"
         self.build_kind = BUILD_KINDS[intake["kind"]]
-        self.role = ROLES.get(intake["kind"], "planner")
-        self.prompt_values = prompt_values or {}
+        self.role = "planner"
 
     def restore(self, cwd=None):
         if self.intake["kind"] == "new" or not sh(["git", "status", "--porcelain"], cwd=self.app_dir, check=False).stdout.strip():
@@ -212,12 +200,12 @@ class PlannerAsk:
 
     def check(self, doc):
         lim = self.cfg["limits"]
-        found, _ = validate_plan.validate_plan(doc, self.build_kind, planner_max_change_sets(lim, None), planner_max_criteria(lim))
+        found, _ = validate_plan.validate_plan(doc, self.build_kind, planner_max_change_sets(lim), planner_max_criteria(lim))
         if found:
             raise ValueError("; ".join(found))
 
     def prompt(self, task):
-        values = {"app_name": self.intake["app"], "build_kind": self.build_kind, "task": task, "plan_path": self.path, "spec": task, **self.prompt_values}
+        values = {"app_name": self.intake["app"], "build_kind": self.build_kind, "task": task, "plan_path": self.path, "spec": task}
         return prompts.render(prompts.load_prompt(self.cfg["roles"][self.role]["prompt"]), values)
 
     def __call__(self, task):
@@ -238,9 +226,8 @@ def clone_app(app_repo, app_dir, pat):
 
 
 class Planning:
-    def __init__(self, env, prompt_values=None):
+    def __init__(self, env):
         self.env = env
-        self.prompt_values = prompt_values
         self.repo, self.number = env["GITHUB_REPOSITORY"], env["ISSUE_NUMBER"]
         self.pat, self.token = env["FACTORY_PAT"], env["FACTORY_GH_TOKEN"]
         self.cfg = config.load()
@@ -274,17 +261,16 @@ class Planning:
     def checkout(self, app_dir, app_repo, agent_user):
         if self.intake["kind"] == "update":
             clone_app(app_repo, app_dir, self.pat)
-        elif self.intake["kind"] == "factory":
-            seed_workdir(app_dir, config.FACTORY_DIR)
         else:
             seed_workdir(app_dir)
         share_with_agent(app_dir, agent_user)
 
     def build_run(self):
+        if self.intake.get("fix_for"):
+            return self.plan_run(None, f"{self.owner}/{self.intake['app']}")
         self.check_daily_cap()
         key = self.env["DEEPINFRA_API_KEY"]
-        role = ROLES.get(self.intake["kind"], "planner")
-        available_model(self.cfg, role, key)
+        available_model(self.cfg, "planner", key)
         budget = spend_budget.Budget(key, float(self.lim.get("planner_cost_cap_usd", 0.5)), self.lim["jwt_ttl_seconds"])
         work = Path(self.env.get("BUILD_RUN_DIR") or tempfile.mkdtemp(prefix="plan-"))
         app_dir, art = Path(self.env.get("APP_DIR") or work / "app"), work / "artifacts"
@@ -293,7 +279,7 @@ class Planning:
         app_repo = f"{self.owner}/{self.intake['app']}"
         self.checkout(app_dir, app_repo, agent_user)
         runner = agent_runner.AgentRunner(self.cfg, budget, art, work, app_dir, agent_user, on_spend=lambda jwt: round(budget.refresh(jwt), 6))
-        ask = PlannerAsk(self.cfg, self.intake, runner, work, art, app_dir, self.prompt_values)
+        ask = PlannerAsk(self.cfg, self.intake, runner, work, art, app_dir)
         return self.plan_run(ask, app_repo)
 
     def plan_run(self, ask, app_repo):
@@ -302,8 +288,7 @@ class Planning:
 
         def file(parent, sets, order, secrets, fix=None):
             return file_children.file_children(self.repo, self.pat, intake["app"], parent, sets, order, intake["task"],
-                                               cap=intake["cap_override"], secrets=secrets, tickets=tickets, fix=fix, inherit=intake["inherit"],
-                                               kind="factory" if intake["kind"] == "factory" else "update")
+                                               cap=intake["cap_override"], secrets=secrets, tickets=tickets, fix=fix, inherit=intake["inherit"])
         return PlanRun(self.number, intake, self.lim, ask, self.comment, lambda: secret_names_of(app_repo, self.gh), tickets, file, self.repo, self.pat)
 
     def plan(self):

@@ -76,44 +76,6 @@ class ReadingTheIntake(unittest.TestCase):
             self.assertEqual(cm.exception.ending, "needs_human")
 
 
-class FactoryChange(unittest.TestCase):
-    TICKET = "## Observable failure\nChild 3 is never filed.\n\n## Requirements\n1. Every change set is filed under the Intake\n"
-
-    def test_a_factory_change_is_planned_from_its_ticket_in_the_factory_repo(self):
-        got = plan_run.read_intake(issue(("factory-change",), self.TICKET, "Factory Change [ab]: x"), "o/ai-factory", info(rc=1), LIMITS)
-        self.assertEqual((got["kind"], got["app"], got["label"], got["cap"]), ("factory", "ai-factory", "factory-change", None))
-        self.assertEqual(got["task"], self.TICKET.strip())
-
-    def factory_plan(self, **over):
-        return plan(1, **{"change_sets": [cs(1, flag=None, internal_only=True)]}, **over)
-
-    def run_it(self, doc):
-        intake = {"kind": "factory", "app": "ai-factory", "task": "t", "cap": None, "cap_override": None, "declared": [], "label": "factory-change", "fix_for": None}
-        gh = FakeIssues()
-        gh.add(7)
-        comments = []
-        return plan_run.PlanRun(7, intake, {}, lambda task: (doc, 0.0, None), comments.append, lambda: set(),
-                                child_tickets.ChildTickets("o/f", 7, "pat", gh), lambda *a, **k: [("CS-1", 101)]).run()
-
-    def test_a_flagless_internal_plan_is_filed_and_a_flagged_one_is_not(self):
-        self.assertEqual(self.run_it(self.factory_plan())["ending"], "planned")
-        flagged = self.run_it(plan(1))
-        self.assertEqual(flagged["ending"], "needs_human")
-        self.assertIn("Factory change set", flagged["message"])
-
-    def test_the_children_carry_the_factory_kind_and_label(self):
-        gh = FakeIssues()
-        gh.add(7)
-        tickets = child_tickets.ChildTickets("o/f", 7, "pat", gh)
-        with mock.patch.object(github, "run", gh):
-            made = file_children.file_children("o/f", "pat", "ai-factory", 7, [cs(1, flag=None, internal_only=True)], ["CS-1"], "t", tickets=tickets, kind="factory")
-        child = gh.issues[made[0][1]]
-        self.assertEqual(child_tickets.read_marker(child["body"])["kind"], "factory")
-        names = {x["name"] for x in child["labels"]}
-        self.assertIn("factory-change-child", names)
-        self.assertNotIn("update-app-intake", names)
-
-
 class Run(unittest.TestCase):
     def setUp(self):
         self.gh = FakeIssues()
@@ -146,18 +108,35 @@ class Run(unittest.TestCase):
 
     FIX = {"fix_for": 12, "origin_parent": 5, "attempt": 1}
 
-    def test_a_bug_intake_that_fixes_a_child_is_told_to_plan_one_change_set_and_files_it_with_the_fix(self):
-        got = self.go(plan(1), fix=self.FIX)
-        self.assertEqual(got["ending"], "planned")
-        self.assertIn("Plan exactly ONE change set", self.asked[0])
-        self.assertTrue(self.asked[0].endswith("Add tags"))
+    TICKET = "#### What happened\n\nboom\n\n#### Requirements\n\n1. it works\n2. a test covers it\n\n#### Target\n\nx\n"
+
+    def go_fix(self, task):
+        def ask(_):
+            raise AssertionError("the Planner is not asked about a fix")
+        intake = {"kind": "update", "app": "notes", "task": task, "cap": 2.0, "cap_override": None, "declared": [], "label": "update-app-intake", "fix_for": self.FIX}
+        filed = lambda parent, sets, order, secrets, fix=None: self.filed.append((parent, order, secrets, fix)) or [(sets[0]["id"], 100)]
+        return plan_run.PlanRun(7, intake, {}, ask, self.comments.append, lambda: set(), self.tickets, filed).run()
+
+    def test_a_bug_intake_that_fixes_a_child_is_planned_from_its_ticket_without_the_planner(self):
+        got = self.go_fix(self.TICKET)
+        self.assertEqual((got["ending"], got["cost"]), ("planned", 0.0))
         self.assertEqual(self.filed[0][3], self.FIX)
 
-    def test_a_fix_of_more_than_one_change_set_is_refused_and_nothing_is_filed(self):
-        got = self.go(plan(2), fix=self.FIX)
-        self.assertEqual(got["ending"], "needs_human")
+    def test_a_fix_is_planned_without_a_checkout_a_model_check_or_a_planner_credential(self):
+        job = object.__new__(plan_run.Planning)
+        job.repo, job.number, job.pat, job.lim, job.owner = "o/f", "7", "pat", {}, "o"
+        job.intake = {"fix_for": self.FIX, "app": "notes", "task": self.TICKET, "cap_override": None, "inherit": [], "kind": "update", "label": "update-app-intake"}
+        with mock.patch.object(plan_run, "available_model") as model, mock.patch.object(plan_run.spend_budget, "Budget") as budget, \
+                mock.patch.object(plan_run.Planning, "checkout") as checkout, mock.patch.object(plan_run.Planning, "check_daily_cap") as cap:
+            run = job.build_run()
+        self.assertIsInstance(run, plan_run.PlanRun)
+        for untouched in (model, budget, checkout, cap):
+            untouched.assert_not_called()
+
+    def test_a_fix_ticket_with_no_requirements_or_too_many_stops_for_a_person_and_files_nothing(self):
+        for task in ("#### What happened\n\nboom\n", "#### Requirements\n\n" + "\n".join(f"{i}. thing {i}" for i in range(1, 8))):
+            self.assertEqual(self.go_fix(task)["ending"], "needs_human")
         self.assertEqual(self.filed, [])
-        self.assertIn("rejected", got["message"])
 
     def test_the_same_plan_for_an_ordinary_intake_may_have_several(self):
         self.assertEqual(self.go(plan(2))["ending"], "planned")
@@ -200,15 +179,12 @@ class Run(unittest.TestCase):
         self.assertEqual(got["ending"], "needs_human")
         self.assertIn("no valid output file", self.comments[-1])
 
-    def test_missing_secrets_wait_for_the_owner_before_anything_is_filed(self):
+    def test_missing_secrets_are_a_heads_up_in_the_plan_comment_and_never_a_stop(self):
         doc = plan(1, secrets=[{"name": "WEATHER_API_KEY", "purpose": "forecasts", "read_by": "backend"}])
         got = self.go(doc)
-        self.assertEqual(got["ending"], "awaiting_secret")
-        self.assertIn("WEATHER_API_KEY", self.comments[-1])
-        self.assertIn("factory-secrets", self.comments[-1], msg="the hidden marker every later start checks")
-        self.assertEqual(self.filed, [])
-        done = self.go(doc, have=["WEATHER_API_KEY"])
-        self.assertEqual(done["ending"], "planned")
+        self.assertEqual(got["ending"], "planned")
+        self.assertIn("gh secret set WEATHER_API_KEY -R notes", self.comments[-2])
+        self.assertIn("factory-secrets", self.comments[-2])
         self.assertEqual(self.filed[-1][2][0]["name"], "WEATHER_API_KEY")
 
     def test_a_new_app_files_its_children_without_the_repository_and_asks_for_the_secrets_later(self):
@@ -220,10 +196,10 @@ class Run(unittest.TestCase):
         self.assertIn("does not exist yet", self.comments[-2])
         self.assertIn("gh secret set SEARCH_API_KEY -R notes", self.comments[-2])
 
-    def test_secrets_the_intake_already_declared_are_checked_before_the_planner_is_paid(self):
+    def test_secrets_the_intake_already_declared_do_not_stop_planning(self):
         got = self.go(plan(1), declared=[{"name": "A_KEY", "purpose": "x"}])
-        self.assertEqual(got["ending"], "awaiting_secret")
-        self.assertEqual(self.asked, [])
+        self.assertEqual(got["ending"], "planned")
+        self.assertEqual(len(self.asked), 1)
 
     def test_every_stop_tells_the_owner_how_to_plan_again(self):
         self.go(ask_error=run_stops.NeedsHuman("other", "x"))

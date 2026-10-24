@@ -5,10 +5,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { git diff --quiet HEAD -- ARCHITECTURE.md GLOSSARY.md docs agents/profiles.yml || (cd orchestrator && python3 -m unittest flow_spec_test spec_sync_test >&2 || exit 2); }",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && for step in \"ruff check .\" \"python3 orchestrator/style_test.py\" \"cd orchestrator && python3 -m unittest flow_spec_test spec_sync_test\"; do out=$(bash -c \"$step\" 2>&1) || { echo \"FAILED: $step\" >&2; echo \"$out\" | grep -v \"^[[:space:]]*$\" | tail -15 >&2; exit 2; }; done",
             "asyncRewake": true,
             "timeout": 60,
-            "statusMessage": "Checking specs are in sync"
+            "statusMessage": "Checking specs and style"
           }
         ]
       }

@@ -62,7 +62,7 @@ class OneFlagThroughItsLife(unittest.TestCase):
         task = dark_feature.dark_removal_task(slug, 9)
         self.assertIn("flags.json", task)
         self.assertEqual(retirement_check.retire_slugs(task), [])
-        self.assertTrue(dark_feature.is_dark_broken({"flags": ["pin-notes"], "commits": ["h"], "outcome": "stuck"}))
+        self.assertTrue(dark_feature.is_dark_broken({"flags": ["pin-notes"], "commits": ["h"], "outcome": "round_limit"}))
         self.assertFalse(dark_feature.is_dark_broken({"flags": ["pin-notes"], "commits": ["h"], "outcome": "released"}))
 
 

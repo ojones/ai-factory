@@ -142,31 +142,5 @@
       ]
     },
     "expect": "ok"
-  },
-  {
-    "name": "a Factory change set behind a flag",
-    "build_kind": "factory",
-    "change_set": {
-      "title": "Keep the child the planner drops",
-      "flag": true,
-      "internal_only": false,
-      "criteria": [
-        "AC-1: planning.file_children_test.Filing.test_a_child_is_kept fails on main and passes after the change"
-      ]
-    },
-    "expect": "Factory change set"
-  },
-  {
-    "name": "a Factory change set with no flag, guarded by its test",
-    "build_kind": "factory",
-    "change_set": {
-      "title": "Keep the child the planner drops",
-      "flag": null,
-      "internal_only": true,
-      "criteria": [
-        "AC-1: planning.file_children_test.Filing.test_a_child_is_kept fails on main and passes after the change"
-      ]
-    },
-    "expect": "ok"
   }
 ]

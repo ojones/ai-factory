@@ -24,7 +24,6 @@ class Endings(unittest.TestCase):
         self.assertEqual(endings.ending_for("other", "m", None, None), ("needs_human", "m"))
         self.assertEqual(endings.ending_for("round_limit", "m", 9.0, 0.08), ("round_limit", "m"))
         self.assertEqual(endings.ending_for("time_limit", "m", 9.0, 0.08), ("time_limit", "m"))
-        self.assertEqual(endings.ending_for("stuck", "m", 0.0, 0.08), ("stuck", "m"))
 
 
 if __name__ == "__main__":
