@@ -21,7 +21,7 @@ diff --git a/backend/src/__tests__/search.test.ts b/backend/src/__tests__/search
 new file mode 100644
 --- /dev/null
 +++ b/backend/src/__tests__/search.test.ts
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,19 @@
 +import request from "supertest";
 +import { createApp } from "../app";
 +import { withFlag } from "./with-flag";
@@ -35,8 +35,9 @@ new file mode 100644
 +  });
 +  it("filters items by title while the flag is on", async () => {
 +    await withFlag("search", true, async () => {
-+      const res = await request(createApp()).get("/api/search?q=zzz");
-+      expect(res.body).toEqual([]);
++      const res = await request(createApp()).get("/api/search?q=a");
++      expect(res.status).toBe(200);
++      expect(res.body.every((i: { title: string }) => i.title.toLowerCase().includes("a"))).toBe(true);
 +    });
 +  });
 +});
