@@ -85,7 +85,7 @@ class BugFiling:
     def factory_hold_reason(self):
         if self.target != "factory":
             return "no cause was named, or it was infrastructure"
-        return f"a fault in the Factory itself ({self.verdict.get('cause')}) was found; the child starts again by itself when the fix is merged"
+        return f"a fault in the Factory itself ({self.verdict.get('cause')}) was found and filed as a fix request in the Factory repo for a person to fix"
 
     def file_released(self, app, title, labels):
         number = create(self.repo, self.pat, title, render_bug.intake_body(app, self.doc, self.verdict, self.run_url), labels + [intake_labels.UPDATE_APP_INTAKE])

@@ -124,11 +124,11 @@ The name used in outside advice for what the Factory implements as the flag arou
 _Avoid_: feature flag (as a name for the gate itself; it is the underlying mechanism)
 
 **Lesson**:
-A `factory-learning` issue in ai-factory recording something a Build Run taught the Factory (a stuck run, a recurring minor finding), from which the retrospective Agent may propose a change to prompts, the Starter Template or the Orchestrator as a PR.
+A `factory-learning` issue in ai-factory recording something a Build Run taught the Factory (a stuck run, a recurring minor finding), for a person to act on.
 _Avoid_: retrospective (that is the step and Agent that read every run and may file or act on these)
 
 **Retrospective**:
-The step that runs after every Build Run, whether it released or not. It records what the run found (blocking findings, minor findings and the `improvements` the reviewer and tester suggest), files them as issues in the Managed App's repo or ai-factory, may propose a Factory fix as a PR, and posts a short summary on the issue that started the run.
+The step that runs after every Build Run, whether it released or not. It records what the run found (blocking findings, minor findings and the `improvements` the reviewer and tester suggest), files them as issues in the Managed App's repo or ai-factory, names the cause of a run that ended badly, judges every event it produced, and posts a short summary on the issue that started the run.
 _Avoid_: post-mortem (it is not only for failures)
 
 **Dark feature**:
@@ -136,7 +136,7 @@ A change whose flag has not been released. One that fails its checks stays dark 
 _Avoid_: dead flag
 
 **Fix request**:
-The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (a deploy rollback, for a regression), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (a PR for a person to merge), to the app as a fix child (today: the same issue started again), or kept as information (`needs-human`).
+The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (a deploy rollback, for a regression), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (an issue for a person to fix by hand), to the app as a fix child (today: the same issue started again), or kept as information (`needs-human`).
 _Avoid_: bug report, incident
 
 **Scoreboard**:

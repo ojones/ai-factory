@@ -17,7 +17,6 @@ from build_run import read_child, ship_code
 from build_run import start_build as u
 from build_run import ui_check as uc
 from build_run.run_test import RoundLoop, finding
-from factory_change import file_change, gate, open_pr, pause, prove_reproduction, tiers, vet_change, write_change
 from flag_lifecycle import flag_slug, missing_flag, release_features
 from flag_lifecycle.fake_growthbook import FakeGrowthBook
 from maintenance import dependency_updates as mt
@@ -26,13 +25,13 @@ from monitoring import benchmark as bm
 from monitoring import dashboard
 from planning import file_children, fix_for, plan_run, render_child, secrets_marker, triage, validate_plan
 from planning import triage as tr
-from retrospective import agent_run, app_state, close_child, event_verdicts, learning_pr, lesson_records, run_audit
+from retrospective import agent_run, app_state, close_child, event_verdicts, lesson_records, run_audit
 from shared import api_check as ac
 from shared import child_tickets
 from shared import child_tickets as ct
 from shared.fake_issues import FakeIssues
 from staging import read_staging_child, verify_infrastructure
-from try_fix import collect_events, event, factory_fix_request, file_bug, render_bug, resume_after_merge, route, validate_bug, write_bug
+from try_fix import collect_events, event, factory_fix_request, file_bug, render_bug, route, validate_bug, write_bug
 
 sys.path.insert(0, str(Path(__file__).parent))
 from build_run import endings, gate_release, prepare_run, review_code, suggestions, track_progress, verify_deployed_app  # noqa: E402
@@ -165,19 +164,6 @@ class Invariants(unittest.TestCase):
                 if key in profile:
                     self.assertTrue((ROOT / "agents" / profile[key]).is_file(), f"{role}.{key} -> {profile[key]}")
         self.assertFalse((STARTER / "agents").exists())
-
-    def test_inv14_the_retrospective_agent_cannot_change_workflows_or_protected_files(self):
-        for bad in (".github/workflows/build-run.yml", "templates/starter/.github/workflows/build.yml", "templates/starter/fly.toml",
-                    "templates/starter/fly/provision.sh", "agents/../.github/x.yml", "README.md"):
-            self.assertFalse(agent_run.allowed_path(bad), bad)
-        for ok in ("agents/prompts/coder.md", "templates/starter/AGENTS.md", "orchestrator/build_run.py", "ARCHITECTURE.md"):
-            self.assertTrue(agent_run.allowed_path(ok), ok)
-
-    def test_inv15_only_additive_lint_or_formatter_config_auto_merges(self):
-        self.assertTrue(learning_pr.auto_merge_eligible("4\t0\ttemplates/starter/.eslintrc.json"))
-        for bad in ("4\t1\ttemplates/starter/.eslintrc.json", "4\t0\tagents/prompts/coder.md",
-                    "4\t0\ttemplates/starter/package.json", ""):
-            self.assertFalse(learning_pr.auto_merge_eligible(bad), bad)
 
     def test_inv16_the_starter_flags_fail_closed_and_there_is_no_kill_switch(self):
         sources = {p: p.read_text() for p in (STARTER / "backend/src").rglob("*.ts") if "__tests__" not in p.parts}
@@ -339,7 +325,7 @@ class Invariants(unittest.TestCase):
         started = [c[2] for c in gh.calls if isinstance(c, list) and c[:2] == ["issue", "edit"] and "proceed-with-change" in c]
         self.assertNotIn("12", started, msg="the failed child itself is never started again as it was")
         self.assertEqual(gh.blocked[12], [first["number"]], msg="it waits for its bug Intake, which closes only with its last child")
-        self.assertTrue(hasattr(resume_after_merge, "resume") and hasattr(close_child, "settle_fix"), msg="a Factory fix resumes it on merge; a bug Intake closing resumes it")
+        self.assertTrue(hasattr(close_child, "settle_fix"), msg="a bug Intake closing resumes it")
 
     def test_inv28_a_check_that_admits_it_was_not_observed_does_not_pass(self):
         real = "Unable to directly observe logs in production, but feature flag mechanism is working correctly"
@@ -538,21 +524,16 @@ class Invariants(unittest.TestCase):
         self.assertTrue(hasattr(story_report, "note_bugs_on_story") and not hasattr(story_report, "record_bugs"), msg="bugs go on the story, never a new issue")
         self.assertGreaterEqual(len(tracker.content_words("Coder prompt does not say to trim the input") & tracker.content_words("The coder prompt never says to trim input")), 4)
 
-    def test_inv45_the_retrospective_agent_is_isolated_like_the_build_run_agents(self):
-
+    def test_inv45_the_retrospective_agent_is_isolated_like_the_build_run_agents_and_changes_nothing(self):
         src = inspect.getsource(agent_run.run_agent)
         self.assertIn("run_isolation_probes", src)
         self.assertIn("user=user", src)
-        self.assertIn("apply_changes", inspect.getsource(agent_run.carry_over_changes))
         self.assertNotIn("subprocess.run", src)
-        self.assertNotIn('"git"', inspect.getsource(agent_run.run_tests) + inspect.getsource(agent_run.tree_changes) + inspect.getsource(agent_run.apply_changes))
-        self.assertIn("run_tests(", inspect.getsource(learning_pr.proposal_passes_tests))
-        self.assertNotIn("unittest", inspect.getsource(learning_pr.open_pr).replace("run_tests", ""))
-        for name in ("build-run.yml", "factory-run.yml"):
-            text = (ROOT / ".github/workflows" / name).read_text()
-            self.assertIn("useradd -m -s /bin/bash agent", text, name)
-            self.assertIn("AGENT_USER=agent", text, name)
-        self.assertEqual(agent_run.tree_changes.__module__, "retrospective.agent_run")
+        self.assertNotIn('"git"', inspect.getsource(agent_run))
+        self.assertIn("ignore_patterns(\".git\"", inspect.getsource(agent_run.copy_workspace))
+        text = (ROOT / ".github/workflows/build-run.yml").read_text()
+        self.assertIn("useradd -m -s /bin/bash agent", text)
+        self.assertIn("AGENT_USER=agent", text)
 
     def test_inv46_what_blocks_or_retries_is_decided_from_structure_not_labels(self):
         self.assertFalse(review_code.derive_review({"findings": [finding()]})[0])
@@ -832,65 +813,24 @@ class Invariants(unittest.TestCase):
 
 
 class Registry(unittest.TestCase):
-    def test_inv63_a_factory_change_outside_its_scope_or_limits_is_refused(self):
-        limits = {"factory_change_max_files": 2, "factory_change_max_added_lines": 10}
-        touched = {"status": "M", "added": 1, "deleted": 0}
-        for path in (".github/workflows/factory-checks.yml", "orchestrator/style_baseline.json", "pyproject.toml", "README.md"):
-            self.assertIsNotNone(vet_change.problem({path: touched}, limits), path)
-        self.assertIsNotNone(vet_change.problem({"orchestrator/bugs/a.py": touched, "orchestrator/try_fix/b.py": touched}, limits))
-        self.assertIsNotNone(vet_change.problem({"orchestrator/a_test.py": {"status": "D", "added": 0, "deleted": 4}}, limits))
-        self.assertIsNotNone(vet_change.problem({"agents/profiles.yml": touched}, limits, {"agents/profiles.yml": "+  model: x\n"}))
-        self.assertIsNone(vet_change.problem({"orchestrator/bugs/a.py": touched}, limits))
-        profiles = yaml.safe_load((ROOT / "agents/profiles.yml").read_text(encoding="utf-8"))["limits"]
-        self.assertTrue({"factory_change_max_files", "factory_change_max_added_lines", "max_open_factory_change_prs"} <= set(profiles))
-
-    def test_inv66_a_factory_change_is_a_pull_request_and_merges_itself_only_outside_the_control_path_after_every_gate(self):
-        self.assertNotIn("HEAD:main", inspect.getsource(open_pr))
-        self.assertNotIn("push", inspect.getsource(open_pr.open_pr).replace("push_branch", ""))
-        self.assertEqual(open_pr.branch_of(7), "factory-change/7")
-        self.assertEqual(tiers.merge_tier(["orchestrator/bugs/a.py"]), tiers.TIER_ONE)
-        self.assertNotEqual(tiers.merge_tier(["orchestrator/bugs/a.py", "orchestrator/try_fix/b.py"]), tiers.TIER_ONE)
-        self.assertEqual(open_pr.labels_for(tiers.TIER_TWO), [open_pr.PR_LABEL, open_pr.HOLD_LABEL])
-        job = yaml.safe_load((ROOT / ".github/workflows/factory-checks.yml").read_text())["jobs"]["factory-change-merge"]
-        self.assertEqual(set(job["needs"]), {"unit", "starter", "reviewer-smoke", "factory-change-gate"})
-        steps = [s.get("run", "") for s in job["steps"]]
-        self.assertLess(next(i for i, r in enumerate(steps) if "gate merge-check" in r), next(i for i, r in enumerate(steps) if "gh pr merge" in r))
-        self.assertIn("startsWith(github.head_ref, 'factory-change/')", job["if"])
-        self.assertIn("merge-check", inspect.getsource(gate.main))
-
-    def test_inv64_a_reproduction_has_to_fail_on_main_before_any_agent_runs(self):
-        for bad in ("-k", "--help", "../x.y", "x"):
-            self.assertFalse(prove_reproduction.valid_name(bad), bad)
-        self.assertEqual(prove_reproduction.classify_run(0, "OK"), "passes")
-        self.assertEqual(prove_reproduction.classify_run(1, "FAIL: test_it (m.C.test_it)"), "fails")
-        self.assertEqual(prove_reproduction.classify_run(1, "ModuleNotFoundError: no m\nERROR: m (unittest.loader._FailedTest)"), "missing")
-        problems = file_change.ticket_problems("## Observable failure\nx\n## Requirements\n1. Every child is filed under the Intake\n## Reproduction\nnot a test", 8)
-        self.assertEqual(len(problems), 1)
-
-    def test_inv65_an_open_paused_issue_stops_the_factory_change_process(self):
+    def test_inv14_no_agent_changes_the_factory_and_a_factory_fault_ends_as_an_issue_for_a_person(self):
+        for gone in ("carry_over_changes", "apply_changes", "tree_changes", "run_tests", "allowed_path"):
+            self.assertFalse(hasattr(agent_run, gone), gone)
+        self.assertFalse((ROOT / "orchestrator" / "factory_change").exists())
+        for path in (ROOT / ".github" / "workflows").glob("*.yml"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(factory_fix_request.FACTORY_LABEL, text, msg=f"{path.name} reads the label")
+            self.assertNotIn("ready-for-factory-run", text, msg=path.name)
         gh = FakeIssues()
-        with mock.patch.object(github, "run", gh):
-            pause.pause("o/f", "t", "a regression")
-            self.assertTrue(pause.is_paused("o/f", "t"))
-            filed = file_change.file_change("o/f", "t", {"fingerprint": "ab", "summary": "s", "failure": "f", "requirements": ["Every child is filed under the Intake"], "evidence": "e"}, 8)
-        self.assertEqual(filed["action"], "paused")
-        self.assertIsNotNone(pause.breaker_reason("review", [{"failed": True, "stage": "review"}], 0))
-        self.assertIsNotNone(pause.breaker_reason("review", [{"regression": True}], 0))
-        self.assertIsNotNone(pause.breaker_reason("review", [], 2))
+        ev = event.make("build_run", "failure", "demo", "round limit", "fp")
+        verdict = {"key": ev["key"], "verdict": "fix", "target": "factory", "cause": "orchestrator_gap", "reason": "r", "event": ev}
+        doc = {"how_found": "a", "root_cause": "b", "what_it_takes": ["c"], "requirements": ["The orchestrator keeps the child"], "source": "agent"}
+        with mock.patch.object(github, "run", gh), mock.patch.object(github, "ensure_label"):
+            first = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
+            again = file_bug.file_bug("o/f", "t", "pat", verdict, doc)
+        self.assertEqual((first["action"], again["action"], again["number"]), ("fix_request", "again", first["number"]))
 
-    def test_inv67_no_pipeline_agent_edits_the_invariants_or_the_flow_spec(self):
-        for path in ("docs/invariants.md", "docs/flow-spec.md"):
-            self.assertFalse(agent_run.allowed_path(path), msg="the retrospective Agent cannot carry it over")
-            self.assertEqual(tiers.classify(path), tiers.NEVER, msg="a Factory Change cannot merge it")
-            self.assertIn(path, tiers.SPEC_PATHS)
-        factory, scratch = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
-        for root in (factory, scratch):
-            (root / "docs").mkdir()
-            (root / "docs" / "invariants.md").write_text("old", encoding="utf-8")
-        (scratch / "docs" / "invariants.md").write_text("new", encoding="utf-8")
-        self.assertEqual(write_change.spec_edits(factory, scratch), ["docs/invariants.md"])
-
-    def test_inv68_nothing_is_reverted_by_any_agent_or_code_path(self):
+    def test_inv15_nothing_is_reverted_by_any_agent_or_code_path(self):
         code = [p for p in (ROOT / "orchestrator").rglob("*.py") if not p.name.endswith("_test.py")]
         for path in code:
             text = path.read_text(encoding="utf-8")
@@ -899,7 +839,7 @@ class Registry(unittest.TestCase):
         pipeline = [*ROOT.glob(".github/**/*.yml"), *ROOT.glob("templates/**/*.yml"), *ROOT.glob("templates/**/*.sh"), *ROOT.glob("infra/**/*.sh")]
         for path in pipeline:
             self.assertNotRegex(path.read_text(encoding="utf-8"), r"git revert|gh pr revert|revertPullRequest", msg=str(path))
-        for role in ("coder", "factory-coder", "retrospective"):
+        for role in ("coder", "retrospective"):
             self.assertIn("Never undo committed work with `git revert`", (ROOT / f"agents/prompts/{role}.md").read_text(encoding="utf-8"))
 
     def test_the_table_and_the_tests_list_the_same_invariants(self):

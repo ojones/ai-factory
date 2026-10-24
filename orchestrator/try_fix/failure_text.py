@@ -80,36 +80,3 @@ def requirements(facts, result, rollback, app_side=False):
         reqs += [] if r in reqs else [r]
     reqs.append("A re-run of the same request ends `released` or `nothing_to_release` without anyone editing code by hand.")
     return reqs[:MAX_ITEMS + 3]
-
-
-def what_happened_lines(facts, intake_url):
-    lines = ["## What happened", "",
-             f"The Build Run for `{facts.get('app')}` ended **{facts.get('outcome')}**: {clip(facts.get('message'), 400)}", "",
-             f"- Run: {facts.get('run_url')}", f"- Request: {intake_url or '#' + str(facts.get('issue_number'))}",
-             f"- Review passes: {facts.get('review_passes', 0)}; spent ${(facts.get('spent_usd') or 0):.2f} of a ${(facts.get('cap_usd') or 0):.2f} cap"]
-    return lines + [f"- Still blocking at the end: {clip(x, 200)}" for x in (facts.get("final_blocking") or [])[:MAX_ITEMS]]
-
-
-def analysis_lines(result):
-    cat = (result or {}).get("category")
-    if not cat:
-        return ["The retrospective did not name a cause (it did not run or produced no usable analysis)."]
-    lines = [f"The retrospective named the cause as **{cat}**: {clip(result.get('root_cause'), 500)}"]
-    if result.get("change_summary") and result["change_summary"] != "none":
-        lines.append(f"\nIt proposed: {clip(result['change_summary'], 400)}")
-    return lines
-
-
-def pickup_line(target, cat):
-    if target == "factory":
-        return (f"This is a fault in the Factory itself ({cat}). The retrospective Agent proposes a pull request; when it merges, the child that failed starts again "
-                "by itself. Add the label `ready-for-factory-run` to ask the Factory Run for another try.")
-    return "No cause was named, or it was infrastructure. Read the run and decide; nothing runs until the child that failed is edited and given `proceed-with-change` again."
-
-
-def render(facts, result, rollback, target, intake_url=""):
-    lines = what_happened_lines(facts, intake_url)
-    lines += ["", "## What was done automatically", "", rollback_line(rollback), "", "## Analysis (automated, and may be wrong)", ""] + analysis_lines(result)
-    lines += ["", "## Requirements", ""] + [f"{i}. {r}" for i, r in enumerate(requirements(facts, result, rollback), 1)]
-    lines += ["", "## How this is picked up", "", pickup_line(target, (result or {}).get("category"))]
-    return "\n".join(lines) + "\n"

@@ -76,44 +76,6 @@ class ReadingTheIntake(unittest.TestCase):
             self.assertEqual(cm.exception.ending, "needs_human")
 
 
-class FactoryChange(unittest.TestCase):
-    TICKET = "## Observable failure\nChild 3 is never filed.\n\n## Requirements\n1. Every change set is filed under the Intake\n"
-
-    def test_a_factory_change_is_planned_from_its_ticket_in_the_factory_repo(self):
-        got = plan_run.read_intake(issue(("factory-change",), self.TICKET, "Factory Change [ab]: x"), "o/ai-factory", info(rc=1), LIMITS)
-        self.assertEqual((got["kind"], got["app"], got["label"], got["cap"]), ("factory", "ai-factory", "factory-change", None))
-        self.assertEqual(got["task"], self.TICKET.strip())
-
-    def factory_plan(self, **over):
-        return plan(1, **{"change_sets": [cs(1, flag=None, internal_only=True)]}, **over)
-
-    def run_it(self, doc):
-        intake = {"kind": "factory", "app": "ai-factory", "task": "t", "cap": None, "cap_override": None, "declared": [], "label": "factory-change", "fix_for": None}
-        gh = FakeIssues()
-        gh.add(7)
-        comments = []
-        return plan_run.PlanRun(7, intake, {}, lambda task: (doc, 0.0, None), comments.append, lambda: set(),
-                                child_tickets.ChildTickets("o/f", 7, "pat", gh), lambda *a, **k: [("CS-1", 101)]).run()
-
-    def test_a_flagless_internal_plan_is_filed_and_a_flagged_one_is_not(self):
-        self.assertEqual(self.run_it(self.factory_plan())["ending"], "planned")
-        flagged = self.run_it(plan(1))
-        self.assertEqual(flagged["ending"], "needs_human")
-        self.assertIn("Factory change set", flagged["message"])
-
-    def test_the_children_carry_the_factory_kind_and_label(self):
-        gh = FakeIssues()
-        gh.add(7)
-        tickets = child_tickets.ChildTickets("o/f", 7, "pat", gh)
-        with mock.patch.object(github, "run", gh):
-            made = file_children.file_children("o/f", "pat", "ai-factory", 7, [cs(1, flag=None, internal_only=True)], ["CS-1"], "t", tickets=tickets, kind="factory")
-        child = gh.issues[made[0][1]]
-        self.assertEqual(child_tickets.read_marker(child["body"])["kind"], "factory")
-        names = {x["name"] for x in child["labels"]}
-        self.assertIn("factory-change-child", names)
-        self.assertNotIn("update-app-intake", names)
-
-
 class Run(unittest.TestCase):
     def setUp(self):
         self.gh = FakeIssues()

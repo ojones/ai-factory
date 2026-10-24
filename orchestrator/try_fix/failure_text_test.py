@@ -59,17 +59,5 @@ class Requirements(unittest.TestCase):
         self.assertIn("tester agent must produce", " ".join(failure_text.requirements(FACTS, result, REVERT)))
 
 
-class Render(unittest.TestCase):
-    def test_the_issue_explains_what_happened_what_was_done_and_what_happens_next(self):
-        body = failure_text.render(FACTS, RESULT, REVERT, "factory", "https://github.com/o/f/issues/66")
-        for needle in ("## What happened", "ended **round_limit**", "https://x/run/9", "Still blocking at the end: the change is not behind",
-                       "## What was done automatically", "the deploy is **healthy**", "## Analysis (automated, and may be wrong)",
-                       "**plan_gap**", "invented a flag", "## Requirements", "1. ", "starts again by itself"):
-            self.assertIn(needle, body, needle)
-        self.assertIn("did not name a cause", failure_text.render(FACTS, None, REVERT, "info"))
-        self.assertIn("nothing runs until", failure_text.render(FACTS, None, REVERT, "info"))
-        self.assertNotIn("ready-for-staging", body)
-
-
 if __name__ == "__main__":
     unittest.main()
