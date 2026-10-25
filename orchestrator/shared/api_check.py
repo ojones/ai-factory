@@ -80,10 +80,15 @@ def substitute(value, captures):
     return value
 
 
+def expected_statuses(expect):
+    want = expect.get("status", [])
+    return want if isinstance(want, list) else [want]
+
+
 def status_problems(expect, status):
     if "status" not in expect:
         return []
-    want = expect["status"] if isinstance(expect["status"], list) else [expect["status"]]
+    want = expected_statuses(expect)
     return [] if status in want else [f"status: expected {' or '.join(str(w) for w in want)}, got {status}"]
 
 
@@ -105,11 +110,14 @@ def header_problems(expect, headers):
     return problems + [f"header {name} is present, and must not be" for name in expect.get("header_absent", []) if name.lower() in lowered]
 
 
-def wants_credential(expect, status):
-    if status not in CREDENTIAL_STATUSES or "status" not in expect:
-        return False
-    want = expect["status"] if isinstance(expect["status"], list) else [expect["status"]]
-    return not CREDENTIAL_STATUSES.intersection(want)
+def refused_for_credential(expect, status):
+    return status in CREDENTIAL_STATUSES and not CREDENTIAL_STATUSES.intersection(expected_statuses(expect))
+
+
+def result_state(result):
+    if result["ok"]:
+        return "passed"
+    return "blocked" if result.get("blocked") else "failed"
 
 
 def compare(expect, status, body_text, body_json, headers):
@@ -180,40 +188,50 @@ def do_request(base, request, captures, token):
     return status, text, parse_json(text), hdrs, None
 
 
+def capture_problems(captures, c, parsed):
+    problems = []
+    for name, dotted in (c.get("capture") or {}).items():
+        try:
+            captures[name] = dig(parsed, dotted)
+        except (KeyError, IndexError, ValueError, TypeError):
+            problems.append(f"capture {name}: nothing at {dotted!r} in the answer")
+    return problems
+
+
+def check_record(c, observed, problems, began, token):
+    status, text = observed
+    body = text if len(text) <= BODY_LIMIT else text[:BODY_LIMIT] + "..."
+    return {"id": c["id"], "name": c.get("name") or c["id"], "ok": not problems, "blocked": bool(problems) and refused_for_credential(c["expect"], status),
+            "problems": problems, "expected": c["expect"], "observed": {"status": status, "body": body.replace(token, "[TOKEN]") if token else body},
+            "ms": round((time.time() - began) * 1000)}
+
+
 def run_checks(checks, base, token, log_path=None):
     captures, results = {}, []
     for c in checks:
         began = time.time()
         status, text, parsed, headers, error = do_request(base, c["request"], captures, token)
         problems = [error] if error else compare(c["expect"], status, text, parsed, headers)
-        for name, dotted in (c.get("capture") or {}).items():
-            try:
-                captures[name] = dig(parsed, dotted)
-            except (KeyError, IndexError, ValueError, TypeError):
-                problems.append(f"capture {name}: nothing at {dotted!r} in the answer")
-        body = text if len(text) <= BODY_LIMIT else text[:BODY_LIMIT] + "..."
-        if token:
-            body = body.replace(token, "[TOKEN]")
-        results.append({"id": c["id"], "name": c.get("name") or c["id"], "ok": not problems, "blocked": not error and wants_credential(c["expect"], status), "problems": problems,
-                        "expected": c["expect"], "observed": {"status": status, "body": body}, "ms": round((time.time() - began) * 1000)})
+        results.append(check_record(c, (status, text), problems + capture_problems(captures, c, parsed), began, token))
         if log_path:
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(results[-1]) + "\n")
     return results
 
 
+def render_line(r):
+    if r["ok"]:
+        return f"PASS {r['id']}: {r['name']}"
+    label = "BLOCKED" if result_state(r) == "blocked" else "FAIL"
+    return (f"{label} {r['id']}: {r['name']}\n     " + "; ".join(r["problems"])
+            + f"\n     observed: status {r['observed']['status']}, body {r['observed']['body'][:200]!r}")
+
+
 def render(results):
-    lines = []
-    for r in results:
-        if r["ok"]:
-            lines.append(f"PASS {r['id']}: {r['name']}")
-        else:
-            lines.append(f"{'BLOCKED' if r.get('blocked') else 'FAIL'} {r['id']}: {r['name']}\n     " + "; ".join(r["problems"])
-                         + f"\n     observed: status {r['observed']['status']}, body {r['observed']['body'][:200]!r}")
-    failed = sum(not r["ok"] and not r.get("blocked") for r in results)
-    blocked = sum(bool(r.get("blocked")) for r in results)
-    lines.append(f"{len(results) - failed - blocked} passed, {failed} failed, {blocked} blocked (the app asked for a credential this tester does not hold)")
-    return "\n".join(lines)
+    states = [result_state(r) for r in results]
+    summary = f"{states.count('passed')} passed, {states.count('failed')} failed, {states.count('blocked')} blocked"
+    note = ["blocked: the app refused a credential this tester does not hold, so the live app cannot answer the check"] if "blocked" in states else []
+    return "\n".join([render_line(r) for r in results] + [summary] + note)
 
 
 def read_args(argv):

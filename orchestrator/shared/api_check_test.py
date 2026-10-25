@@ -38,13 +38,20 @@ class Logic(unittest.TestCase):
         self.assertTrue(a.mismatches({"t": "a"}, {}))
         self.assertTrue(a.mismatches([1, 2], [1]))
 
-    def test_a_refusal_for_a_credential_is_blocked_unless_the_spec_expects_it(self):
-        self.assertTrue(a.wants_credential({"status": 422}, 401))
-        self.assertTrue(a.wants_credential({"status": [200, 202]}, 403))
-        self.assertFalse(a.wants_credential({"status": 401}, 401))
-        self.assertFalse(a.wants_credential({"status": [401, 403]}, 403))
-        self.assertFalse(a.wants_credential({"status": 200}, 404))
-        self.assertFalse(a.wants_credential({"json": {}}, 401))
+    def test_a_refusal_for_a_credential_the_spec_did_not_expect_is_blocked(self):
+        self.assertTrue(a.refused_for_credential({"status": 422}, 401))
+        self.assertTrue(a.refused_for_credential({"status": [200, 202]}, 403))
+        self.assertTrue(a.refused_for_credential({"json": {"x": 1}}, 401))
+
+    def test_a_credential_refusal_the_spec_expects_or_another_status_is_not_blocked(self):
+        self.assertFalse(a.refused_for_credential({"status": 401}, 401))
+        self.assertFalse(a.refused_for_credential({"status": [401, 403]}, 403))
+        self.assertFalse(a.refused_for_credential({"status": 200}, 404))
+
+    def test_the_state_of_a_result_is_passed_failed_or_blocked(self):
+        self.assertEqual(a.result_state({"ok": True}), "passed")
+        self.assertEqual(a.result_state({"ok": False}), "failed")
+        self.assertEqual(a.result_state({"ok": False, "blocked": True}), "blocked")
 
     def test_status_may_be_a_list(self):
         self.assertEqual(a.compare({"status": [200, 201]}, 201, "", None, {}), [])

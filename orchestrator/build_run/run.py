@@ -216,7 +216,7 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
             raise endings.Regression(missing_flag.live_message(ungated, named, True))
 
     def retest_or_stop(self, retests, test_failures):
-        if retests <= 0:
+        if retests <= 0 or verify_deployed_app.only_credential_blocked(test_failures):
             self.state.d["unverified"] = verify_deployed_app.unverified_checks(test_failures)
             raise run_stops.NeedsHuman("other", verify_deployed_app.unverified_message(test_failures))
         log(f"{len(test_failures)} check(s) could not be verified; testing the same deployed commit again")

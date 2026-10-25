@@ -169,6 +169,13 @@ class RoundLoop(unittest.TestCase):
         self.assertEqual(run.calls.count("coder2"), 0)
         self.assertNotIn("release", run.calls)
 
+    def test_checks_the_app_refused_for_a_credential_are_not_retested(self):
+        refused = (False, [{**self.UNVERIFIED_BLOCKED[1][0], "credential": True}], "dark_only")
+        run = self.make([self.CLEAN], [refused, self.PASSED])
+        self.go(run)
+        self.assertEqual(run.state.d["outcome"], "needs_human")
+        self.assertEqual(run.calls.count("test c1"), 1)
+
     def test_with_retests_switched_off_the_first_unverified_pass_stops_the_run(self):
         run = self.make([self.CLEAN], [self.UNVERIFIED_BLOCKED])
         run.lim["test_retries"] = 0

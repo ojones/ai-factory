@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from shared import (
+    api_check,
     config,
     run_stops,
 )
@@ -23,6 +24,9 @@ UNOBSERVED_RE = re.compile(
 
 
 RAN_A_TEST_RE = re.compile(r"\b(npm (run )?test|vitest|jest|unit test|test file|test suite|tests? (pass|passed|asserts?))\b", re.I)
+
+
+NO_TEST_RE = re.compile(r"\b(no|not|without|never)\b[^.;|]{0,20}\b(npm (run )?test|vitest|jest|unit tests?|test file|test suite|tests?)\b", re.I)
 
 
 def admits_unobserved(evidence):
@@ -66,27 +70,49 @@ def append_evidence(r, note):
     return f"{r.get('evidence', '')} | {note}".strip(" |")
 
 
+def ids_in(found, ids, state):
+    return [i for i in ids if i in found and api_check.result_state(found[i]) == state]
+
+
+def covered_by_test(r, ids):
+    text = str(r.get("evidence") or "")
+    return bool(RAN_A_TEST_RE.search(text)) and not NO_TEST_RE.search(text) and all(re.search(rf"(?<![\w-]){re.escape(i)}(?![\w-])", text) for i in ids)
+
+
+def verdict(r, status, note, **extra):
+    return {"status": status, "passed": False, "evidence": append_evidence(r, note), **extra}
+
+
+def failed_verdict(r, found, ids, label):
+    failing = ids_in(found, ids, "failed")
+    if failing and check_state(r) == "passed":
+        return verdict(r, "failed", f"the {label} helper observed otherwise: " + helper_failure_text(found, failing))
+
+
+def blocked_verdict(r, found, ids, label):
+    refused = ids_in(found, ids, "blocked")
+    if refused and not ids_in(found, ids, "failed") and check_state(r) in ("passed", "failed") and not covered_by_test(r, refused):
+        return verdict(r, "blocked", f"the {label} helper was refused for want of a credential the tester does not hold: " + helper_failure_text(found, refused), credential=True)
+
+
+def unknown_verdict(r, found, ids, label):
+    unknown = [i for i in ids if i not in found]
+    if unknown and check_state(r) == "passed":
+        return verdict(r, "not_run", f"cites {label} id(s) the helper never ran: " + ", ".join(unknown))
+
+
 def reconcile_cited_result(r, found, field, label):
     ids = _helper_ids(r, field)
-    seen = [found[i] for i in ids if i in found and not found[i].get("ok")]
-    failing = [res["id"] for res in seen if not res.get("blocked")]
-    unknown = [i for i in ids if i not in found]
-    if check_state(r) != "passed":
-        return
-    if failing:
-        r.update(status="failed", passed=False, evidence=append_evidence(r, f"the {label} helper observed otherwise: " + helper_failure_text(found, failing)))
-    elif seen and not RAN_A_TEST_RE.search(str(r.get("evidence") or "")):
-        r.update(status="blocked", passed=False, evidence=append_evidence(r, f"the {label} helper was refused for want of a credential it does not hold: " + helper_failure_text(found, [res["id"] for res in seen])))
-    elif unknown:
-        r.update(status="not_run", passed=False, evidence=append_evidence(r, f"cites {label} id(s) the helper never ran: " + ", ".join(unknown)))
+    r.update(failed_verdict(r, found, ids, label) or blocked_verdict(r, found, ids, label) or unknown_verdict(r, found, ids, label) or {})
 
 
 def unreported_failure(res, i, flag, field, label):
     observed = res.get("observed") or {}
     seen = f" (status {observed.get('status')})" if "status" in observed else ""
-    state = "blocked" if res.get("blocked") else "failed"
-    return {"flag": flag, "check": f"{label} {i}: {res.get('name', i)}", "status": state, "passed": False, field: [i],
-            "evidence": f"the {label} helper observed a {state} check the report did not mention: " + "; ".join(res.get("problems") or ["failed"]) + seen}
+    state = api_check.result_state(res)
+    note = "; cite its id in a result whose evidence names it and the repository test that covers it" if state == "blocked" else ""
+    return {"flag": flag, "check": f"{label} {i}: {res.get('name', i)}", "status": state, "passed": False, field: [i], "credential": state == "blocked",
+            "evidence": f"the {label} helper observed a {state} check the report did not mention: " + "; ".join(res.get("problems") or ["failed"]) + seen + note}
 
 
 def reconcile_helper_checks(doc, found, field, label):
@@ -178,6 +204,10 @@ def failed_checks(failures):
 def unverified_checks(failures):
     return [{"check": " ".join(str(r.get("check") or "?").split())[:200], "state": check_state(r)}
             for r in failures if isinstance(r, dict) and check_state(r) in ("blocked", "not_run")][:MAX_BUGS]
+
+
+def only_credential_blocked(failures):
+    return bool(failures) and all(isinstance(r, dict) and r.get("credential") for r in failures)
 
 
 def unverified_message(failures):
