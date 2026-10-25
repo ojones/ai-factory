@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared import run_stops  # noqa: E402
+
 from build_run import endings  # noqa: E402
 from build_run.run import BuildRun  # noqa: E402
 
@@ -95,6 +97,33 @@ class FoundSecrets(unittest.TestCase):
         run.state.stage = lambda *a, **k: order.append("stage")
         run.accept_commit("round 1", 0.1, "abc12345")
         self.assertEqual(order[0], "secrets")
+
+
+class CoderAttempts(unittest.TestCase):
+
+    def make(self, rc):
+        run = object.__new__(BuildRun)
+        run.lim = {"agent_timeout_minutes": 45}
+        run.factory_repo, run.issue = "o/f", "5"
+        run.head = lambda: "base"
+        run.run_agent = mock.Mock(return_value=rc)
+        run._last_cost = 0.1
+        run.state = mock.Mock()
+        run.take_usage = lambda: None
+        return run
+
+    def test_a_timed_out_coder_is_not_started_again(self):
+        run = self.make("timeout")
+        with self.assertRaises(run_stops.NeedsHuman) as stop:
+            run.coder("2", "task", "findings.json")
+        self.assertEqual(run.run_agent.call_count, 1)
+        self.assertIn("45 minutes", str(stop.exception))
+
+    def test_a_coder_that_finished_without_a_commit_still_gets_three_attempts(self):
+        run = self.make(0)
+        with self.assertRaises(run_stops.NeedsHuman):
+            run.coder("2", "task", "findings.json")
+        self.assertEqual(run.run_agent.call_count, 3)
 
 
 if __name__ == "__main__":
