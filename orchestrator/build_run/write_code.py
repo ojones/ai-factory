@@ -24,17 +24,23 @@ class WriteCode:
         task0, attempts = task, 0
         base = self.head()
         while True:
-            self.run_agent("coder", label, {"round": label, "task": task, "findings_path": findings_path,
-                                            "issue_ref": f"{self.factory_repo}#{self.issue}"})
+            rc = self.run_agent("coder", label, {"round": label, "task": task, "findings_path": findings_path,
+                                                 "issue_ref": f"{self.factory_repo}#{self.issue}"})
             cost, head = self._last_cost, self.head()
             problem = self.commit_problem(base, head)
             if not problem:
                 return self.accept_commit(label, cost, head)
             attempts += 1
             self.state.stage("Coder", "coder", label, cost, f"rejected: {problem[:60]}", self.take_usage())
-            if attempts >= 3:
-                raise run_stops.NeedsHuman("other", f"the coder could not produce an acceptable commit: {problem}")
+            self.stop_if_hopeless(rc, attempts, problem)
             task = f"{problem}\n\nOriginal task:\n{task0}"
+
+    def stop_if_hopeless(self, rc, attempts, problem):
+        if rc == "timeout":
+            minutes = self.lim["agent_timeout_minutes"]
+            raise run_stops.NeedsHuman("other", f"the coder used its whole {minutes} minutes without an acceptable commit ({problem}); another attempt would only repeat it")
+        if attempts >= 3:
+            raise run_stops.NeedsHuman("other", f"the coder could not produce an acceptable commit: {problem}")
 
     def accept_commit(self, label, cost, head):
         self.check_limits()
