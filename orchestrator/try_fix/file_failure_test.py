@@ -29,6 +29,10 @@ class TargetFor(unittest.TestCase):
         self.assertEqual(file_failure.target_for(verdict(source="tester", severity="warning"), FACTS, {"category": "prompt_gap"}), "managed_app")
         self.assertEqual(file_failure.target_for(verdict(source="production_feedback"), None, None), "managed_app")
 
+    def test_a_failed_staging_check_with_no_target_is_the_factorys(self):
+        self.assertEqual(file_failure.target_for(verdict(source="staging"), None, None), "factory")
+        self.assertEqual(file_failure.target_for(verdict("managed_app", source="staging"), None, None), "managed_app")
+
 
 class FileFailures(unittest.TestCase):
     def go(self, fixes, result=None, key="parent", file_error=None, written=None):

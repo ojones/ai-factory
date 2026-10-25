@@ -135,6 +135,13 @@ class Filing(unittest.TestCase):
         self.assertIn("needs-human", self.labels(12))
         self.assertTrue(any("for a person to fix" in c for c in self.gh.comments[12]))
 
+    def test_a_staging_failure_files_the_fix_request_and_leaves_the_child_restartable_with_one_pointer(self):
+        first = self.file(verdict(target="factory", source="staging"))
+        self.file(verdict(target="factory", source="staging"))
+        self.assertEqual(first["action"], "fix_request")
+        self.assertNotIn("needs-human", self.labels(12))
+        self.assertEqual(sum("Staging cannot pass" in c for c in self.gh.comments[12]), 1)
+
     def test_no_cause_is_an_information_request_and_a_warning_does_not_hold_a_child(self):
         info = self.file(verdict(target="info"))
         self.assertEqual(self.labels(info["number"]), {"fix-request"})
