@@ -11,6 +11,8 @@ def target_for(verdict, facts, result):
         return verdict["target"]
     if verdict["event"]["source"] in ("build_run", "watchdog") and facts:
         return TARGETS[route.route(route.inferred_category((result or {}).get("category"), facts.get("outcome"), bool(facts.get("bugs"))))]
+    if verdict["event"]["source"] == "staging":
+        return "factory"
     return "managed_app"
 
 
