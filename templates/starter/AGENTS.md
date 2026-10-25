@@ -53,6 +53,19 @@ The Test Gate requires unit tests for
 business logic plus one boot/health-check smoke test — see
 `backend/src/__tests__/health.test.ts` for the smoke-test pattern to extend.
 
+## Data
+
+- Files that must survive a deploy or a restart go under `DATA_DIR` (`/data` in
+  production, a Fly volume of 1 GB; `./data` locally, git-ignored). Use
+  `dataPath("name")` from `backend/src/data-dir.ts`. Everything else on the
+  container's disk is lost on every deploy and restart.
+- For structured data use SQLite through Node's built-in `node:sqlite`, in a
+  file under `DATA_DIR`: no database server and no native npm dependency. Keep
+  all SQL in one persistence module, with additive migrations that run at
+  startup, so the store can move to a managed database later.
+- The volume lives on one machine in one region, so the app runs as one
+  instance. Do not design for several instances sharing the file.
+
 ## Feature flags
 
 - `backend/src/feature-flags.ts` holds the single OpenFeature client,

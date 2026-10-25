@@ -13,3 +13,8 @@ primary_region = "iad"
 [[vm]]
   size = "shared-cpu-1x"
   memory = "256mb"
+
+# One volume named `data`, created by fly/provision.sh. It is the only storage that survives a deploy or a restart.
+[mounts]
+  source = "data"
+  destination = "/data"

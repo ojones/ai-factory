@@ -15,11 +15,6 @@
     "verdict": "changes_requested",
     "match": "default|true|fail.?closed|dark"
   },
-  "unused-flag": {
-    "verdict": "clean",
-    "match": "",
-    "no_finding_match": "search-highlight|unused|never read|no code"
-  },
   "clean": {
     "verdict": "clean",
     "match": ""

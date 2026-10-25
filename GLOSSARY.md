@@ -24,6 +24,10 @@ _Avoid_: rules, guidelines
 A backend+frontend software product produced by the Factory, containerized and deployed via GitHub. Distinct from the Factory itself.
 _Avoid_: product, project, built application (former term, renamed)
 
+**Data volume**:
+The one 1 GB Fly volume a Managed App owns, mounted at `/data` (`DATA_DIR`). The only storage that survives a deploy or restart; structured data is a SQLite file on it.
+_Avoid_: database, disk
+
 **Build Run**:
 A single unattended execution of the Orchestrator, from kickoff to completion, working toward producing or updating one Managed App.
 _Avoid_: job, session
