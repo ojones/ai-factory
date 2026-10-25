@@ -1,6 +1,6 @@
 ---
 name: teardown-managed-app
-description: Tear down a Managed App the Factory built (Fly app, GrowthBook SDK connection, GitHub repo). Use when the user wants a Managed App removed, retired or cleaned up, or asks what leftovers exist from failed or test Intakes.
+description: Tear down a Managed App the Factory built (Fly app, GrowthBook SDK connection, GHCR package, GitHub repo). Use when the user wants a Managed App removed, retired or cleaned up, or asks what leftovers exist from failed or test Intakes.
 ---
 
 # Tear down a Managed App
@@ -23,13 +23,14 @@ The deletions are irreversible. The user must confirm each app by name in the cu
    gh run watch "$(gh run list --workflow teardown.yml --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
    gh run view --log "$(gh run list --workflow teardown.yml --limit 1 --json databaseId -q '.[0].databaseId')"
    ```
-   Show the user the outcomes table at the end of the log (Fly app, SDK connection, each flag, repo).
+   Show the user the outcomes table at the end of the log (Fly app, SDK connection, each flag, GHCR package, repo).
 3. **Ask for confirmation** naming the app and what will be destroyed. If the app is live and released, say so, since its users lose the service.
 4. **Real run**, only after a yes: the same commands with `-f dry_run=false`.
 5. **Verify** each resource independently of the workflow's own log (`set -a; . ./.env; set +a` provides `GROWTHBOOK_ADMIN_PAT`):
    - repo: `gh api repos/ojones/<app>` returns 404 (deleted) or `archived: true` (archived)
    - Fly app: `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(fly auth token)" https://api.machines.dev/v1/apps/<app>` returns 404 (403 means the name is held by another account and was never ours, which is fine)
    - SDK connection: no entry named `<app>` in `curl -s -H "Authorization: Bearer $GROWTHBOOK_ADMIN_PAT" https://ai-factory-growthbook.fly.dev:3100/api/v1/sdk-connections`
+   - GHCR package (only when the repo was deleted): `gh api users/ojones/packages/container/<app>` returns 404. A leftover package makes a later restage under the same name fail its first push with a denied error
    - flags: every `<app>.` flag in `.../api/v1/features?limit=100` has `archived: true`
 6. **Report** the verified result per resource. GrowthBook cannot delete flags, only archive them, so say that archived flags still exist in the project.
 7. **Record it**: if there is a related open ticket (such as the cleanup ticket #40), comment which apps were removed.
@@ -38,6 +39,7 @@ The deletions are irreversible. The user must confirm each app by name in the cu
 
 - *Repo delete fails with 403 or "Must have admin rights"*: the `FACTORY_PAT` lacks the fine-grained Administration permission. Tell the user; do not try another token.
 - *The Fly app is "not in our account"*: it belongs to someone else. Leave it; the rest of the teardown still applies.
+- *The GHCR package row says it could not be checked or deleted*: the token lacks the classic `delete:packages` scope. Tell the user to delete the package at github.com/users/ojones/packages (Package settings, Danger Zone) before the app name is reused.
 - *Flag archive fails*: the admin PAT may have lost permission. Report it; do not use another credential.
 - *Partial failure*: every step is check-then-act, so rerun the same workflow. The repo is deleted last so its marker stays available for retries.
 

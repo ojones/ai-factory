@@ -3,13 +3,16 @@
 #
 # Removes what App Staging and the first Build Run created: the Fly app, the
 # GrowthBook SDK connection, the app's flags (archived, since GrowthBook's REST
-# API cannot delete them) and the GitHub repo. Ends with a table of outcomes.
+# API cannot delete them), the app's GHCR package (deleting the repo leaves it
+# behind, and a restage under the same name is then denied its first push) and
+# the GitHub repo. Ends with a table of outcomes.
 #
 # Dry run (the default) prints the plan and changes nothing. A repo is only
 # touched if its description carries our Intake marker, so this can never
 # delete a repo App Staging did not create.
 #
-# Env: FACTORY_PAT (fine-grained; needs Administration: read and write to delete), FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT,
+# Env: FACTORY_PAT (fine-grained; needs Administration: read and write to delete the repo;
+# deleting the GHCR package needs the delete:packages scope, which fine-grained tokens lack), FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT,
 # FACTORY_REPO, APP_NAME, DRY_RUN (true|false), REPO_ACTION (delete|archive,
 # default delete; archive keeps the repo read-only and needs no Administration).
 set -euo pipefail
@@ -91,6 +94,16 @@ flags="$(gb "$GROWTHBOOK_API/features?limit=100" | jq -r --arg p "$SLUG." '.feat
 for f in $flags; do
   act "flag \`$f\`" "archive flag $f" gb -o /dev/null -X POST -H 'Content-Type: application/json' -d '{"archived":true}' "$GROWTHBOOK_API/features/$f"
 done
+
+# --- the GHCR package: deleting the repo leaves it, and it denies a later push under the same name ---
+if [ "$REPO_ACTION" = delete ]; then
+  pkg_code="$({ pat gh api -i "users/$OWNER/packages/container/$SLUG" 2>&1 || true; } | awk 'NR==1 {print $2}')"
+  case "$pkg_code" in
+    200) act "GHCR package" "delete GHCR package $OWNER/$SLUG" pat gh api -X DELETE "users/$OWNER/packages/container/$SLUG" ;;
+    404) note "GHCR package" "already gone" ;;
+    *) note "GHCR package" "could not be checked (HTTP ${pkg_code:-none}); delete it by hand or a restage under this name is denied" ;;
+  esac
+fi
 
 # --- the repo, last, so a failed earlier step can be retried with the marker intact ---
 if [ "$REPO_EXISTS" = true ]; then
