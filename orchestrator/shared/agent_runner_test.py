@@ -91,9 +91,10 @@ class Run(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with_dirs(tmp)
             runner = runner_in(tmp, agent_user="agent")
-            with mock.patch.object(agent_process, "run_watched", return_value=0) as watched, mock.patch("builtins.print"):
+            with mock.patch.object(agent_process, "run_watched", return_value=0) as watched, mock.patch("builtins.print"), \
+                    mock.patch.dict("os.environ", {"RUNNER_TEMP": str(Path(tmp) / "temp")}):
                 runner.run("coder", "1", "p")
-            self.assertTrue((Path(tmp) / "work" / "home-agent").is_dir())
+            self.assertEqual(len(list((Path(tmp) / "temp" / "sealed-agent-homes").glob("home-agent-*"))), 1)
             self.assertEqual(watched.call_args[1]["user"], "agent")
             self.assertTrue(str(watched.call_args[1]["pidfile"]).endswith("pgid-coder-1.txt"))
 
