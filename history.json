@@ -1071,5 +1071,20 @@
   "checks": {},
   "audit": [],
   "findings": {}
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/40166159094",
+  "app": "opinion-spectrum",
+  "outcome": "awaiting_secret",
+  "kind": "",
+  "started_at": "2026-10-25T05:39:12Z",
+  "minutes": 0.0,
+  "rounds": 0,
+  "cost_usd": 0,
+  "cap_usd": null,
+  "released": [],
+  "checks": {},
+  "audit": [],
+  "findings": {}
  }
 ]
