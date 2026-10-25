@@ -14,16 +14,17 @@ new file mode 100644
 +    res.status(404).json({ error: "not found" });
 +    return;
 +  }
-+  const q = String(req.query.q ?? "").toLowerCase();
++  const q = typeof req.query.q === "string" ? req.query.q.toLowerCase() : "";
 +  res.json(items.filter((i) => i.title.toLowerCase().includes(q)));
 +});
 diff --git a/backend/src/__tests__/search.test.ts b/backend/src/__tests__/search.test.ts
 new file mode 100644
 --- /dev/null
 +++ b/backend/src/__tests__/search.test.ts
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,21 @@
 +import request from "supertest";
 +import { createApp } from "../app";
++import { items } from "../routes/items";
 +import { withFlag } from "./with-flag";
 +
 +describe("GET /api/search", () => {
@@ -34,10 +35,11 @@ new file mode 100644
 +    });
 +  });
 +  it("filters items by title while the flag is on", async () => {
++    items.push({ id: 1, title: "Apple" }, { id: 2, title: "Pear" });
 +    await withFlag("search", true, async () => {
-+      const res = await request(createApp()).get("/api/search?q=a");
++      const res = await request(createApp()).get("/api/search?q=APP");
 +      expect(res.status).toBe(200);
-+      expect(res.body.every((i: { title: string }) => i.title.toLowerCase().includes("a"))).toBe(true);
++      expect(res.body).toEqual([{ id: 1, title: "Apple" }]);
 +    });
 +  });
 +});
