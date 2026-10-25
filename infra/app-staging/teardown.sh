@@ -97,7 +97,7 @@ done
 
 # --- the GHCR package: deleting the repo leaves it, and it denies a later push under the same name ---
 if [ "$REPO_ACTION" = delete ]; then
-  pkg_code="$(pat gh api -i "users/$OWNER/packages/container/$SLUG" 2>&1 | awk 'NR==1 {print $2}')"
+  pkg_code="$({ pat gh api -i "users/$OWNER/packages/container/$SLUG" 2>&1 || true; } | awk 'NR==1 {print $2}')"
   case "$pkg_code" in
     200) act "GHCR package" "delete GHCR package $OWNER/$SLUG" pat gh api -X DELETE "users/$OWNER/packages/container/$SLUG" ;;
     404) note "GHCR package" "already gone" ;;
