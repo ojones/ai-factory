@@ -18,7 +18,8 @@ def read_key(body):
 
 
 def title(verdict, app):
-    return f"{app}: {verdict['event']['summary'][:80]} [{verdict['key']}]"
+    keys = [e["key"] for e in verdict.get("events", [verdict["event"]])]
+    return f"{app}: {verdict['event']['summary'][:80]} [{' '.join(keys)}]"
 
 
 ORIGINAL = "Original instructions of the change set that failed"

@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -112,10 +111,10 @@ class ChoosingFlagsToRetire(unittest.TestCase):
     def run_for(self, flags, *, fix=None, task="Add a button", manifest="a,b,c,d", boom=False):
         run = object.__new__(BuildRun)
         run.fix_for, run.task = (fix or {}).get("origin"), task
-        run.app, run.app_repo, run.pat, run.lim = "app", "o/app", "pat", {"flag_retirement": {"min_age_days": 1, "piggyback_max": 5}}
+        run.app, run.app_repo, run.pat, run.lim = "app", "o/app", "pat", {"flag_retirement": {"piggyback_max": 5}}
         run.git = lambda *a, check=True: type("R", (), {"stdout": json.dumps([{"slug": s} for s in manifest.split(",")])})()
         patched = mock.patch.object(retirement_selection, "app_flags", side_effect=RuntimeError("down") if boom else None, return_value=(flags, set(manifest.split(","))))
-        with patched, mock.patch.object(time, "strftime", return_value="2026-10-12"):
+        with patched:
             return run.choose_flags_to_retire()
 
     flags = [retirement_entry("a", 100), retirement_entry("b", 200), retirement_entry("c", 300), retirement_entry("d", 400)]

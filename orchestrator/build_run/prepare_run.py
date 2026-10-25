@@ -130,14 +130,17 @@ class PrepareRun:
         self.state.d["parent"] = self.parent
 
     def require_secrets(self, needed):
+        missing = self.missing_of(needed)
+        if missing:
+            raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, "add `proceed-with-change` again"))
+
+    def missing_of(self, needed):
         try:
             have = secrets_check.present_names(lambda args: self.gh(args, check=False), self.app_repo)
         except secrets_check.SecretsUnreadable as e:
             raise run_stops.NeedsHuman("other", str(e))
         self.state.d["secrets"] = [x["name"] for x in needed]
-        missing = secrets_check.missing_secrets(needed, have)
-        if missing:
-            raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, "add `proceed-with-change` again"))
+        return secrets_check.missing_secrets(needed, have)
 
     def copy_template_files(self, group):
         changed = []
@@ -201,8 +204,7 @@ class PrepareRun:
     def choose_flags_to_retire(self):
         picked, issues = retirement_selection.choose(
             not self.fix_for, self.task, self.app_repo.split("/")[0], self.app,
-            self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout,
-            time.strftime("%Y-%m-%d", time.gmtime()))
+            self.pat, self.lim.get("flag_retirement") or {}, self.git("show", "HEAD:flags.json", check=False).stdout)
         if issues:
             self.flag_issues = issues
         return picked

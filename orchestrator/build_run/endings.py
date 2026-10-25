@@ -21,7 +21,7 @@ NEAR_CAP = 0.9
 
 
 def ending_for(kind, message, spent, cap):
-    named = {"time_limit": "time_limit", "round_limit": "round_limit", "stuck": "stuck"}.get(kind)
+    named = {"time_limit": "time_limit", "round_limit": "round_limit"}.get(kind)
     if named:
         return named, message
     if cap and spent is not None and spent >= NEAR_CAP * cap:

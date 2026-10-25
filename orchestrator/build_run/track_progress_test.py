@@ -32,25 +32,6 @@ class Scoreboard(unittest.TestCase):
         self.assertEqual(e["checks"], {"a: x": "failed"})
         self.assertEqual(e["blocking"], ["missing flag"])
 
-    def test_identical_open_items_for_n_rounds_is_stalled(self):
-        same = [self.entry(i, {"x": "failed", "y": "passed"}, ["no health route"]) for i in (1, 2, 3)]
-        self.assertTrue(track_progress.stalled(same, 3))
-        self.assertFalse(track_progress.stalled(same[:2], 3))
-
-    def test_any_change_between_rounds_is_progress(self):
-        a, c = self.entry(1, {"x": "failed"}), self.entry(2, {"x": "passed"}, ["new finding"])
-        self.assertFalse(track_progress.stalled([a, a, c], 3))
-        self.assertFalse(track_progress.stalled([a, c, c], 3))
-
-    def test_nothing_open_is_never_stalled_and_small_n_disables_it(self):
-        clean = [self.entry(i, {"x": "passed"}) for i in (1, 2, 3)]
-        self.assertFalse(track_progress.stalled(clean, 3))
-        failing = [self.entry(i, {"x": "failed"}) for i in (1, 2, 3)]
-        self.assertFalse(track_progress.stalled(failing, 0))
-        self.assertFalse(track_progress.stalled(failing, 1))
-
-
-class ScoreboardCategories(unittest.TestCase):
     def test_the_scoreboard_counts_blocking_findings_by_category_and_tester_checks_apart(self):
         record = {"counts": {}, "checks": []}
         blocking = [{"source": "reviewer", "summary": "a", "category": "test_quality"}, {"source": "reviewer", "summary": "b", "category": "test_quality"},

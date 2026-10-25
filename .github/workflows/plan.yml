@@ -4,7 +4,7 @@ name: Plan
 # issue, which a form does when the issue is created, starts it: the planner Agent reads the request (and, for an update, the app's code), the
 # plan is checked, and one child ticket (a sub-issue with complete coding instructions and one flag) is filed per change set. The first child with
 # nothing to wait for is started with `proceed-with-change`; the Orchestrator starts the rest one at a time as each finishes.
-# orchestrator/planning/plan_run.py does the work. A stop (a question, a refusal, a missing secret) comments on the issue; to plan again, edit the
+# orchestrator/planning/plan_run.py does the work. A stop (a question, or a refusal) comments on the issue; to plan again, edit the
 # issue, remove the label and add it again. `limits.planner_enabled` in agents/profiles.yml is the switch.
 #
 # A child ticket carries the `update-app-intake` label too, so it is never planned: the job skips a body with the `factory-plan` marker. A benchmark
@@ -36,7 +36,7 @@ jobs:
     # Job-level, so label events this job does not handle never queue behind a real one.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      ((github.event.label.name == 'update-app-intake' || github.event.label.name == 'new-app-intake' || github.event.label.name == 'factory-change') &&
+      ((github.event.label.name == 'update-app-intake' || github.event.label.name == 'new-app-intake') &&
       !contains(github.event.issue.body, 'factory-plan:') &&
       !contains(github.event.issue.labels.*.name, 'benchmark'))
     runs-on: ubuntu-latest
@@ -82,8 +82,4 @@ jobs:
           FACTORY_GH_TOKEN: ${{ github.token }}
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
-          LABEL: ${{ github.event.label.name }}
-        run: |
-          module=planning.plan_run
-          if [ "$LABEL" = factory-change ]; then module=factory_change.plan; fi
-          PYTHONPATH=factory/orchestrator python -m "$module"
+        run: PYTHONPATH=factory/orchestrator python -m planning.plan_run

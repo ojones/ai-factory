@@ -78,14 +78,19 @@ class BugFiling:
 
     def for_factory(self):
         got = factory_fix_request.file_bug_request(self.repo, self.token, self.verdict, self.doc, self.run_url, self.target)
-        if self.story_is_open_child() and self.ev["severity"] == "failure":
+        if self.ev["source"] == "staging" and self.story_is_open_child():
+            self.point_staging_at(got)
+        elif self.story_is_open_child() and self.ev["severity"] == "failure":
             self.hold(self.factory_hold_reason())
         return got
+
+    def point_staging_at(self, got):
+        self.note_once("staging-fix", f"Staging cannot pass until the Factory is fixed: {got['url']}. Add `proceed-with-change` to this child again once that is closed.")
 
     def factory_hold_reason(self):
         if self.target != "factory":
             return "no cause was named, or it was infrastructure"
-        return f"a fault in the Factory itself ({self.verdict.get('cause')}) was found; the child starts again by itself when the fix is merged"
+        return f"a fault in the Factory itself ({self.verdict.get('cause')}) was found and filed as a fix request in the Factory repo for a person to fix"
 
     def file_released(self, app, title, labels):
         number = create(self.repo, self.pat, title, render_bug.intake_body(app, self.doc, self.verdict, self.run_url), labels + [intake_labels.UPDATE_APP_INTAKE])

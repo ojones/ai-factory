@@ -24,6 +24,10 @@ _Avoid_: rules, guidelines
 A backend+frontend software product produced by the Factory, containerized and deployed via GitHub. Distinct from the Factory itself.
 _Avoid_: product, project, built application (former term, renamed)
 
+**Data volume**:
+The one 1 GB Fly volume a Managed App owns, mounted at `/data` (`DATA_DIR`). The only storage that survives a deploy or restart; structured data is a SQLite file on it.
+_Avoid_: database, disk
+
 **Build Run**:
 A single unattended execution of the Orchestrator, from kickoff to completion, working toward producing or updating one Managed App.
 _Avoid_: job, session
@@ -53,7 +57,7 @@ The first child ticket of a New App Intake (`kind: staging`): stages the app and
 _Avoid_: setup ticket
 
 **Bug Intake**:
-An `update-app-intake` labelled `bug`, written by the Try Fix Agent from the bug template and planned like any Intake. For a child that failed it carries `fix_for` (the failed child): its plan is exactly one child, and the failed child waits for it. For a story that is already released it is a regression: it carries no marker and nothing waits for it. (Built, ticket 15d. The one child it plans is called a **fix child**; it is filed under the bug Intake, not under the failed child's parent.)
+An `update-app-intake` labelled `bug`, written by the Try Fix Agent from the bug template, one per group of fix verdicts on the same story (a group is the events of one app, story and target). For a child that failed it carries `fix_for` (the failed child) and is planned in code from its ticket's numbered requirements, with no Planner call: its plan is exactly one child, and the failed child waits for it. For a story that is already released it is a regression: it carries no marker and nothing waits for it. (Built, ticket 15d. The one child it plans is called a **fix child**; it is filed under the bug Intake, not under the failed child's parent.)
 _Avoid_: retry, hotfix
 
 **Failure event**:
@@ -124,11 +128,11 @@ The name used in outside advice for what the Factory implements as the flag arou
 _Avoid_: feature flag (as a name for the gate itself; it is the underlying mechanism)
 
 **Lesson**:
-A `factory-learning` issue in ai-factory recording something a Build Run taught the Factory (a stuck run, a recurring minor finding), from which the retrospective Agent may propose a change to prompts, the Starter Template or the Orchestrator as a PR.
+A `factory-learning` issue in ai-factory recording something a Build Run taught the Factory (a stuck run, a recurring minor finding), for a person to act on.
 _Avoid_: retrospective (that is the step and Agent that read every run and may file or act on these)
 
 **Retrospective**:
-The step that runs after every Build Run, whether it released or not. It records what the run found (blocking findings, minor findings and the `improvements` the reviewer and tester suggest), files them as issues in the Managed App's repo or ai-factory, may propose a Factory fix as a PR, and posts a short summary on the issue that started the run.
+The step that runs after a Build Run, whether it released or not (an answer such as `refused` or `awaiting_secret` has nothing to learn from, and `provider_blocked` only raises its alert). It records what the run found (blocking findings, minor findings and the `improvements` the reviewer and tester suggest), judges each improvement as a failure event and files the Factory's as issues in ai-factory, names the cause of a run that ended badly, judges every event it produced, and posts a short summary on the issue that started the run.
 _Avoid_: post-mortem (it is not only for failures)
 
 **Dark feature**:
@@ -136,11 +140,11 @@ A change whose flag has not been released. One that fails its checks stays dark 
 _Avoid_: dead flag
 
 **Fix request**:
-The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (a deploy rollback, for a regression), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (a PR for a person to merge), to the app as a fix child (today: the same issue started again), or kept as information (`needs-human`).
+The issue a Build Run that ended badly leaves behind: what happened, what the Orchestrator already did (a deploy rollback, for a regression), an automated analysis, and numbered requirements for what must be true once it is fixed. It is routed to the Factory (an issue for a person to fix by hand), to the app as a bug Intake whose fix child the failed child waits for, or kept as information (`needs-human`).
 _Avoid_: bug report, incident
 
 **Scoreboard**:
-The Orchestrator's per-round record of every check's state (`passed`, `failed`, `blocked`, `not_run`) and the blocking findings still open, written to the Build Run Report and `artifacts/progress.json`. It, not an Agent's say-so, is how the run knows whether it is making progress; a run that leaves the same items open for `stuck_rounds` rounds stops.
+The Orchestrator's per-round record of every check's state (`passed`, `failed`, `blocked`, `not_run`) and the blocking findings still open, written to the Build Run Report and `artifacts/progress.json`. It, not an Agent's say-so, is how the run knows whether it is making progress.
 
 **Watchdog**:
 The Orchestrator step after a release (STEP 5.8) that watches the app's health and error logs for a few minutes and switches off the flags the run released if they regress.

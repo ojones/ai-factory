@@ -5,7 +5,7 @@ import subprocess
 from flag_lifecycle import (
     retirement_check,
 )
-from planning import triage
+from planning import secrets_check, triage
 from shared import (
     agent_process,
     run_stops,
@@ -13,6 +13,8 @@ from shared import (
 )
 from shared.console import log
 from shared.shell import sh
+
+from build_run import endings
 
 UNREADABLE = object()
 
@@ -36,6 +38,7 @@ class WriteCode:
 
     def accept_commit(self, label, cost, head):
         self.check_limits()
+        self.require_found_secrets(head)
         self.state.stage("Coder", "coder", label, cost, f"committed {head[:8]}", self.take_usage())
         return head
 
@@ -63,14 +66,31 @@ class WriteCode:
                 return problem
         return None
 
-    def secret_names_in(self, ref):
+    def secrets_in(self, ref):
         shown = self.git("show", f"{ref}:secrets.json", check=False)
         if shown.returncode != 0:
             return None
         try:
-            return [x.get("name") for x in json.loads(shown.stdout).get("secrets", [])]
+            return [{"name": x.get("name"), "purpose": str(x.get("purpose", ""))} for x in json.loads(shown.stdout).get("secrets", [])]
         except (ValueError, AttributeError):
             return UNREADABLE
+
+    def require_found_secrets(self, head):
+        found = self.undeclared_secrets_in(head)
+        if not found:
+            return
+        self.declared_secrets = [*self.declared_secrets, *found]
+        missing = self.missing_of(self.declared_secrets)
+        retry = "add `proceed-with-change` again"
+        self.gh(["issue", "comment", self.issue, "--repo", self.factory_repo, "--body",
+                 secrets_check.request_comment(self.declared_secrets, missing, self.app_repo, retry)], token=self.factory_token)
+        if missing:
+            raise endings.AwaitingSecret(secrets_check.waiting_message(missing, self.app_repo, retry))
+
+    def undeclared_secrets_in(self, head):
+        listed = self.secrets_in(head)
+        known = {x["name"] for x in self.declared_secrets}
+        return [x for x in listed if x["name"] not in known] if isinstance(listed, list) else []
 
     def secret_value_problem(self, base, head):
         kinds = triage.diff_secrets(self.git("diff", f"{base}..{head}", check=False).stdout)
@@ -82,17 +102,13 @@ class WriteCode:
 
     def secret_problem(self, base, head):
         value_problem = self.secret_value_problem(base, head)
-        names = self.secret_names_in(head)
-        if value_problem or names is None:
+        listed = self.secrets_in(head)
+        if value_problem or listed is None:
             return value_problem
-        if names is UNREADABLE:
+        if listed is UNREADABLE:
             return "`secrets.json` is not valid JSON of the form {\"secrets\": [{\"name\": \"...\", \"purpose\": \"...\"}]}."
-        earlier = self.secret_names_in(base)
-        declared = set(self.state.d.get("secrets") or []) | (set(earlier) if isinstance(earlier, list) else set())
-        bad = [n for n in names if n not in declared or triage.secret_name_problem(n)]
-        if not bad:
-            return None
-        return f"`secrets.json` lists {', '.join(map(str, bad))}, which the plan did not declare. List only the secrets named in the request's Secrets note."
+        problems = [triage.secret_name_problem(x["name"]) for x in listed]
+        return next((f"`secrets.json` cannot list that: {p}." for p in problems if p), None)
 
     def check_problem(self):
         try:

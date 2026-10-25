@@ -27,10 +27,10 @@ RESPONSE_FORMAT = {
     "json_schema": {"name": "review_verdict", "schema": VERDICT_SCHEMA, "strict": True},
 }
 
-def review_system(kind):
+def review_system():
     return prompts.render(
         prompts.load_prompt("prompts/reviewer-fast.md"),
-        {"app_name": "smoke-app", "build_kind": kind, "base_sha": "base", "head_sha": "head"})
+        {"app_name": "smoke-app", "base_sha": "base", "head_sha": "head"})
 
 TOOLS = [{
     "type": "function",
@@ -110,8 +110,8 @@ ONLY = {n for n in os.environ.get("FIXTURES", "").split(",") if n}
 fixtures = {p.stem: load_fixture(p) for p in sorted((HERE / "fixtures").glob("*.diff")) if not ONLY or p.stem in ONLY}
 expected = json.loads((HERE / "expected.json").read_text())
 
-def review(diff, extra=None, kind="update"):
-    return chat({"messages": [{"role": "system", "content": review_system(kind)},
+def review(diff, extra=None):
+    return chat({"messages": [{"role": "system", "content": review_system()},
                               {"role": "user", "content": f"Review this diff:\n\n{diff}"}],
                  "response_format": RESPONSE_FORMAT, **(extra or {})})
 
@@ -149,7 +149,7 @@ def grade(want, v):
 def trial(name):
     start = time.time()
     try:
-        r = review(fixtures[name], kind=expected[name].get("build_kind", "update"))
+        r = review(fixtures[name])
         v = parse_verdict(r)
         u = r.get("usage", {})
         return {"name": name, "ok": grade(expected[name], v), "v": v, "secs": time.time() - start,

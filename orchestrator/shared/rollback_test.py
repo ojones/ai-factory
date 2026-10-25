@@ -22,7 +22,7 @@ class Decision(unittest.TestCase):
         self.assertEqual(rollback.rollback_decision(run_state()), (True, ""))
 
     def test_every_other_ending_is_fixed_forward_and_nothing_is_rolled_back(self):
-        for outcome in ("round_limit", "needs_human", "stuck", "budget_exhausted", "time_limit", "crash", "running",
+        for outcome in ("round_limit", "needs_human", "budget_exhausted", "time_limit", "crash", "running",
                         "released", "nothing_to_release", "planned", "watchdog_disabled", "provider_blocked", "refused"):
             self.assertFalse(rollback.rollback_decision(run_state(outcome=outcome))[0], outcome)
 

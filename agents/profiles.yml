@@ -1,4 +1,4 @@
-# Per-role Agent configuration. See README.md. Model ids are DeepInfra ids.
+# Per-role Agent configuration and the Orchestrator's limits. See ARCHITECTURE.md. Model ids are DeepInfra ids.
 
 provider:
   base_url: https://api.deepinfra.com/v1/openai
@@ -40,12 +40,13 @@ roles:
     mode: single_call
     fast_prompt: prompts/reviewer-fast.md
     prompt: prompts/reviewer.md
+  # Names the cause of a failed Test Gate, Build or Deploy of a pushed commit (code, workflow, infra or flaky); a flaky or infra cause is re-run (limits.pipeline_retries).
   pipeline:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/pipeline.md
-  # Turns a larger Intake into ordered change sets with acceptance criteria (orchestrator/planning/validate_plan.py checks the
-  # plan). Runs first in a Build Run for an Update App Intake. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
+  # Turns every Intake, new app or update, into ordered change sets with acceptance criteria (orchestrator/planning/validate_plan.py
+  # checks the plan). Runs in plan.yml, before any Build Run. The model is unmeasured: gpt-oss-120b replaced Qwen3-Coder-480B on 2026-10-15
   # because the 480B hung for minutes at a time on real runs (one planner attempt took 1277 s) and a planner needs no code-tuned model;
   # gpt-oss-120b is about 8x cheaper and a different lab from the coder and reviewer (DeepSeek) and the tester (Nvidia). Watch the planner
   # time, cost and plan_gap lessons on the next runs; ticket 30 would measure it properly.
@@ -53,22 +54,6 @@ roles:
     model: openai/gpt-oss-120b
     fallback_model: Qwen/Qwen3.8-Flash
     prompt: prompts/planner.md
-  # Plans a Factory Change Intake (STEP 9.2): the same job and model as the planner, with a prompt for the Factory's own code (no flags, tiers, a reproduction first).
-  factory_planner:
-    model: openai/gpt-oss-120b
-    fallback_model: Qwen/Qwen3.8-Flash
-    prompt: prompts/factory-planner.md
-  # Writes one Factory Change child (STEP 9.3) in a scratch copy of the Factory; the Orchestrator reads its files and delivers the change. The coder's model; unmeasured on Python
-  # (agents/smoke-coder is Node), so watch the first Factory Changes.
-  factory_coder:
-    model: deepseek-ai/DeepSeek-V4.1-Flash
-    fallback_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
-    prompt: prompts/factory-coder.md
-  # Reviews a Factory Change's diff in one model call (STEP 9.5); the gates decide, not its verdict (INV-04 pattern).
-  factory_reviewer:
-    model: deepseek-ai/DeepSeek-V4.1-Flash
-    fallback_model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
-    prompt: prompts/factory-reviewer.md
   # Writes the bug ticket for an event the retrospective judged worth fixing (orchestrator/try_fix/write_bug.py): how it was found, the cause, what it takes to resolve and
   # checkable requirements, from the bug template. One model call, no tools; the Orchestrator validates the answer and writes the ticket itself when it is unusable. The model is
   # unmeasured (the planner's, for the same reason: a writer needs no code-tuned model); watch the validation failures on the first real runs.
@@ -76,14 +61,14 @@ roles:
     model: openai/gpt-oss-120b
     fallback_model: Qwen/Qwen3.8-Flash
     prompt: prompts/try_fix.md
-  # After every Build Run, released or not: reads what the run found and how it ended, files the improvements and proposes a fix as a PR (orchestrator/retrospective.py).
+  # After every Build Run, released or not: reads what the run found and how it ended, names the cause of a run that ended badly and judges every event it produced (orchestrator/retrospective/). It reads and writes no code.
   retrospective:
     model: Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo
     fallback_model: deepseek-ai/DeepSeek-V4.1-Flash
     prompt: prompts/retrospective.md
 
 limits:
-  # Rounds of review and fixing in all. A blocked review costs one model call and a coder round and never pushes.
+  # Coder rounds in all: review fixes and fixes for a failed pipeline count together. A blocked review costs one model call and a coder round and never pushes.
   review_rounds: 4
   # The Orchestrator runs the app's `npm run check` (type-check and lint) on each coder commit before the reviewer sees it; a failure goes
   # back to the coder as a rejected commit (three attempts, like a protected-file violation), not as a review round. False turns it off.
@@ -105,22 +90,8 @@ limits:
   time_limit_minutes: 330
   # The retrospective Agent after a run; one run, outside the Build Run's cost cap.
   retrospective_timeout_minutes: 15
-  # The retrospective Agent gets its own single-model credential limited to this much per analysis (it never
-  # holds the parent key), and no more than this many learning PRs may be open at once.
+  # The retrospective Agent gets its own single-model credential limited to this much per analysis (it never holds the parent key).
   retrospective_cost_cap_usd: 0.50
-  max_open_learning_prs: 3
-  # A Factory Change (STEP 9.4) is refused, not trimmed, when its diff touches more files or adds more lines than this, and no more than this many Factory Change PRs may be open at once.
-  factory_change_max_files: 8
-  factory_change_max_added_lines: 400
-  max_open_factory_change_prs: 3
-  # What one Factory Change child may spend on its coder and reviewer together, rounds of coding and review in all, and hours a merged change is watched (STEP 9.11).
-  factory_change_cost_cap_usd: 1.00
-  factory_change_review_rounds: 3
-  factory_change_watch_hours: 24
-  # A lesson, minor finding or factory improvement is recorded and counted (distinct runs, a hidden marker in its issue) on its first sighting, but the
-  # Agent analyses it and proposes a fix PR only once this many distinct runs have seen it. Severe lessons (an audit violation, a watchdog switch-off), stuck
-  # runs and a lesson that came back after its fix go at once. 1 acts on the first sighting.
-  promote_after_runs: 2
   # Per Agent invocation; a hung Agent is killed and counts as a failed attempt.
   agent_timeout_minutes: 45
   # An Agent whose event stream has not grown for this long is killed and counts as a failed attempt (0 turns it off). A real run
@@ -138,35 +109,31 @@ limits:
   pipeline_timeout_minutes: 25
   # Re-runs of a failed pipeline step the Pipeline Agent diagnoses as flaky/infra.
   pipeline_retries: 2
-  # Coder fixes triggered by Pipeline Agent diagnoses (separate from review_rounds).
-  pipeline_fix_attempts: 5
   # Refuse to start a Build Run once the Build Runs that finished today (UTC) have spent this much in total,
   # read from the spend-ledger issue in ai-factory. 0 disables it. Runs in flight count when they finish.
   daily_cost_cap_usd: 10.00
   # Fly apps that are Factory infrastructure rather than Managed Apps (besides ai-factory-growthbook); the daily Fly audit
   # (orchestrator/monitoring/fly_audit.py) reports every other Fly app that has no Managed App repo as an orphan.
   fly_infra_apps: []
-  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become failure events (orchestrator/bugs/scan_production.py, scheduled by production-feedback.yml);
-  # the Retrospective judges them and Try Fix files a bug Intake for each one worth fixing, which starts itself. min_occurrences: times one error must appear in a scan.
   # Daily: Dependabot's open pull requests for each app (npm packages, Docker base image) become one self-starting Update App Intake
   # (orchestrator/maintenance/dependency_updates.py, maintenance.yml). Dependabot only detects; nothing merges its pull requests.
   maintenance:
     enabled: true
   # A proven flag is retired inside the next Update App Intake's Build Run for the same app, never in a run of its own: once a later Build Run
-  # has also released something and the flag is at least min_age_days old, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_lifecycle/retirement_selection.py).
+  # has also released something, up to piggyback_max (5) flags ride along, so a backlog clears quickly (orchestrator/flag_lifecycle/retirement_selection.py).
   flag_retirement:
-    min_age_days: 1
     piggyback_max: 5
+  # Errors a deployed app logs, and `escaped-defect` issues its owner files, become failure events (orchestrator/bugs/scan_production.py, scheduled by production-feedback.yml);
+  # the Retrospective judges them and Try Fix files a bug Intake for each one worth fixing, which starts itself. min_occurrences: times one error must appear in a scan.
   production_feedback:
     enabled: true
     min_occurrences: 3
-    max_per_app_per_day: 2
   # Build Runs allowed in flight across all Managed Apps (v1 stages one at a time).
   max_simultaneous_build_runs: 1
   # A goal, not a limit: peak context (tokens in one LLM call) per Agent invocation to
   # stay under, so Agents work in the model's reliable range. Over-goal stages are flagged.
   context_goal_tokens: 100000
-  # An Update App Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
+  # Every Intake is planned first (agents/prompts/planner.md); more change sets than this is refused as too big
   # for one Intake. Set planner_enabled false to switch planning off: plan.yml then plans nothing and the Intake stays as it is.
   planner_enabled: true
   # What the planning process may spend on one Intake, apart from the Build Runs of its children.
@@ -181,19 +148,17 @@ limits:
   rollback_regressions: true
   rollback_timeout_minutes: 15
   # Handle every child that ends badly (STEP 7): a cause in the app gets a bug Intake (planned into one fix child with a flag of its own; the failed child waits for it), a cause in the Factory gets
-  # a learning PR that starts the child again when it merges, anything else waits for a person. An unchanged child is never started again.
+  # a fix request issue in ai-factory for a person and the failed child waits for them, anything else waits for a person. An unchanged child is never started again.
   fix_requests: true
   # How many fix attempts (bug Intakes along the `fix_for` chain) one story gets before it is left for a person (`needs-human`). Two: the first fix often meets a second problem the failure
   # hid; a third attempt at the same story is the model repeating itself.
   fix_attempts_max: 2
-  # Warnings (a dark-only test failure, a check that could not be run, a minor finding) the Retrospective may send to a fix per app per day. A failure is never
-  # limited by it. Counted from the app's `bug` tickets filed today (retrospective/fix_budget.py).
-  fix_events_per_app_per_day: 3
+  # The one daily limit on new bug tickets per app, counted from the app's `bug` tickets filed today. It stops a production error or an escaped defect
+  # (orchestrator/bugs/flood_limits.py) and a warning the Retrospective would send to a fix (a dark-only test failure, a check that could not be run, a minor
+  # finding; retrospective/event_verdicts.py). A failure of a Build Run is never limited by it.
+  bugs_per_app_per_day: 2
   # What writing one bug ticket may spend (a scoped credential, so the Agent never holds the parent key).
   try_fix_cost_cap_usd: 0.25
-  # Stop early when this many rounds in a row leave exactly the same checks failing and the same
-  # findings open (the fix attempts are changing nothing the checks can see). 0 disables it.
-  stuck_rounds: 3
   # After a release the Orchestrator watches the app this long and switches the flags it released
   # off by itself on a run of failed health checks or a rise in error-level log lines. 0 disables it.
   watchdog_minutes: 10

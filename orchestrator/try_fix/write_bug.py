@@ -21,9 +21,21 @@ GUIDANCE = {
 }
 
 
+def scrubbed_event(ev):
+    return {**ev, **{k: validate_bug.scrub(ev.get(k)) for k in ("summary", "evidence")}}
+
+
 def scrubbed(verdict):
-    ev = {**verdict["event"], **{k: validate_bug.scrub(verdict["event"].get(k)) for k in ("summary", "evidence")}}
-    return {**verdict, "event": ev}
+    return {**verdict, "event": scrubbed_event(verdict["event"]), "events": [scrubbed_event(e) for e in verdict.get("events", [verdict["event"]])]}
+
+
+def further_events(verdict):
+    return [e for e in verdict.get("events", []) if e["key"] != verdict["event"]["key"]]
+
+
+def with_further_events(reqs, verdict, max_criteria):
+    wanted = [f"This no longer happens: {e['summary'][:200]}" for e in further_events(verdict)]
+    return (reqs[:-1] + wanted + reqs[-1:])[:max_criteria - 1] + reqs[-1:] if wanted else reqs
 
 
 def fallback(verdict, facts=None, rollback=None, max_criteria=6):
@@ -37,7 +49,7 @@ def fallback(verdict, facts=None, rollback=None, max_criteria=6):
         reqs = [f"This no longer happens: {ev['summary'][:200]}", "A test covers the fixed behaviour and fails without the fix."]
     return {"how_found": f"Found by {SOURCE_TEXT.get(ev['source'], ev['source'])}: {ev['summary']}{where}.",
             "root_cause": (f"The retrospective named the cause as {cause}. " if cause else "No cause was named. ") + (verdict.get("reason") or ""),
-            "what_it_takes": [f"Resolve: {ev['summary'][:200]}"] + ([GUIDANCE[cause]] if cause in GUIDANCE else []), "requirements": reqs, "source": "fallback"}
+            "what_it_takes": [f"Resolve: {ev['summary'][:200]}"] + ([GUIDANCE[cause]] if cause in GUIDANCE else []), "requirements": with_further_events(reqs, verdict, max_criteria), "source": "fallback"}
 
 
 def agent_input(verdict, facts, rollback):
@@ -46,7 +58,8 @@ def agent_input(verdict, facts, rollback):
     if rollback:
         context["rollback"] = failure_text.rollback_line(rollback)
     return json.dumps({"decision": {"target": verdict.get("target"), "cause": verdict.get("cause"), "reason": verdict.get("reason")},
-                       "event": {k: ev.get(k) for k in ("source", "severity", "summary", "evidence")}, "context": context}, indent=2)[:12000]
+                       "event": {k: ev.get(k) for k in ("source", "severity", "summary", "evidence")},
+                       "more_events": [{k: e.get(k) for k in ("source", "severity", "summary", "evidence")} for e in further_events(verdict)], "context": context}, indent=2)[:12000]
 
 
 def mint(cfg, parent_key):

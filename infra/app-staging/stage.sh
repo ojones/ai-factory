@@ -10,7 +10,7 @@
 # STAGING_DRY_RUN=1 reads and checks the child, prints what it would stage and changes nothing.
 #
 # Env (see the workflow): GH_TOKEN (Actions token, for ai-factory issue ops), FACTORY_PAT, FLY_API_TOKEN, GROWTHBOOK_ADMIN_PAT, PREVIEW_MASTER_SECRET,
-# ISSUE_NUMBER (the staging child), FACTORY_REPO, RUN_URL.
+# ISSUE_NUMBER (the staging child), FACTORY_REPO, RUN_URL, RUNNER_TEMP, and for a failed check FACTORY_GH_TOKEN, DEEPINFRA_API_KEY and GITHUB_REPOSITORY.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -155,12 +155,22 @@ else
   echo "Seeded $OWNER/$SLUG"
 fi
 
+# A failed check is a failure event: the Retrospective judges it and Try Fix files the fix, so the failure heals through the same loop as a failed Build Run.
+EVENTS="$RUNNER_TEMP/staging-events.json"
+VERDICTS="$RUNNER_TEMP/staging-verdicts.json"
+hand_failures_to_try_fix() {
+  PYTHONPATH=orchestrator python3 -m retrospective.judge_events "$EVENTS" "$VERDICTS" &&
+    PYTHONPATH=orchestrator python3 -m try_fix.file_events "$VERDICTS" ||
+    comment "**The failed checks could not be handed to Try Fix**, so no fix was filed. See the [run log]($RUN_URL)."
+}
+
 # --- 8. verify, then hand on ------------------------------------------------------------
 # Prove the seeded app works, tell the Intake, and close the child so the first business child starts.
 
 SEED_SHA="$(pgit ls-remote "$REMOTE" refs/heads/main | cut -f1)"
-if ! APP_NAME="$SLUG" SEED_SHA="$SEED_SHA" PYTHONPATH=orchestrator python3 -m staging.verify_infrastructure; then
+if ! APP_NAME="$SLUG" SEED_SHA="$SEED_SHA" FAILURE_EVENTS_FILE="$EVENTS" PYTHONPATH=orchestrator python3 -m staging.verify_infrastructure; then
   HANDLED=1
+  hand_failures_to_try_fix
   exit 1   # verify_infrastructure commented the failed checks on the child; on_exit takes the start label off so adding it again retries
 fi
 gh issue comment "$PARENT" --repo "$FACTORY_REPO" --body "**App Staging complete.** Managed App repo: https://github.com/$OWNER/$SLUG

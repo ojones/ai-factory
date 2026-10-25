@@ -26,4 +26,4 @@ Tests are named `<name>_test.py`, beside the module (`build_run/run.py` has `bui
 
 ## Where things live
 
-[ARCHITECTURE.md](ARCHITECTURE.md) is the single place for why (including the standards a Managed App follows). [docs/flow-spec.md](docs/flow-spec.md) and [docs/invariants.md](docs/invariants.md) are the numbered behaviour spec, kept consistent by tests. The Factory repo changes go through PRs; the "commit to main" rule in ARCHITECTURE.md applies to Managed Apps only.
+[ARCHITECTURE.md](ARCHITECTURE.md) is the single place for why (including the standards a Managed App follows). [docs/flow-spec.md](docs/flow-spec.md) and [docs/invariants.md](docs/invariants.md) are the numbered behaviour spec, kept consistent by tests. In the Factory repo, Markdown (specs, docs, agent prompts) is committed straight to `main`; code, workflows and config (`.py`, `.ts`, `.json`, `.yml`, `agents/profiles.yml`, `.github/`, `templates/starter/`) go through a PR, because only a PR runs the `starter` check. A change that mixes both goes through a PR. The "commit to main" rule in ARCHITECTURE.md is about Managed Apps.

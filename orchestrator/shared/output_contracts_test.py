@@ -9,8 +9,6 @@ CONTRACTS = {
     "reviewer": ("analysis", "findings", "verdict", "blocking", "minor"),
     "tester": ("passed", "results", "limitations", "blocked", "not_run"),
     "planner": ("requirements", "assumptions", "open_questions", "change_sets"),
-    "factory-planner": ("requirements", "assumptions", "open_questions", "change_sets"),
-    "factory-reviewer": ("analysis", "findings", "verdict"),
     "pipeline": ("category", "summary", "fix_request", "retry_recommended"),
 }
 

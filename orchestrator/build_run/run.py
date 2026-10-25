@@ -50,6 +50,7 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
     flag_issues = {}
     declared_secrets = ()
     agent_user = None
+    coder_rounds = 0
 
     def __init__(self):
         e = os.environ
@@ -134,7 +135,11 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
     def first_coder_round(self):
         findings_path = self.work / "findings-0.json"
         findings_path.write_text(json.dumps({"blocking": [], "minor": []}))
-        return self.coder("1", self.prepare_task(), str(findings_path))
+        return self.coder_round("1", self.prepare_task(), str(findings_path))
+
+    def coder_round(self, label, task, findings_path):
+        self.coder_rounds += 1
+        return self.coder(label, task, findings_path)
 
     def prepare_task(self):
         self.name_the_flag()
@@ -160,7 +165,7 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         if gate_release.release_gate(True, True, tpassed, clean, head, self.head()):
             self.release_clean_run(base, head, flags)
             return True, head
-        self.stop_when_exhausted(rnd, test_failures)
+        self.stop_when_exhausted(test_failures)
         return False, self.coder_fix_round(rnd, findings, findings_path)
 
     def review_and_deploy(self, base, head, rnd):
@@ -245,15 +250,15 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
         self.state.d.update(outcome="released", message=f"Released {len(flags)} flag(s).")
         self.watch_release()
 
-    def stop_when_exhausted(self, rnd, test_failures):
+    def stop_when_exhausted(self, test_failures):
         if verify_deployed_app.failed_checks(test_failures):
             self.failed_tests += 1
             self.stop_when_tests_keep_failing()
-        self.stop_when_rounds_are_spent(rnd)
+        self.stop_when_rounds_are_spent()
 
     def coder_fix_round(self, rnd, findings, findings_path):
         summary = "\n".join(review_code.describe_finding(b) for b in findings["blocking"]) or "- (none; minor findings only)"
-        return self.coder(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
+        return self.coder_round(str(rnd + 1), f"Round {rnd + 1} fix list. Resolve every blocking item:\n{summary}", str(findings_path))
 
     def stop_when_tests_keep_failing(self):
         failed_tests = self.failed_tests
@@ -261,12 +266,9 @@ class BuildRun(PrepareRun, AgentCalls, WriteCode, ReviewCode, ShipCode, VerifyDe
             raise run_stops.NeedsHuman("round_limit", f"{failed_tests} deployed tests failed; each costs a push, a deploy and a tester pass, "
                                             "so the run stops for a person instead of trying again")
 
-    def stop_when_rounds_are_spent(self, rnd):
-        if rnd == self.lim["review_rounds"]:
-            raise run_stops.NeedsHuman("round_limit", f"{self.lim['review_rounds']} review rounds used without a clean pass")
-        if track_progress.stalled(self.state.d["scoreboard"], int(self.lim.get("stuck_rounds", 0))):
-            raise run_stops.NeedsHuman("stuck", f"the last {self.lim['stuck_rounds']} rounds left the same checks failing and the "
-                                      "same findings open; more fix rounds are not changing anything")
+    def stop_when_rounds_are_spent(self):
+        if self.coder_rounds >= self.lim["review_rounds"]:
+            raise run_stops.NeedsHuman("round_limit", f"{self.lim['review_rounds']} coder rounds used without a clean pass")
 
 
 def main():

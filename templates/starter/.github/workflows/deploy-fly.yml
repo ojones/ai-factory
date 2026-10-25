@@ -121,7 +121,7 @@ jobs:
 
       - name: Deploy
         run: |
-          flyctl deploy --app "$FLY_APP_NAME" \
+          flyctl deploy --app "$FLY_APP_NAME" --ha=false \
             --image "registry.fly.io/${FLY_APP_NAME}:${SHA}"
 
       - name: Write deploy summary

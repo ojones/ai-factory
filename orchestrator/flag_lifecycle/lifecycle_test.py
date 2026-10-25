@@ -28,8 +28,8 @@ class OneFlagThroughItsLife(unittest.TestCase):
         self.assertEqual(released, [KEY])
         self.assertTrue(gb.production_enabled(KEY))
         state = [state_entry("pin-notes", 100, "2026-10-10"), state_entry("later", 200, "2026-10-11")]
-        self.assertEqual(retirement_selection.piggyback_slugs(state, {"pin-notes", "later"}, "2026-10-12", 1, 5), ["pin-notes"], msg="5.3")
-        self.assertEqual(retirement_selection.piggyback_slugs(state[:1], {"pin-notes"}, "2026-10-12", 1, 5), [], msg="the newest release keeps its flag")
+        self.assertEqual(retirement_selection.piggyback_slugs(state, {"pin-notes", "later"}, 5), ["pin-notes"], msg="5.3")
+        self.assertEqual(retirement_selection.piggyback_slugs(state[:1], {"pin-notes"}, 5), [], msg="the newest release keeps its flag")
         task = "Add a thing" + retirement_selection.retirement_block(["pin-notes"])
         self.assertEqual(retirement_check.retire_slugs(task), ["pin-notes"])
         still_there = retirement_check.code_references(["abc:backend/src/a.ts:3:  isFeatureEnabled(res, \"pin-notes\")"])
@@ -62,7 +62,7 @@ class OneFlagThroughItsLife(unittest.TestCase):
         task = dark_feature.dark_removal_task(slug, 9)
         self.assertIn("flags.json", task)
         self.assertEqual(retirement_check.retire_slugs(task), [])
-        self.assertTrue(dark_feature.is_dark_broken({"flags": ["pin-notes"], "commits": ["h"], "outcome": "stuck"}))
+        self.assertTrue(dark_feature.is_dark_broken({"flags": ["pin-notes"], "commits": ["h"], "outcome": "round_limit"}))
         self.assertFalse(dark_feature.is_dark_broken({"flags": ["pin-notes"], "commits": ["h"], "outcome": "released"}))
 
 

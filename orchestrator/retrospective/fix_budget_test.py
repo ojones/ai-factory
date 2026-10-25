@@ -18,7 +18,7 @@ class FixedToday(unittest.TestCase):
             calls.append(args)
             return mock.Mock(stdout=json.dumps([{"number": 1}, {"number": 2}]))
         with mock.patch.object(tracker, "gh", gh):
-            n = fix_budget.warnings_fixed_today("o/ai-factory", "t", "demo", datetime(2026, 10, 19, 5, tzinfo=timezone.utc))
+            n = fix_budget.bugs_filed_today("o/ai-factory", "t", "demo", datetime(2026, 10, 19, 5, tzinfo=timezone.utc))
         self.assertEqual(n, 2)
         args = calls[0]
         self.assertEqual(args[args.index("--search") + 1], "created:>=2026-10-19")
@@ -28,11 +28,11 @@ class FixedToday(unittest.TestCase):
         def gh(args, token, check=False):
             raise RuntimeError("gh issue list failed")
         with mock.patch.object(tracker, "gh", gh), self.assertRaises(RuntimeError):
-            fix_budget.warnings_fixed_today("o/f", "t", "demo")
+            fix_budget.bugs_filed_today("o/f", "t", "demo")
 
     def test_no_output_is_zero(self):
         with mock.patch.object(tracker, "gh", lambda *a, **k: mock.Mock(stdout="")):
-            self.assertEqual(fix_budget.warnings_fixed_today("o/f", "t", "demo"), 0)
+            self.assertEqual(fix_budget.bugs_filed_today("o/f", "t", "demo"), 0)
 
 
 if __name__ == "__main__":

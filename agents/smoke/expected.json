@@ -15,11 +15,6 @@
     "verdict": "changes_requested",
     "match": "default|true|fail.?closed|dark"
   },
-  "unused-flag": {
-    "verdict": "clean",
-    "match": "",
-    "minor_match": "search-highlight"
-  },
   "clean": {
     "verdict": "clean",
     "match": ""
@@ -40,12 +35,6 @@
     "verdict": "clean",
     "match": "",
     "no_finding_match": "memory|restart|persist|lost"
-  },
-  "first-build-no-flags": {
-    "verdict": "clean",
-    "match": "",
-    "build_kind": "first build",
-    "no_finding_match": "flag"
   },
   "vacuous-test": {
     "verdict": "changes_requested",

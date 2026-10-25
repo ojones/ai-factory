@@ -16,7 +16,7 @@ class Outcomes(unittest.TestCase):
             self.assertFalse(outcomes.is_ok(o))
 
     def test_a_blocked_provider_and_a_switched_off_release_are_neither(self):
-        for o in (outcomes.PROVIDER_BLOCKED, outcomes.WATCHDOG_DISABLED, "stuck", "needs_human", "crash", "regression"):
+        for o in (outcomes.PROVIDER_BLOCKED, outcomes.WATCHDOG_DISABLED, "needs_human", "crash", "regression"):
             self.assertFalse(outcomes.is_ok(o))
             self.assertFalse(outcomes.is_answered(o))
 
