@@ -1,4 +1,4 @@
-PROTECTED = (".github/", "fly.toml", "fly/", "backend/src/feature-flags.ts", "INTAKE.md", "eslint.config.mjs", "scripts/check-flags.mjs", ".prettierrc.json", ".prettierignore")
+PROTECTED = (".github/", "fly.toml", "fly/", "docker-entrypoint.sh", "backend/src/feature-flags.ts", "INTAKE.md", "eslint.config.mjs", "scripts/check-flags.mjs", ".prettierrc.json", ".prettierignore")
 
 
 TEMPLATE_FILES_APPLIED_BY_ORCHESTRATOR = (".github/dependabot.yml", ".github/workflows/test-gate.yml", ".github/workflows/rollback-fly.yml",

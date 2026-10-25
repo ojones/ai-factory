@@ -369,6 +369,14 @@ The one value that varies per Managed App — the Fly app name — is never inje
 **Name collisions**: Fly app names are unique across all of Fly, so the Managed App's name (and therefore its repo name) must be globally free, not merely unused in the Factory's account. App Staging checks this before creating anything and refuses a taken name; pick something distinctive (e.g. prefix with the owner's handle).
 → [issue #21](https://github.com/ojones/ai-factory/issues/21)
 
+#### Data storage of a Managed App
+
+A Managed App keeps long-lived data on one **Fly volume** named `data` (1 GB, in the region `fly.toml` names as `primary_region`), mounted at `/data` and exposed to the app as `DATA_DIR`. `fly/provision.sh` creates the volume idempotently next to the Fly app, `fly.toml` mounts it, and the container's entrypoint hands `/data` to the unprivileged `node` user before dropping to it (a fresh volume is owned by root). Structured data goes in a SQLite file under `DATA_DIR`, through Node's built-in `node:sqlite` (FTS5 included), so there is no database server, no native npm dependency and no new account or secret. Everything else on the container's disk is lost on every deploy and restart.
+
+**Why this and not a managed database.** It costs about $0.15 per GB-month, uses the single Fly token the Factory already holds, and fits experimental apps with few users. The price is one machine in one region: deploys and rollbacks run with `--ha=false`, the app runs as a single instance, and Fly's daily volume snapshots are the only backup. An app that needs several instances or point-in-time recovery needs a hosted database (Neon for Postgres, Turso for SQLite), which would mean the Factory holding a new account and passing a connection string to each app as a secret; that is not built.
+
+**Teardown** destroys the Fly app and with it the volume and the data on it. Application code keeps all SQL in one persistence module, so a later move to a hosted database changes that module only.
+
 #### GHCR to Fly image handoff
 
 New container packages on GHCR are private by default, and changing a package's visibility is UI-only (no API), so unattended App Staging can't make them public. Fly can't authenticate to pull a private GHCR image. So `deploy-fly.yml` — the Fly-specific file — pulls the SHA-tagged image from GHCR using the job's own token, re-pushes it to `registry.fly.io/<app>:<sha>`, and deploys from there. GHCR stays the registry of record and `build.yml` is unchanged, so swappability is preserved. If a package does turn out to inherit its public repo's visibility, this step is redundant but harmless.

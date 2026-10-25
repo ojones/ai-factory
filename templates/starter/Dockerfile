@@ -46,7 +46,13 @@ COPY --from=build --chown=node:node /app/frontend/dist ./frontend/dist
 
 # The official node:alpine image already defines an unprivileged `node`
 # user (uid/gid 1000) — run as it instead of root.
-USER node
+ENV DATA_DIR=/data
+
+# A Fly volume mounts owned by root, so the container starts as root, hands /data to
+# the unprivileged `node` user and drops to it before running the app.
+RUN apk add --no-cache su-exec
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 3000
 CMD ["node", "backend/dist/index.js"]
