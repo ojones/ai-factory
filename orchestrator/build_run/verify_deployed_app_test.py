@@ -67,6 +67,38 @@ class VerificationStates(unittest.TestCase):
         self.assertEqual(verify_deployed_app.check_state(out["results"][-1]), "failed")
         self.assertEqual(out["results"][-1]["ui"], ["b"])
 
+    gated = {"id": "k", "name": "n", "ok": False, "blocked": True, "problems": ["status: expected 422, got 401"], "observed": {"status": 401}}
+
+    def reconciled_state(self, **fields):
+        doc = {"results": [{**self.result(), "api": ["k"], **fields}]}
+        return verify_deployed_app.reconcile_api_checks(doc, {"k": self.gated})["results"][0]
+
+    def test_a_check_the_app_refused_for_a_credential_is_blocked_not_failed(self):
+        out = self.reconciled_state()
+        self.assertEqual(verify_deployed_app.check_state(out), "blocked")
+        self.assertTrue(out["credential"])
+
+    def test_the_tester_calling_a_credential_refusal_a_failure_makes_it_blocked_too(self):
+        self.assertEqual(verify_deployed_app.check_state(self.reconciled_state(status="failed", passed=False)), "blocked")
+
+    def test_a_blocked_check_stays_passed_only_when_the_evidence_names_it_and_a_test_run(self):
+        covered = self.reconciled_state(evidence="k: npm run test:file passed with a fake key")
+        self.assertEqual(verify_deployed_app.check_state(covered), "passed")
+        for evidence in ("npm run test:file passed with a fake key", "k: there is no unit test for it", "k looked fine"):
+            self.assertEqual(verify_deployed_app.check_state(self.reconciled_state(evidence=evidence)), "blocked", msg=evidence)
+
+    def test_a_blocked_check_the_report_left_out_is_added_as_blocked_with_what_to_do(self):
+        out = verify_deployed_app.reconcile_api_checks({"results": [self.result(ui=())]}, {"k": self.gated})["results"][-1]
+        self.assertEqual(verify_deployed_app.check_state(out), "blocked")
+        self.assertIn("cite its id", out["evidence"])
+        self.assertEqual(verify_deployed_app.test_impact([out]), "dark_only")
+
+    def test_only_a_run_whose_every_unverified_check_was_refused_for_a_credential_skips_the_retest(self):
+        refused = {"status": "blocked", "credential": True}
+        self.assertTrue(verify_deployed_app.only_credential_blocked([refused]))
+        self.assertFalse(verify_deployed_app.only_credential_blocked([refused, {"status": "not_run"}]))
+        self.assertFalse(verify_deployed_app.only_credential_blocked([]))
+
     def test_api_and_ui_checks_are_reconciled_separately(self):
         doc = {"results": [{**self.result(), "api": ["a"]}]}
         self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_api_checks(doc, {"a": self.ok})["results"][0]), "passed")
