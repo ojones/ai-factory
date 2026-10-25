@@ -7,7 +7,7 @@ Some tests exercise the code (what the rule says must happen), some read a file 
 | ID | Rule | Source | Step |
 |---|---|---|---|
 | INV-01 | An Agent runs with a whitelisted environment: its own credential and role inputs, never the PAT, the Fly token, the GrowthBook admin key or the DeepInfra parent key. | ARCHITECTURE: Credentials | 4.3 |
-| INV-02 | A coder commit that touches a protected file (`.github/`, `fly.toml`, `fly/`, the flag wrapper, `INTAKE.md`, the lint and formatter config) is rejected. | ARCHITECTURE: Agents and Build Run stages | 4.3 |
+| INV-02 | A coder commit that touches a protected file (`.github/`, `fly.toml`, `fly/`, `docker-entrypoint.sh`, the flag wrapper, `INTAKE.md`, the lint and formatter config) is rejected. | ARCHITECTURE: Agents and Build Run stages | 4.3 |
 | INV-03 | A release happens only when CI is green, the deploy is healthy, the tester passed and the reviewer is clean, all for the same SHA. | ARCHITECTURE: stage 5 | 4.12 |
 | INV-04 | The reviewer's verdict is derived from its findings; the model's own `verdict` field is ignored. | ARCHITECTURE: Reviewer | 4.5 |
 | INV-05 | A tester check passes only in the state `passed`; `failed`, `blocked` and `not_run` all keep a change from releasing. | ARCHITECTURE: Tester | 4.9 |

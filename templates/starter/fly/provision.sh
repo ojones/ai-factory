@@ -19,7 +19,7 @@ else
   flyctl apps create "$FLY_APP_NAME" --org "$ORG"
 fi
 
-REGION="$(sed -n 's/^primary_region *= *"\(.*\)"/\1/p' fly.toml)"
+REGION="$(sed -n 's/^primary_region *= *"\([^"]*\)".*/\1/p' fly.toml)"
 : "${REGION:?fly.toml must name primary_region}"
 
 if flyctl volumes list --app "$FLY_APP_NAME" --json | jq -e 'any(.[]; .name == "data")' >/dev/null; then
