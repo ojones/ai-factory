@@ -156,17 +156,18 @@ else
 fi
 
 # A failed check is a failure event: the Retrospective judges it and Try Fix files the fix, so the failure heals through the same loop as a failed Build Run.
+EVENTS="$RUNNER_TEMP/staging-events.json"
+VERDICTS="$RUNNER_TEMP/staging-verdicts.json"
 hand_failures_to_try_fix() {
-  PYTHONPATH=orchestrator python3 -m retrospective.judge_events "$EVENTS" "$RUNNER_TEMP/staging-verdicts.json" &&
-    PYTHONPATH=orchestrator python3 -m try_fix.file_events "$RUNNER_TEMP/staging-verdicts.json" ||
-    echo "::warning::the failed checks could not be handed to Try Fix"
+  PYTHONPATH=orchestrator python3 -m retrospective.judge_events "$EVENTS" "$VERDICTS" &&
+    PYTHONPATH=orchestrator python3 -m try_fix.file_events "$VERDICTS" ||
+    comment "**The failed checks could not be handed to Try Fix**, so no fix was filed. See the [run log]($RUN_URL)."
 }
 
 # --- 8. verify, then hand on ------------------------------------------------------------
 # Prove the seeded app works, tell the Intake, and close the child so the first business child starts.
 
 SEED_SHA="$(pgit ls-remote "$REMOTE" refs/heads/main | cut -f1)"
-EVENTS="$RUNNER_TEMP/staging-events.json"
 if ! APP_NAME="$SLUG" SEED_SHA="$SEED_SHA" FAILURE_EVENTS_FILE="$EVENTS" PYTHONPATH=orchestrator python3 -m staging.verify_infrastructure; then
   HANDLED=1
   hand_failures_to_try_fix

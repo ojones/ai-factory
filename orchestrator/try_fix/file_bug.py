@@ -78,9 +78,14 @@ class BugFiling:
 
     def for_factory(self):
         got = factory_fix_request.file_bug_request(self.repo, self.token, self.verdict, self.doc, self.run_url, self.target)
-        if self.story_is_open_child() and self.ev["severity"] == "failure":
+        if self.ev["source"] == "staging" and self.story_is_open_child():
+            self.point_staging_at(got)
+        elif self.story_is_open_child() and self.ev["severity"] == "failure":
             self.hold(self.factory_hold_reason())
         return got
+
+    def point_staging_at(self, got):
+        self.note_once("staging-fix", f"Staging cannot pass until the Factory is fixed: {got['url']}. Add `proceed-with-change` to this child again once that is closed.")
 
     def factory_hold_reason(self):
         if self.target != "factory":
