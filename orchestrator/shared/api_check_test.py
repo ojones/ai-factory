@@ -38,6 +38,14 @@ class Logic(unittest.TestCase):
         self.assertTrue(a.mismatches({"t": "a"}, {}))
         self.assertTrue(a.mismatches([1, 2], [1]))
 
+    def test_a_refusal_for_a_credential_is_blocked_unless_the_spec_expects_it(self):
+        self.assertTrue(a.wants_credential({"status": 422}, 401))
+        self.assertTrue(a.wants_credential({"status": [200, 202]}, 403))
+        self.assertFalse(a.wants_credential({"status": 401}, 401))
+        self.assertFalse(a.wants_credential({"status": [401, 403]}, 403))
+        self.assertFalse(a.wants_credential({"status": 200}, 404))
+        self.assertFalse(a.wants_credential({"json": {}}, 401))
+
     def test_status_may_be_a_list(self):
         self.assertEqual(a.compare({"status": [200, 201]}, 201, "", None, {}), [])
         self.assertTrue(a.compare({"status": 201}, 200, "", None, {}))

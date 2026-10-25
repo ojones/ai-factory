@@ -68,12 +68,15 @@ def append_evidence(r, note):
 
 def reconcile_cited_result(r, found, field, label):
     ids = _helper_ids(r, field)
-    failing = [i for i in ids if i in found and not found[i].get("ok")]
+    seen = [found[i] for i in ids if i in found and not found[i].get("ok")]
+    failing = [res["id"] for res in seen if not res.get("blocked")]
     unknown = [i for i in ids if i not in found]
     if check_state(r) != "passed":
         return
     if failing:
         r.update(status="failed", passed=False, evidence=append_evidence(r, f"the {label} helper observed otherwise: " + helper_failure_text(found, failing)))
+    elif seen and not RAN_A_TEST_RE.search(str(r.get("evidence") or "")):
+        r.update(status="blocked", passed=False, evidence=append_evidence(r, f"the {label} helper was refused for want of a credential it does not hold: " + helper_failure_text(found, [res["id"] for res in seen])))
     elif unknown:
         r.update(status="not_run", passed=False, evidence=append_evidence(r, f"cites {label} id(s) the helper never ran: " + ", ".join(unknown)))
 
@@ -81,8 +84,9 @@ def reconcile_cited_result(r, found, field, label):
 def unreported_failure(res, i, flag, field, label):
     observed = res.get("observed") or {}
     seen = f" (status {observed.get('status')})" if "status" in observed else ""
-    return {"flag": flag, "check": f"{label} {i}: {res.get('name', i)}", "status": "failed", "passed": False, field: [i],
-            "evidence": f"the {label} helper observed a failure the report did not mention: " + "; ".join(res.get("problems") or ["failed"]) + seen}
+    state = "blocked" if res.get("blocked") else "failed"
+    return {"flag": flag, "check": f"{label} {i}: {res.get('name', i)}", "status": state, "passed": False, field: [i],
+            "evidence": f"the {label} helper observed a {state} check the report did not mention: " + "; ".join(res.get("problems") or ["failed"]) + seen}
 
 
 def reconcile_helper_checks(doc, found, field, label):

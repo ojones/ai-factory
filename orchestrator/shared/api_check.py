@@ -10,6 +10,7 @@ import urllib.request
 MAX_CHECKS = 100
 TIMEOUT = 15
 BODY_LIMIT = 2000
+CREDENTIAL_STATUSES = {401, 403}
 
 TYPES = {
     "<number>": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
@@ -104,6 +105,13 @@ def header_problems(expect, headers):
     return problems + [f"header {name} is present, and must not be" for name in expect.get("header_absent", []) if name.lower() in lowered]
 
 
+def wants_credential(expect, status):
+    if status not in CREDENTIAL_STATUSES or "status" not in expect:
+        return False
+    want = expect["status"] if isinstance(expect["status"], list) else [expect["status"]]
+    return not CREDENTIAL_STATUSES.intersection(want)
+
+
 def compare(expect, status, body_text, body_json, headers):
     return status_problems(expect, status) + json_problems(expect, body_json) + body_problems(expect, body_text) + header_problems(expect, headers)
 
@@ -186,7 +194,7 @@ def run_checks(checks, base, token, log_path=None):
         body = text if len(text) <= BODY_LIMIT else text[:BODY_LIMIT] + "..."
         if token:
             body = body.replace(token, "[TOKEN]")
-        results.append({"id": c["id"], "name": c.get("name") or c["id"], "ok": not problems, "problems": problems,
+        results.append({"id": c["id"], "name": c.get("name") or c["id"], "ok": not problems, "blocked": not error and wants_credential(c["expect"], status), "problems": problems,
                         "expected": c["expect"], "observed": {"status": status, "body": body}, "ms": round((time.time() - began) * 1000)})
         if log_path:
             with open(log_path, "a", encoding="utf-8") as f:
@@ -200,10 +208,11 @@ def render(results):
         if r["ok"]:
             lines.append(f"PASS {r['id']}: {r['name']}")
         else:
-            lines.append(f"FAIL {r['id']}: {r['name']}\n     " + "; ".join(r["problems"])
+            lines.append(f"{'BLOCKED' if r.get('blocked') else 'FAIL'} {r['id']}: {r['name']}\n     " + "; ".join(r["problems"])
                          + f"\n     observed: status {r['observed']['status']}, body {r['observed']['body'][:200]!r}")
-    failed = sum(not r["ok"] for r in results)
-    lines.append(f"{len(results) - failed} passed, {failed} failed")
+    failed = sum(not r["ok"] and not r.get("blocked") for r in results)
+    blocked = sum(bool(r.get("blocked")) for r in results)
+    lines.append(f"{len(results) - failed - blocked} passed, {failed} failed, {blocked} blocked (the app asked for a credential this tester does not hold)")
     return "\n".join(lines)
 
 

@@ -22,6 +22,8 @@ A check has an `id` (unique), a `name` in the spec's words, a `request` (`method
 ```
 Use `curl` only for exploring something the helper cannot express.
 
+A route may be gated by a secret that only the app holds (an API key, a shared secret in a header). You do not hold it and must not look for it. Check what you can without it: a dark route answers its dark behaviour only without the Preview Token, but once you send the token (`auth: "preview"`) the app's own gate answers, so a "missing or wrong key is rejected" check uses `auth: "preview"` and no key header, never `auth: "none"` (that only shows the dark flag). Write the checks that need a valid key anyway, with the status the spec gives: when the app answers 401 or 403 instead, the helper logs the check as blocked, not failed, because the live app cannot be asked. Cover each blocked check with the repository's own test of that behaviour (run it, cite the check's id in `api`, and put the test run in `evidence`), or report it as `blocked`. Do not report it as `failed`, and do not mark it `passed` without that test run.
+
 {{ui_section}}
 
 Test like this:

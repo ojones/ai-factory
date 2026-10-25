@@ -67,6 +67,16 @@ class VerificationStates(unittest.TestCase):
         self.assertEqual(verify_deployed_app.check_state(out["results"][-1]), "failed")
         self.assertEqual(out["results"][-1]["ui"], ["b"])
 
+    def test_a_check_the_app_refused_for_a_credential_is_blocked_not_failed(self):
+        gated = {"id": "k", "name": "n", "ok": False, "blocked": True, "problems": ["status: expected 422, got 401"], "observed": {"status": 401}}
+        out = verify_deployed_app.reconcile_api_checks({"results": [{**self.result(), "api": ["k"]}]}, {"k": gated})
+        self.assertEqual(verify_deployed_app.check_state(out["results"][0]), "blocked")
+        ran = {**self.result(), "api": ["k"], "evidence": "npm run test:file passed with a fake key"}
+        self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_api_checks({"results": [ran]}, {"k": gated})["results"][0]), "passed")
+        left_out = verify_deployed_app.reconcile_api_checks({"results": [self.result(ui=())]}, {"k": gated})
+        self.assertEqual(verify_deployed_app.check_state(left_out["results"][-1]), "blocked")
+        self.assertEqual(verify_deployed_app.test_impact(verify_deployed_app.derive_test(left_out, [""])[1]), "dark_only")
+
     def test_api_and_ui_checks_are_reconciled_separately(self):
         doc = {"results": [{**self.result(), "api": ["a"]}]}
         self.assertEqual(verify_deployed_app.check_state(verify_deployed_app.reconcile_api_checks(doc, {"a": self.ok})["results"][0]), "passed")
