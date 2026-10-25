@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -81,11 +82,28 @@ class AgentRunner:
         after = self.on_spend(jwt)
         self.raise_if_provider_blocked(role, label, jsonl)
         usage = self.collect_usage(role, label, known, home)
+        self.seal_home(home)
+        self.seal_logs(role, label)
         if usage:
             usage["seconds"] = round(time.time() - began, 1)
         cost = self.budget.tokens[jwt]
         self.log_run(role, label, rc, cost, after, usage)
         return rc, cost, usage
+
+    def seal_home(self, home):
+        if not (self.agent_user and home and "RUNNER_TEMP" in os.environ and Path(home).exists()):
+            return
+        target = Path(os.environ["RUNNER_TEMP"]) / "sealed-agent-homes" / f"{Path(home).name}-{time.time_ns()}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(home), str(target))
+        except OSError as e:
+            log(f"could not move {Path(home).name} out of the Agents' reach ({type(e).__name__}); the next Agent can read it")
+
+    def seal_logs(self, role, label):
+        if self.agent_user:
+            for path in self.art.glob(f"openhands-{role}-{label}*"):
+                path.chmod(0o600)
 
     def conversations_root(self, home=None):
         return Path(home or os.environ.get("HOME", "~")).expanduser() / ".openhands" / "conversations"

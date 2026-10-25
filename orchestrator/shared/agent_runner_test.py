@@ -180,5 +180,50 @@ class Provider(unittest.TestCase):
         self.assertTrue(provider.provider_blocked_text("BadRequestError: You need positive balance"))
 
 
+class SealHome(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="seal-test-")
+        self.home = Path(self.tmp) / "work" / "home-tester-1"
+        (self.home / ".openhands").mkdir(parents=True)
+        (self.home / ".openhands" / "events.json").write_text("{}", encoding="utf-8")
+        self.sealed = Path(self.tmp) / "temp"
+
+    def seal(self, agent_user):
+        with mock.patch.dict("os.environ", {"RUNNER_TEMP": str(self.sealed)}):
+            runner_in(self.tmp, agent_user=agent_user).seal_home(self.home)
+
+    def test_a_finished_agents_home_leaves_the_agents_reach_with_its_files(self):
+        self.seal("agent")
+        self.assertFalse(self.home.exists())
+        moved = list((self.sealed / "sealed-agent-homes").glob("home-tester-1-*"))
+        self.assertEqual(len(moved), 1)
+        self.assertTrue((moved[0] / ".openhands" / "events.json").exists())
+
+    def test_a_finished_agents_logs_become_private_to_the_orchestrator(self):
+        art = Path(self.tmp) / "art"
+        art.mkdir()
+        log_file, other = art / "openhands-tester-t1.jsonl", art / "progress.json"
+        for f in (log_file, other):
+            f.write_text("{}", encoding="utf-8")
+            f.chmod(0o644)
+        runner_in(self.tmp, agent_user="agent").seal_logs("tester", "t1")
+        self.assertEqual(log_file.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(other.stat().st_mode & 0o777, 0o644)
+
+    def test_without_isolation_the_home_stays_where_it_is(self):
+        self.seal(None)
+        self.assertTrue(self.home.exists())
+
+    def test_without_a_runner_temp_the_home_stays_where_it_is(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            runner_in(self.tmp, agent_user="agent").seal_home(self.home)
+        self.assertTrue(self.home.exists())
+
+    def test_a_home_that_cannot_be_moved_is_left_and_the_run_goes_on(self):
+        with mock.patch("shared.agent_runner.shutil.move", side_effect=PermissionError):
+            self.seal("agent")
+        self.assertTrue(self.home.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
