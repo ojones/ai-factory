@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,7 +93,7 @@ class Run(unittest.TestCase):
             with_dirs(tmp)
             runner = runner_in(tmp, agent_user="agent")
             with mock.patch.object(agent_process, "run_watched", return_value=0) as watched, mock.patch("builtins.print"), \
-                    mock.patch.dict("os.environ", {"RUNNER_TEMP": str(Path(tmp) / "temp")}):
+                    mock.patch.dict("os.environ", {"RUNNER_TEMP": str(Path(tmp) / "temp")}), mock.patch("shared.agent_runner.subprocess.run"):
                 runner.run("coder", "1", "p")
             self.assertEqual(len(list((Path(tmp) / "temp" / "sealed-agent-homes").glob("home-agent-*"))), 1)
             self.assertEqual(watched.call_args[1]["user"], "agent")
@@ -190,8 +191,9 @@ class SealHome(unittest.TestCase):
         self.sealed = Path(self.tmp) / "temp"
 
     def seal(self, agent_user):
-        with mock.patch.dict("os.environ", {"RUNNER_TEMP": str(self.sealed)}):
+        with mock.patch.dict("os.environ", {"RUNNER_TEMP": str(self.sealed)}), mock.patch("shared.agent_runner.subprocess.run") as run:
             runner_in(self.tmp, agent_user=agent_user).seal_home(self.home)
+        return run
 
     def test_a_finished_agents_home_leaves_the_agents_reach_with_its_files(self):
         self.seal("agent")
@@ -199,6 +201,10 @@ class SealHome(unittest.TestCase):
         moved = list((self.sealed / "sealed-agent-homes").glob("home-tester-1-*"))
         self.assertEqual(len(moved), 1)
         self.assertTrue((moved[0] / ".openhands" / "events.json").exists())
+
+    def test_the_orchestrator_takes_the_agents_files_before_moving_them(self):
+        run = self.seal("agent")
+        self.assertEqual(run.call_args.args[0][:5], ["sudo", "-n", "chown", "-R", f"{os.getuid()}:{os.getgid()}"])
 
     def test_a_finished_agents_logs_become_private_to_the_orchestrator(self):
         art = Path(self.tmp) / "art"
@@ -210,6 +216,18 @@ class SealHome(unittest.TestCase):
         runner_in(self.tmp, agent_user="agent").seal_logs("tester", "t1")
         self.assertEqual(log_file.stat().st_mode & 0o777, 0o600)
         self.assertEqual(other.stat().st_mode & 0o777, 0o644)
+
+    def test_a_secret_the_agent_printed_is_removed_from_its_logs(self):
+        art = Path(self.tmp) / "art"
+        art.mkdir()
+        log_file = art / "openhands-tester-t1.jsonl"
+        log_file.write_text('{"output": "s3cr3t-token\\n"}', encoding="utf-8")
+        runner_in(self.tmp, agent_user=None).seal_logs("tester", "t1", ["s3cr3t-token", ""])
+        self.assertEqual(log_file.read_text(encoding="utf-8"), '{"output": "[redacted]\\n"}')
+
+    def test_only_credentials_among_the_extra_environment_are_secrets(self):
+        env = {"PREVIEW_TOKEN": "p", "API_CHECK_BASE": "https://app", "UI_CHECK_DIR": "/w"}
+        self.assertEqual(agent_runner.secret_values("jwt", env), ["jwt", "p"])
 
     def test_without_isolation_the_home_stays_where_it_is(self):
         self.seal(None)
