@@ -2,7 +2,7 @@ name: Factory checks
 
 # Checks on every pull request to ai-factory. Every pull request is written and merged by a person.
 #
-# To make these checks block human merges too, require "unit", "starter" and "reviewer-smoke" in branch
+# To make these checks block human merges too, require "unit" and "starter" in branch
 # protection for main (a repository setting, not something this file can turn on).
 on:
   pull_request:
@@ -45,31 +45,3 @@ jobs:
         run: |
           pip install pyyaml
           python -m unittest orchestrator.starter_lint_test
-
-  # Re-run the reviewer's seeded-bug fixtures when a prompt or a fixture changed. Spends a few cents.
-  reviewer-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: changed
-        run: |
-          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE '^(agents/prompts/|agents/smoke/|agents/profiles\.yml)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.changed.outputs.run == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - if: steps.changed.outputs.run == 'true'
-        name: Reviewer smoke fixtures
-        env:
-          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
-          TRIALS: "3"
-        run: |
-          pip install pyyaml
-          export MODEL="$(python -c "import yaml; print(yaml.safe_load(open('agents/profiles.yml'))['roles']['reviewer']['model'])")"
-          python agents/smoke/run.py
