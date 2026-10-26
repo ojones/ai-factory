@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -83,7 +84,7 @@ class AgentRunner:
         self.raise_if_provider_blocked(role, label, jsonl)
         usage = self.collect_usage(role, label, known, home)
         self.seal_home(home)
-        self.seal_logs(role, label)
+        self.seal_logs(role, label, secret_values(jwt, extra_env))
         if usage:
             usage["seconds"] = round(time.time() - began, 1)
         cost = self.budget.tokens[jwt]
@@ -96,13 +97,18 @@ class AgentRunner:
         target = Path(os.environ["RUNNER_TEMP"]) / "sealed-agent-homes" / f"{Path(home).name}-{time.time_ns()}"
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
+            self.take_ownership(home)
             shutil.move(str(home), str(target))
-        except OSError as e:
+        except (OSError, subprocess.CalledProcessError) as e:
             log(f"could not move {Path(home).name} out of the Agents' reach ({type(e).__name__}); the next Agent can read it")
 
-    def seal_logs(self, role, label):
-        if self.agent_user:
-            for path in self.art.glob(f"openhands-{role}-{label}*"):
+    def take_ownership(self, home):
+        subprocess.run(["sudo", "-n", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(home)], check=True, capture_output=True, timeout=60)
+
+    def seal_logs(self, role, label, secrets=()):
+        for path in self.art.glob(f"openhands-{role}-{label}*"):
+            redact(path, secrets)
+            if self.agent_user:
                 path.chmod(0o600)
 
     def conversations_root(self, home=None):
@@ -121,6 +127,20 @@ class AgentRunner:
                 (self.art / f"openhands-{role}-{label}-state.json").write_text(src.read_text())
                 return agent_usage.summarize_token_usage(doc)
         return None
+
+
+def secret_values(jwt, extra_env):
+    named = [value for name, value in (extra_env or {}).items() if any(word in name for word in ("TOKEN", "SECRET", "KEY"))]
+    return [jwt, *named]
+
+
+def redact(path, secrets):
+    text = path.read_text(encoding="utf-8", errors="surrogateescape")
+    cleaned = text
+    for secret in filter(None, secrets):
+        cleaned = cleaned.replace(secret, "[redacted]")
+    if cleaned != text:
+        path.write_text(cleaned, encoding="utf-8", errors="surrogateescape")
 
 
 def accepted(doc, check):
