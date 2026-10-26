@@ -1,5 +1,6 @@
 OK = ("released", "nothing_to_release")
 ANSWERED = ("refused", "awaiting_secret")
+CRASHED = ("crash", "running")
 PROVIDER_BLOCKED = "provider_blocked"
 WATCHDOG_DISABLED = "watchdog_disabled"
 FLAG_MISSING = "flag_missing"

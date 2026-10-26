@@ -63,7 +63,7 @@ class Finalize(unittest.TestCase):
 
     def test_a_regression_rolls_the_deploy_back_through_ci_before_anything_is_reported(self):
         code, report, saved, summary, calls = self.run_finalize(Run, "regression")
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
         self.assertEqual(report["rollback"]["status"], "skipped" if False else "rolled_back")
         self.deploy.assert_called_once()
         self.assertIn("**Rollback**: the live app was redeployed from", summary)
@@ -82,7 +82,7 @@ class Finalize(unittest.TestCase):
 
     def test_a_failed_run_that_is_not_a_regression_is_fixed_forward_with_no_rollback(self):
         code, report, saved, summary, calls = self.run_finalize(Run)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
         self.assertEqual(report["rollback"]["status"], "skipped")
         self.deploy.assert_not_called()
         self.assertFalse([c for c in calls if c[0] == "git"])
@@ -93,9 +93,13 @@ class Finalize(unittest.TestCase):
         edits = [c for c in calls if c[:3] == ["gh", "issue", "edit"] and "--add-label" in c]
         self.assertTrue(any(c[c.index("--add-label") + 1] == f"{dark_feature.DARK_BROKEN},flag:thing" and c[3] == "66" for c in edits))
 
+    def test_only_a_crash_turns_the_workflow_red(self):
+        for outcome in ("crash", "running"):
+            self.assertEqual(self.run_finalize(Run, outcome)[0], 1, outcome)
+
     def test_a_provider_block_says_to_top_up_and_does_not_roll_back(self):
         code, report, saved, summary, calls = self.run_finalize(Run, "provider_blocked")
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
         self.assertEqual(report["rollback"]["status"], "skipped")
         comment = next(c for c in calls if c[:3] == ["gh", "issue", "comment"])
         self.assertIn("topped up", comment[comment.index("--body") + 1])
