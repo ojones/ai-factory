@@ -81,8 +81,9 @@ flowchart TD
         S4_8 --> S4_3
         S4_7 --> S4_9
         S4_9 -->|"failed new check, rounds left<br/>(review_rounds 4, test_rounds 2)"| S4_3
-        S4_9 -->|"blocked or not_run"| S4_10
+        S4_9 -->|"blocked or not_run<br/>(not when only credential refusals)"| S4_10
         S4_10 --> S4_9
+        S4_9 -->|"only credential refusals<br/>needs-human, no retest"| S4_14
         S4_9 -->|"existing behaviour broke = regression"| S4_11
         S4_11 --> S4_14
         S4_9 -->|"all checks passed"| S4_12

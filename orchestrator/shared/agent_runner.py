@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -85,6 +86,7 @@ class AgentRunner:
         usage = self.collect_usage(role, label, known, home)
         self.seal_home(home)
         self.seal_logs(role, label, secret_values(jwt, extra_env))
+        self.redact_uploads(secret_values(jwt, extra_env))
         if usage:
             usage["seconds"] = round(time.time() - began, 1)
         cost = self.budget.tokens[jwt]
@@ -99,11 +101,22 @@ class AgentRunner:
         try:
             self.take_ownership(home)
             shutil.move(str(home), str(target))
-        except (OSError, subprocess.CalledProcessError) as e:
-            log(f"could not move {Path(home).name} out of the Agents' reach ({type(e).__name__}); the next Agent can read it")
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"could not move {Path(home).name} out of the Agents' reach ({type(e).__name__}: {failure_detail(e)}); the next Agent can read it")
 
     def take_ownership(self, home):
         subprocess.run(["sudo", "-n", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(home)], check=True, capture_output=True, timeout=60)
+
+    def redact_uploads(self, secrets):
+        for pattern in UPLOADED_PATTERNS:
+            for path in self.work.glob(pattern):
+                self.redact_or_say(path, secrets)
+
+    def redact_or_say(self, path, secrets):
+        try:
+            redact(path, secrets)
+        except OSError as e:
+            log(f"could not redact {path.name} ({type(e).__name__}); it is uploaded as it is")
 
     def seal_logs(self, role, label, secrets=()):
         for path in self.art.glob(f"openhands-{role}-{label}*"):
@@ -129,16 +142,40 @@ class AgentRunner:
         return None
 
 
+UPLOADED_PATTERNS = ("test-report-*.json", "api-check-*.jsonl", "ui-check-*.jsonl", "verdict-*.json", "diagnosis-*.json", "findings-*.json")
+SECRET_NAME_WORDS = ("TOKEN", "SECRET", "KEY")
+MIN_SECRET_LENGTH = 6
+
+
 def secret_values(jwt, extra_env):
-    named = [value for name, value in (extra_env or {}).items() if any(word in name for word in ("TOKEN", "SECRET", "KEY"))]
+    named = [value for name, value in (extra_env or {}).items() if any(word in name.upper() for word in SECRET_NAME_WORDS)]
     return [jwt, *named]
+
+
+def failure_detail(error):
+    stderr = getattr(error, "stderr", None)
+    text = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else str(stderr or error)
+    return " ".join(text.split())[:200]
+
+
+def spellings(secret):
+    return {secret, json.dumps(secret)[1:-1]}
+
+
+def redactable(secrets):
+    return [secret for secret in secrets if secret and len(secret) >= MIN_SECRET_LENGTH]
+
+
+def redacted(text, secrets):
+    for secret in redactable(secrets):
+        for spelling in spellings(secret):
+            text = text.replace(spelling, "[redacted]")
+    return text
 
 
 def redact(path, secrets):
     text = path.read_text(encoding="utf-8", errors="surrogateescape")
-    cleaned = text
-    for secret in filter(None, secrets):
-        cleaned = cleaned.replace(secret, "[redacted]")
+    cleaned = redacted(text, secrets)
     if cleaned != text:
         path.write_text(cleaned, encoding="utf-8", errors="surrogateescape")
 
