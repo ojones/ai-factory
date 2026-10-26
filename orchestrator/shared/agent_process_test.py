@@ -21,12 +21,26 @@ class RunWatched(unittest.TestCase):
         rc = agent_process.run_watched([sys.executable, "-c", "import time; time.sleep(60)"], None, os.environ.copy(), out, 30, 1, poll=0.2)
         self.assertEqual(rc, "stall")
         self.assertLess(time.time() - started, 10)
-        rc = agent_process.run_watched([sys.executable, "-c", "import time\nfor i in range(6):\n print(i, flush=True); time.sleep(0.4)"],
+        rc = agent_process.run_watched([sys.executable, "-c", "import time\nfor i in range(6):\n print('{}', flush=True); time.sleep(0.4)"],
                            None, os.environ.copy(), out, 30, 1.5, poll=0.2)
         self.assertEqual(rc, 0)
-        rc = agent_process.run_watched([sys.executable, "-c", "import time\nwhile True:\n print('x', flush=True); time.sleep(0.2)"],
+        rc = agent_process.run_watched([sys.executable, "-c", "import time\nwhile True:\n print('{}', flush=True); time.sleep(0.2)"],
                            None, os.environ.copy(), out, 1, 5, poll=0.2)
         self.assertEqual(rc, "timeout")
+
+    def test_output_that_is_not_an_event_does_not_count_as_progress(self):
+        out = Path(tempfile.mkdtemp()) / "o.jsonl"
+        noise = "import time\nwhile True:\n print('still thinking', flush=True); time.sleep(0.2)"
+        rc = agent_process.run_watched([sys.executable, "-c", noise], None, os.environ.copy(), out, 30, 1.5, poll=0.2)
+        self.assertEqual(rc, "stall")
+
+    def test_new_events_counts_only_whole_event_lines_and_remembers_where_it_stopped(self):
+        out = Path(tempfile.mkdtemp()) / "o.jsonl"
+        out.write_bytes(b'{"a": 1}\nwarning\n{"b"')
+        offset, events = agent_process.new_events(out, 0)
+        self.assertEqual(events, 1)
+        out.write_bytes(out.read_bytes() + b': 2}\n')
+        self.assertEqual(agent_process.new_events(out, offset)[1], 1)
 
 
 class AgentIsolation(unittest.TestCase):

@@ -67,21 +67,29 @@ def silent_too_long(last_progress, now, stall_seconds):
     return stall_seconds > 0 and now - last_progress >= stall_seconds
 
 
+def new_events(path, offset):
+    with open(path, "rb") as f:
+        f.seek(offset)
+        chunk = f.read()
+    whole = chunk[:chunk.rfind(b"\n") + 1]
+    return offset + len(whole), sum(1 for line in whole.splitlines() if line.startswith(b"{"))
+
+
 def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0, user=None, pidfile=None):
     with open(out_path, "w", encoding="utf-8") as f:
         proc = subprocess.Popen(agent_command(cmd, env, user, pidfile), cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT,
                                 start_new_session=True)
         began = last_change = time.time()
-        size = -1
+        offset = 0
         while True:
             try:
                 return proc.wait(timeout=poll)
             except subprocess.TimeoutExpired:
                 pass
             now = time.time()
-            current = Path(out_path).stat().st_size
-            if current != size:
-                size, last_change = current, now
+            offset, events = new_events(out_path, offset)
+            if events:
+                last_change = now
             reason = "timeout" if now - began >= timeout_s else "stall" if silent_too_long(last_change, now, stall_s) else None
             if reason:
                 kill_agent(proc, user, pidfile)
