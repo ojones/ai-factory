@@ -46,9 +46,13 @@ def collect_facts(work, d):
             "unverified": dict_entries(d, "unverified", "check"), "bugs": dict_entries(d, "bugs", "check")}
 
 
+def last_stage(facts):
+    return facts["stages"][-1]["stage"] if facts["stages"] else ""
+
+
 def fingerprint(facts):
     basis = facts["recurring_findings"] or sorted(tracker.normalize(s) for s in facts["final_blocking"])
-    return hashlib.sha1(json.dumps([facts["outcome"], basis]).encode()).hexdigest()[:8]
+    return hashlib.sha1(json.dumps([facts["outcome"], last_stage(facts), basis]).encode()).hexdigest()[:8]
 
 
 def render_facts(facts):

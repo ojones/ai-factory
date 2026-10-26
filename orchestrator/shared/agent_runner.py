@@ -5,7 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from shared import agent_output, agent_process, agent_usage, provider
+from shared import agent_output, agent_process, agent_tail, agent_usage, provider
 from shared.console import log
 from shared.run_stops import NeedsHuman, ProviderBlocked
 
@@ -187,8 +187,8 @@ def accepted(doc, check):
         return False
 
 
-def no_output_error(role, total_cost, note, exhausted):
-    problem = f" (last problem: {note})" if note else ""
+def no_output_error(role, total_cost, note, exhausted, last_words=""):
+    problem = (f" (last problem: {note})" if note else "") + last_words
     if exhausted:
         return NeedsHuman("other", f"the {role} spent its whole credential (${total_cost:.2f}) without writing a usable output file{problem}; a second attempt would only repeat it")
     return NeedsHuman("other", f"the {role} produced no valid output file twice{problem}")
@@ -213,4 +213,4 @@ def json_output(attempt, path, role, label, log_path, cwd=None, check=None, rest
             exhausted = True
             break
     record_failed(total_cost, f"no usable output after {attempts} attempt(s)", usage)
-    raise no_output_error(role, total_cost, note, exhausted)
+    raise no_output_error(role, total_cost, note, exhausted, agent_tail.last_words_note(log_path(role, attempt_label)))

@@ -45,6 +45,15 @@ class Facts(unittest.TestCase):
         self.assertEqual(len(run_facts.fingerprint(facts)), 8)
 
 
+class Stopped(unittest.TestCase):
+    def test_the_stage_a_run_stopped_in_is_part_of_the_fingerprint(self):
+        stage = lambda name: [{"stage": name}]
+        facts = {"outcome": "needs_human", "recurring_findings": [], "final_blocking": []}
+        coder, tester = (run_facts.fingerprint({**facts, "stages": stage(n)}) for n in ("Coder", "Test"))
+        self.assertNotEqual(coder, tester)
+        self.assertEqual(coder, run_facts.fingerprint({**facts, "stages": stage("Coder")}))
+
+
 class Minors(unittest.TestCase):
     def test_final_minor_comes_from_the_last_findings_file_and_titles_are_stable(self):
         with tempfile.TemporaryDirectory() as tmp:

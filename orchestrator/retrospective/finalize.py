@@ -83,7 +83,7 @@ class Finalize:
         self.comment_outcome(d, ok)
         dark_feature.label_dark_feature(d, self.repo, self.ftoken)
         close_child.finish_update_intake(ok, self.repo, d["issue_number"], self.pat)
-        return 0 if ok else 1
+        return 1 if d["outcome"] in outcomes.CRASHED else 0
 
 
 def finalize():

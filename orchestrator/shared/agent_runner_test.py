@@ -162,6 +162,14 @@ class JsonOutput(unittest.TestCase):
                 agent_runner.json_output(attempt, f"{tmp}/o.json", "tester", "t1", lambda r, l: Path(tmp) / "none", record_failed=lambda *a: failed.append(a))
         self.assertEqual((round(failed[0][0], 2), failed[0][1]), (0.2, "no usable output after 2 attempt(s)"))
 
+    def test_a_run_with_no_output_file_says_what_the_agent_last_wrote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "t.jsonl"
+            log.write_text('{"kind": "MessageEvent", "content": "the app answered 502"}', encoding="utf-8")
+            attempt, _ = self.attempts(f"{tmp}/o.json", [None, None])
+            with self.assertRaisesRegex(NeedsHuman, "the app answered 502"):
+                agent_runner.json_output(attempt, f"{tmp}/o.json", "tester", "t1", lambda r, l: log)
+
     def test_an_agent_that_spent_its_whole_credential_is_not_given_a_second_attempt(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "t.jsonl"
