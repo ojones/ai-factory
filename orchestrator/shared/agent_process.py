@@ -1,4 +1,5 @@
 import contextlib
+import json
 import os
 import signal
 import subprocess
@@ -67,12 +68,19 @@ def silent_too_long(last_progress, now, stall_seconds):
     return stall_seconds > 0 and now - last_progress >= stall_seconds
 
 
+def is_event(line):
+    try:
+        return isinstance(json.loads(line), dict)
+    except ValueError:
+        return False
+
+
 def new_events(path, offset):
-    with open(path, "rb") as f:
+    with Path(path).open("rb") as f:
         f.seek(offset)
         chunk = f.read()
     whole = chunk[:chunk.rfind(b"\n") + 1]
-    return offset + len(whole), sum(1 for line in whole.splitlines() if line.startswith(b"{"))
+    return offset + len(whole), sum(1 for line in whole.splitlines() if is_event(line))
 
 
 def run_watched(cmd, cwd, env, out_path, timeout_s, stall_s, poll=5.0, user=None, pidfile=None):

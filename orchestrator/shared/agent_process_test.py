@@ -30,7 +30,7 @@ class RunWatched(unittest.TestCase):
 
     def test_output_that_is_not_an_event_does_not_count_as_progress(self):
         out = Path(tempfile.mkdtemp()) / "o.jsonl"
-        noise = "import time\nwhile True:\n print('still thinking', flush=True); time.sleep(0.2)"
+        noise = "import time\nwhile True:\n print('{not json', flush=True); time.sleep(0.2)"
         rc = agent_process.run_watched([sys.executable, "-c", noise], None, os.environ.copy(), out, 30, 1.5, poll=0.2)
         self.assertEqual(rc, "stall")
 
