@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -224,6 +225,44 @@ class SealHome(unittest.TestCase):
         log_file.write_text('{"output": "s3cr3t-token\\n"}', encoding="utf-8")
         runner_in(self.tmp, agent_user=None).seal_logs("tester", "t1", ["s3cr3t-token", ""])
         self.assertEqual(log_file.read_text(encoding="utf-8"), '{"output": "[redacted]\\n"}')
+
+    def test_a_secret_the_log_escaped_is_removed_too(self):
+        art = Path(self.tmp) / "art"
+        art.mkdir()
+        log_file = art / "openhands-tester-t1.jsonl"
+        log_file.write_text('{"output": "ab\\"cd\\\\ef"}', encoding="utf-8")
+        runner_in(self.tmp, agent_user=None).seal_logs("tester", "t1", ['ab"cd\\ef'])
+        self.assertEqual(log_file.read_text(encoding="utf-8"), '{"output": "[redacted]"}')
+
+    def test_a_secret_in_an_uploaded_report_is_removed(self):
+        work = Path(self.tmp) / "work"
+        report = work / "test-report-1.json"
+        report.write_text('{"note": "s3cr3t-token"}', encoding="utf-8")
+        runner_in(self.tmp, agent_user=None).redact_uploads(["s3cr3t-token"])
+        self.assertEqual(report.read_text(encoding="utf-8"), '{"note": "[redacted]"}')
+
+    def test_a_report_that_cannot_be_rewritten_does_not_stop_the_run(self):
+        work = Path(self.tmp) / "work"
+        (work / "test-report-1.json").write_text('{"note": "s3cr3t-token"}', encoding="utf-8")
+        with mock.patch("shared.agent_runner.redact", side_effect=PermissionError):
+            runner_in(self.tmp, agent_user=None).redact_uploads(["s3cr3t-token"])
+
+    def test_a_failed_seal_says_why(self):
+        error = subprocess.CalledProcessError(1, "sudo", stderr=b"sudo: a password is required\n")
+        with mock.patch("shared.agent_runner.AgentRunner.take_ownership", side_effect=error), mock.patch("shared.agent_runner.log") as say:
+            self.seal("agent")
+        self.assertIn("a password is required", say.call_args.args[0])
+
+    def test_a_value_too_short_to_be_a_secret_is_left_alone(self):
+        self.assertEqual(agent_runner.redacted("a p b", ["p"]), "a p b")
+
+    def test_a_lowercase_credential_name_is_a_secret(self):
+        self.assertEqual(agent_runner.secret_values("jwt", {"api_key": "k"}), ["jwt", "k"])
+
+    def test_a_chown_that_times_out_leaves_the_home_and_the_run_goes_on(self):
+        with mock.patch("shared.agent_runner.AgentRunner.take_ownership", side_effect=subprocess.TimeoutExpired("sudo", 60)):
+            self.seal("agent")
+        self.assertTrue(self.home.exists())
 
     def test_only_credentials_among_the_extra_environment_are_secrets(self):
         env = {"PREVIEW_TOKEN": "p", "API_CHECK_BASE": "https://app", "UI_CHECK_DIR": "/w"}
