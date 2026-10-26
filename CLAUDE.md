@@ -7,7 +7,7 @@ Before finishing a Python change, run from the repo root:
 - `ruff check .`
 - `cd orchestrator && python3 -m unittest discover -p "*_test.py" .`
 
-Tests are named `<name>_test.py`, beside the module (`build_run/run.py` has `build_run/run_test.py`); a `test_<name>.py` file is never found by CI. Commit only when asked.
+Tests are named `<name>_test.py`, beside the module (`build_run/run.py` has `build_run/run_test.py`); a `test_<name>.py` file is never found by CI.
 
 ## Enforced by a check
 
