@@ -162,9 +162,13 @@ def spellings(secret):
     return {secret, json.dumps(secret)[1:-1]}
 
 
+def redactable(secrets):
+    return [secret for secret in secrets if secret and len(secret) >= MIN_SECRET_LENGTH]
+
+
 def redacted(text, secrets):
-    for secret in secrets:
-        for spelling in spellings(secret) if len(secret) >= MIN_SECRET_LENGTH else ():
+    for secret in redactable(secrets):
+        for spelling in spellings(secret):
             text = text.replace(spelling, "[redacted]")
     return text
 
