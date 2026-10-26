@@ -1086,5 +1086,42 @@
   "checks": {},
   "audit": [],
   "findings": {}
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/40198572229",
+  "app": "opinion-spectrum",
+  "outcome": "needs_human",
+  "kind": "update",
+  "started_at": "2026-10-25T13:42:07Z",
+  "minutes": 18.9,
+  "rounds": 1,
+  "cost_usd": 0.1178,
+  "cap_usd": 2.0,
+  "released": [],
+  "checks": {},
+  "audit": [],
+  "findings": {}
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/40208653990",
+  "app": "opinion-spectrum",
+  "outcome": "needs_human",
+  "kind": "update",
+  "started_at": "2026-10-25T15:51:00Z",
+  "minutes": 147.8,
+  "rounds": 1,
+  "cost_usd": 0.8878,
+  "cap_usd": 2.0,
+  "released": [],
+  "checks": {
+   "passed": 8,
+   "failed": 21,
+   "blocked": 0,
+   "not_run": 0
+  },
+  "audit": [],
+  "findings": {
+   "tester_check": 21
+  }
  }
 ]
