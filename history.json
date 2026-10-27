@@ -1123,5 +1123,20 @@
   "findings": {
    "tester_check": 21
   }
+ },
+ {
+  "run_url": "https://github.com/ojones/ai-factory/actions/runs/40341750588",
+  "app": "ojones-todo",
+  "outcome": "needs_human",
+  "kind": "update",
+  "started_at": "2026-10-26T14:42:31Z",
+  "minutes": 1.4,
+  "rounds": 0,
+  "cost_usd": 0,
+  "cap_usd": 2.0,
+  "released": [],
+  "checks": {},
+  "audit": [],
+  "findings": {}
  }
 ]
